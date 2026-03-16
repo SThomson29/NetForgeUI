@@ -101,7 +101,7 @@ volumes:
 
 The container listens on port `5000` and is designed to sit behind a reverse
 proxy for TLS termination. Set `FLASK_PROXY_FIX=true` in the environment when
-doing so. Do not expose port `5000` directly to the internet.
+doing so. Do not expose this container to the internet.
 
 ---
 
