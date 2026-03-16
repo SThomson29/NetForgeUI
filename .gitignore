@@ -1,0 +1,12 @@
+# Runtime data
+data/
+configgen/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
