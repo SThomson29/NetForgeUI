@@ -23,28 +23,7 @@ accounts.
 
 ## Quick Start
 
-### 1. Generate a deploy key
-
-The service clones the NetForge repo using an SSH deploy key. Generate
-one in the same directory as your `docker-compose.yml`:
-
-```bash
-ssh-keygen -t ed25519 -f ./deploy_key -N ""
-```
-
-This creates two files:
-- `deploy_key` — private key, mounted into the container
-- `deploy_key.pub` — public key, added to GitHub
-
-### 2. Add the public key to GitHub
-
-1. Go to your **NetForge** repo on GitHub
-2. Settings → Deploy keys → Add deploy key
-3. Paste the contents of `deploy_key.pub`
-4. Leave **Allow write access** unchecked
-5. Click Add key
-
-### 3. Configure docker-compose.yml
+### 1. Configure docker-compose.yml
 
 Edit the environment variables in `docker-compose.yml`:
 
@@ -59,13 +38,13 @@ Generate a secure secret key with:
 python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-### 4. Start the container
+### 2. Start the container
 
 ```bash
 docker compose up -d
 ```
 
-### 5. First login
+### 3. First login
 
 Browse to `http://yourhost:5000` and log in with:
 - Username: `admin`
