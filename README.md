@@ -29,13 +29,6 @@ Edit the environment variables in `docker-compose.yml`:
 
 ```yaml
 SECRET_KEY: "change-me-to-a-long-random-string"
-CONFIGGEN_REPO_URL: "https://github.com/SThomson29/NetForge.git"
-```
-
-Generate a secure secret key with:
-
-```bash
-python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 ### 2. Start the container
