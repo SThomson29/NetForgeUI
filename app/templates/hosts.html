@@ -1,0 +1,62 @@
+{% extends 'base.html' %}
+{% block title %}Hosts — CX-ConfigGen{% endblock %}
+{% block page_title %}Hosts{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">Add switch</div>
+  <form method="POST" action="{{ url_for('hosts.add') }}" style="display:flex;gap:10px;align-items:flex-end">
+    <div class="fld" style="flex:1;margin:0">
+      <label class="lbl">Hostname</label>
+      <input type="text" name="hostname" placeholder="Enter switch hostname" required pattern="[A-Za-z0-9_\-]+" autocomplete="off">
+    </div>
+    <div class="fld" style="width:160px;margin:0">
+      <label class="lbl">Stacking</label>
+      <select name="stacking">
+        <option value="vsx">VSX</option>
+        <option value="vsf">VSF</option>
+        <option value="none">None</option>
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary" style="margin-bottom:0">Add switch</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header">Switches ({{ hosts|length }})</div>
+  {% if hosts %}
+  <table>
+    <thead>
+      <tr>
+        <th>Hostname</th>
+        <th>Stacking</th>
+        <th>Inventory group</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for host in hosts %}
+    <tr>
+      <td style="font-family:'Courier New',monospace;font-weight:500">{{ host.hostname }}</td>
+      <td>
+        <span class="badge badge-{{ host.stacking|lower }}">{{ host.stacking }}</span>
+      </td>
+      <td style="color:#888;font-size:12px;font-family:'Courier New',monospace">{{ host.group }}</td>
+      <td style="text-align:right;display:flex;gap:6px;justify-content:flex-end">
+        <a href="{{ url_for('hostvars.editor', host=host.hostname) }}" class="btn btn-sm">Edit vars</a>
+        <form method="POST" action="{{ url_for('hosts.delete', hostname=host.hostname) }}" style="display:inline" onsubmit="return confirm('Remove {{ host.hostname }}? This will also delete its host_vars.')">
+          <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+    <p>No switches added yet. Add one above to get started.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

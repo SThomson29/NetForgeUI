@@ -1,0 +1,182 @@
+{% extends 'base.html' %}
+{% block title %}Admin — CX-ConfigGen{% endblock %}
+{% block page_title %}Admin{% endblock %}
+
+{% block extra_head %}
+<style>
+.repo-card{background:#fff;border:1px solid #e5e4dc;border-radius:10px;padding:18px 20px;margin-bottom:16px}
+.repo-meta{display:grid;grid-template-columns:100px 1fr;gap:6px 12px;font-size:13px;margin-bottom:14px}
+.repo-meta .key{color:#888;font-size:12px;font-weight:500}
+.repo-meta .val{font-family:'Courier New',monospace;font-size:12px}
+.pull-bar{display:flex;align-items:center;gap:10px}
+#pull-output{background:#1a1a1a;color:#e5e4dc;font-family:'Courier New',monospace;font-size:12px;line-height:1.5;padding:12px 14px;border-radius:6px;min-height:60px;max-height:200px;overflow-y:auto;white-space:pre-wrap;margin-top:12px;display:none}
+#pull-output.visible{display:block}
+.status-badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 10px;border-radius:999px;font-weight:500}
+.status-running{background:#eff6ff;color:#1e40af}
+.status-done{background:#f0fdf4;color:#166534}
+.status-failed{background:#fef2f2;color:#991b1b}
+.not-cloned{background:#fef3c7;border:1px solid #fde68a;color:#92400e;padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:14px}
+</style>
+{% endblock %}
+
+{% block content %}
+
+{# ── Repo management ──────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-header">Config repo</div>
+
+  {% if not repo_status.cloned %}
+  <div class="not-cloned">
+    Repo not cloned yet. Set <code>CONFIGGEN_REPO_URL</code> and click Pull to clone it.
+  </div>
+  {% else %}
+  <div class="repo-meta">
+    <span class="key">Remote</span>
+    <span class="val">{{ repo_status.remote or '—' }}</span>
+    <span class="key">Branch</span>
+    <span class="val">{{ repo_status.branch }}</span>
+    <span class="key">Last commit</span>
+    <span class="val">{{ repo_status.commit }}</span>
+  </div>
+  {% endif %}
+
+  <div class="pull-bar">
+    <button class="btn btn-primary" id="pull-btn" onclick="pullRepo()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+      </svg>
+      {% if repo_status.cloned %}Pull latest{% else %}Clone repo{% endif %}
+    </button>
+    <span id="pull-status"></span>
+  </div>
+  <div id="pull-output"></div>
+</div>
+
+{# ── User management ──────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-header">Create user</div>
+  <form method="POST" action="{{ url_for('admin.create_user') }}">
+    <div class="grid3">
+      <div class="fld">
+        <label class="lbl">Username</label>
+        <input type="text" name="username" placeholder="sam" required pattern="[a-z0-9_\-]+"
+               title="Lowercase letters, numbers, hyphens and underscores only">
+      </div>
+      <div class="fld">
+        <label class="lbl">Password</label>
+        <input type="password" name="password" placeholder="min 8 characters" required minlength="8">
+      </div>
+      <div class="fld" style="display:flex;align-items:flex-end;padding-bottom:2px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+          <input type="checkbox" name="is_admin" style="width:auto;padding:0">
+          Grant admin role
+        </label>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary" style="margin-top:6px">Create user</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-header">Users ({{ users|length }})</div>
+  {% if users %}
+  <table>
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>Role</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for user in users %}
+    <tr>
+      <td style="font-family:'Courier New',monospace;font-weight:500">{{ user.username }}</td>
+      <td>
+        {% if user.is_admin %}
+        <span class="badge" style="background:#fef3c7;color:#92400e">Admin</span>
+        {% else %}
+        <span class="badge badge-none">User</span>
+        {% endif %}
+      </td>
+      <td style="text-align:right">
+        {% if user.id != current_user.id %}
+        <form method="POST" action="{{ url_for('admin.delete_user', user_id=user.id) }}"
+              style="display:inline"
+              onsubmit="return confirm('Delete {{ user.username }}? Their workspace and all generated configs will be permanently removed.')">
+          <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+        </form>
+        {% else %}
+        <span style="font-size:12px;color:#aaa">current session</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<script>
+let pullPollInterval = null;
+
+async function pullRepo() {
+  const btn    = document.getElementById('pull-btn');
+  const status = document.getElementById('pull-status');
+  const output = document.getElementById('pull-output');
+
+  btn.disabled = true;
+  output.textContent = '';
+  output.classList.add('visible');
+  status.innerHTML = '<span class="status-badge status-running">Running</span>';
+
+  try {
+    const res  = await fetch('/admin/pull', {method: 'POST'});
+    const data = await res.json();
+    if (!data.ok) {
+      status.innerHTML = '<span class="status-badge status-failed">Error</span>';
+      output.textContent = data.error || 'Unknown error';
+      btn.disabled = false;
+      return;
+    }
+    pullPollInterval = setInterval(pollPull, 800);
+  } catch (e) {
+    status.innerHTML = '<span class="status-badge status-failed">Error</span>';
+    output.textContent = e.message;
+    btn.disabled = false;
+  }
+}
+
+async function pollPull() {
+  try {
+    const res  = await fetch('/admin/pull/status');
+    const data = await res.json();
+    const status = document.getElementById('pull-status');
+    const output = document.getElementById('pull-output');
+    const btn    = document.getElementById('pull-btn');
+
+    output.textContent = data.output || '';
+    output.scrollTop   = output.scrollHeight;
+
+    if (data.status !== 'running') {
+      clearInterval(pullPollInterval);
+      pullPollInterval = null;
+      btn.disabled = false;
+
+      if (data.status === 'done') {
+        status.innerHTML = '<span class="status-badge status-done">Up to date</span>';
+        // Reload after short delay to refresh repo status display
+        setTimeout(() => window.location.reload(), 1500);
+      } else {
+        status.innerHTML = '<span class="status-badge status-failed">Failed</span>';
+        if (data.error) output.textContent += '\n' + data.error;
+      }
+    }
+  } catch (e) {
+    clearInterval(pullPollInterval);
+    document.getElementById('pull-btn').disabled = false;
+  }
+}
+</script>
+{% endblock %}

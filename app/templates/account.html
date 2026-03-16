@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+{% block title %}Account — CX-ConfigGen{% endblock %}
+{% block page_title %}Account{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:420px">
+  <div class="card-header">Change password</div>
+  <form method="POST">
+    <div class="fld">
+      <label class="lbl">Current password</label>
+      <input type="password" name="current_password" required>
+    </div>
+    <div class="fld">
+      <label class="lbl">New password</label>
+      <input type="password" name="new_password" required minlength="8">
+    </div>
+    <div class="fld">
+      <label class="lbl">Confirm new password</label>
+      <input type="password" name="confirm_password" required minlength="8">
+    </div>
+    <button type="submit" class="btn btn-primary">Update password</button>
+  </form>
+</div>
+{% endblock %}

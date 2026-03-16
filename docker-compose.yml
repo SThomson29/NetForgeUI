@@ -1,0 +1,28 @@
+services:
+  netforge-ui:
+    build: .
+    container_name: netforge-ui
+    ports:
+      - "5000:5000"
+    environment:
+      # --- Required ---
+      SECRET_KEY: "change-me-to-a-long-random-string"
+      CONFIGGEN_REPO_URL: "https://github.com/SThomson29/NetForge.git"
+
+      # --- Optional overrides ---
+      # ADMIN_PASSWORD: "changeme123"
+      # PORT: "5000"
+      # FLASK_DEBUG: "false"
+      # ANSIBLE_PLAYBOOK: "ansible-playbook"
+      # FLASK_PROXY_FIX: "false"
+
+    volumes:
+      # Persist user data and the cloned repo across container restarts
+      - netforge_data:/app/service/data
+      - netforge_repo:/app/service/configgen
+
+    restart: unless-stopped
+
+volumes:
+  netforge_data:
+  netforge_repo:
