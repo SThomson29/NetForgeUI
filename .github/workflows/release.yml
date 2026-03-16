@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/Network-Tools
+  IMAGE_NAME: ${{ github.repository_owner }}/netforge-ui
 
 jobs:
   build-and-push:
