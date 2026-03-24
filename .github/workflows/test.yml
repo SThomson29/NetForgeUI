@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, Development]
+  pull_request:
+    branches: [main, Development]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run unit and integration tests
+        run: |
+          pytest tests/test_project.py tests/test_hostvars.py tests/test_integration.py \
+            -v --tb=short \
+            --cov=app --cov-report=term-missing \
+            --cov-fail-under=60
+
+      - name: Run Jinja2 template smoke tests
+        run: |
+          pytest tests/test_generation.py::TestJinja2Templates \
+            -v --tb=short
+        # These require the NetForge repo to be cloned — skip gracefully if not present
+        continue-on-error: true
