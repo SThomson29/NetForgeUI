@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{% block title %}CX-ConfigGen{% endblock %}</title>
+<title>{% block title %}NetForgeUI{% endblock %}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a1a;background:#f5f5f4;min-height:100vh;display:flex}
@@ -80,22 +80,15 @@ tr:hover td{background:#faf9f7}
 
 <nav class="sidebar">
   <div class="sidebar-logo">
-    <h1>CX-ConfigGen</h1>
+    <h1>NetForgeUI</h1>
     <p>Network Config Service</p>
   </div>
   <div class="sidebar-nav">
-    <a href="{{ url_for('hosts.hosts_page') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('hosts') %}active{% endif %}">
+    <a href="{{ url_for('projects.projects_page') }}" class="nav-item {% if request.endpoint == 'projects.projects_page' %}active{% endif %}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-      Hosts
+      Projects
     </a>
-    <a href="{{ url_for('hostvars.editor') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('hostvars') %}active{% endif %}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-      Host Variables
-    </a>
-    <a href="{{ url_for('generate.generate_page') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('generate') %}active{% endif %}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-      Generate
-    </a>
+    {% block project_nav %}{% endblock %}
     {% if current_user.is_admin %}
     <a href="{{ url_for('admin.admin_page') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('admin') %}active{% endif %}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>

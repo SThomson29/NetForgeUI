@@ -31,15 +31,11 @@ def create_app():
 
     # Register blueprints
     from .auth     import auth_bp
-    from .hosts    import hosts_bp
-    from .hostvars import hostvars_bp
-    from .generate import generate_bp
     from .admin    import admin_bp
+    from .projects import projects_bp
 
     app.register_blueprint(auth_bp)
-    app.register_blueprint(hosts_bp)
-    app.register_blueprint(hostvars_bp)
-    app.register_blueprint(generate_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(projects_bp)
 
     return app

@@ -8,6 +8,10 @@ from app.models import User
 
 app = create_app()
 
+if os.environ.get('FLASK_PROXY_FIX', 'false').lower() == 'true':
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
 
 def _bootstrap_admin():
     """Create a default admin account on first run if no users exist."""
@@ -22,16 +26,37 @@ def _bootstrap_admin():
             print('[bootstrap] Change this password immediately via /account')
 
 
-def _check_repo():
-    """Warn if the config repo has not been cloned yet."""
+def _sync_repo():
+    """Clone the config repo on first boot, pull on subsequent restarts."""
+    import subprocess
     repo = app.config['CONFIGGEN_REPO']
+    url  = app.config.get('CONFIGGEN_REPO_URL', '')
+
+    if not url:
+        print('[repo] CONFIGGEN_REPO_URL not set — skipping repo sync')
+        return
+
     if not os.path.isdir(os.path.join(repo, '.git')):
-        url = app.config.get('CONFIGGEN_REPO_URL', '')
-        print(f'[warning] Config repo not found at {repo}')
-        if url:
-            print(f'[warning] Log in as admin and use the Pull button to clone it from {url}')
+        print(f'[repo] Cloning {url} into {repo} ...')
+        os.makedirs(repo, exist_ok=True)
+        result = subprocess.run(
+            ['git', 'clone', url, repo],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print('[repo] Clone successful')
         else:
-            print('[warning] Set CONFIGGEN_REPO_URL env var, then pull via the admin panel')
+            print(f'[repo] Clone failed: {result.stderr.strip()}')
+    else:
+        print(f'[repo] Pulling latest from {url} ...')
+        result = subprocess.run(
+            ['git', '-C', repo, 'pull'],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print(f'[repo] Pull successful: {result.stdout.strip()}')
+        else:
+            print(f'[repo] Pull failed: {result.stderr.strip()}')
 
 
 if __name__ == '__main__':
@@ -40,7 +65,7 @@ if __name__ == '__main__':
         setup_ssh(app)
 
     _bootstrap_admin()
-    _check_repo()
+    _sync_repo()
 
     app.run(
         host='0.0.0.0',

@@ -1,0 +1,194 @@
+{% extends "base_project.html" %}
+{% block title %}Generate — {{ project_name }} — NetForgeUI{% endblock %}
+{% block page_title %}{{ project_name }} / Generate{% endblock %}
+
+{% block extra_head %}
+<style>
+.run-controls{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}
+.run-controls .fld{margin:0}
+#output-box{background:#1a1a1a;color:#e5e4dc;font-family:'Courier New',monospace;font-size:12px;line-height:1.6;padding:14px 16px;border-radius:8px;min-height:200px;max-height:480px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;display:none;margin-top:14px}
+#output-box.visible{display:block}
+.status-badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 10px;border-radius:999px;font-weight:500}
+.status-running{background:#eff6ff;color:#1e40af}
+.status-done{background:#f0fdf4;color:#166534}
+.status-failed{background:#fef2f2;color:#991b1b}
+.config-row{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #f0efe8}
+.config-row:last-child{border-bottom:none}
+.config-name{font-family:'Courier New',monospace;font-size:12px;font-weight:500}
+.config-actions{display:flex;gap:6px}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">Run config generation</div>
+  <div class="run-controls">
+    <div class="fld" style="width:220px">
+      <label class="lbl">Switch (leave empty for all)</label>
+      <select id="limit-select">
+        <option value="">All switches</option>
+        {% for host in hosts %}
+        <option value="{{ host.hostname }}">{{ host.hostname }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="fld" style="width:100%">
+      <label class="lbl">Sections (leave all unchecked for full config)</label>
+      <div id="tags-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px 16px;margin-top:6px;padding:10px 12px;background:#faf9f7;border:1px solid #e5e4dc;border-radius:6px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="staticroutes" style="width:auto"> Static routes</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="management" style="width:auto"> Management</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="general" style="width:auto"> General</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="snmp" style="width:auto"> SNMP</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="aaa" style="width:auto"> AAA</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="banner" style="width:auto"> Banner</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="vrfs" style="width:auto"> VRFs</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="vlans" style="width:auto"> VLANs</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="interfaces" style="width:auto"> All interfaces</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="interfaces_physical" style="width:auto"> Physical interfaces</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="interfaces_lag" style="width:auto"> LAG interfaces</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="interfaces_loopback" style="width:auto"> Loopback interfaces</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="interfaces_vlan" style="width:auto"> VLAN interfaces</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="ospf" style="width:auto"> OSPF</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="ibgp" style="width:auto"> iBGP</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="routing" style="width:auto"> Routing (VRFs+OSPF+iBGP)</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="vxlan" style="width:auto"> VXLAN</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="vsx" style="width:auto"> VSX</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="vsf" style="width:auto"> VSF</label>
+      </div>
+    </div>
+    <button class="btn btn-primary" id="run-btn" onclick="runGenerate()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Generate
+    </button>
+    <span id="run-status"></span>
+  </div>
+  <div id="output-box"></div>
+</div>
+
+<div class="card">
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+    Generated configs ({{ configs|length }})
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-sm" onclick="refreshConfigs()" style="font-size:11px">Refresh</button>
+      {% if configs %}
+      <a href="{{ url_for('projects.download_all', project_name=project_name) }}" class="btn btn-sm" style="font-size:11px">Download all</a>
+      {% endif %}
+      <button class="btn btn-sm btn-danger" onclick="deleteAll()" style="font-size:11px">Delete all</button>
+    </div>
+  </div>
+  <div id="configs-list">
+  {% if configs %}
+    {% for cfg in configs %}
+    <div class="config-row" id="row-{{ cfg }}">
+      <span class="config-name">{{ cfg }}</span>
+      <div class="config-actions">
+        <a href="{{ url_for('projects.download_config', project_name=project_name, filename=cfg) }}" class="btn btn-sm">Download</a>
+        <button class="btn btn-sm btn-danger" onclick="deleteConfig('{{ cfg }}')">Delete</button>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="empty" id="no-configs"><p>No configs generated yet.</p></div>
+  {% endif %}
+  </div>
+</div>
+
+<script>
+const PROJECT_NAME = {{ project_name | tojson }};
+let currentJobId = null;
+let pollInterval = null;
+
+async function runGenerate() {
+  const limit  = document.getElementById('limit-select').value;
+  const tags   = Array.from(document.querySelectorAll('#tags-container input[type=checkbox]:checked')).map(cb => cb.value).join(',');
+  const btn    = document.getElementById('run-btn');
+  const output = document.getElementById('output-box');
+  const status = document.getElementById('run-status');
+
+  btn.disabled = true;
+  output.textContent = '';
+  output.classList.add('visible');
+  output.textContent = 'Starting...\n';
+  status.innerHTML = '<span class="status-badge status-running">Running</span>';
+
+  try {
+    const res  = await fetch('/projects/' + PROJECT_NAME + '/generate/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({limit, tags})
+    });
+    const data = await res.json();
+    currentJobId = data.job_id;
+    pollInterval = setInterval(pollStatus, 1000);
+  } catch (e) {
+    output.textContent += 'Error: ' + e.message;
+    btn.disabled = false;
+    status.innerHTML = '<span class="status-badge status-failed">Error</span>';
+  }
+}
+
+async function pollStatus() {
+  if (!currentJobId) return;
+  try {
+    const res  = await fetch('/projects/' + PROJECT_NAME + '/generate/status/' + currentJobId);
+    const data = await res.json();
+    const output = document.getElementById('output-box');
+    const status = document.getElementById('run-status');
+    const btn    = document.getElementById('run-btn');
+
+    output.textContent = data.output || '';
+    output.scrollTop   = output.scrollHeight;
+
+    if (data.status !== 'running') {
+      clearInterval(pollInterval);
+      pollInterval = null;
+      btn.disabled = false;
+      if (data.status === 'done') {
+        status.innerHTML = '<span class="status-badge status-done">Complete</span>';
+        refreshConfigs();
+      } else {
+        status.innerHTML = '<span class="status-badge status-failed">Failed</span>';
+      }
+    }
+  } catch (e) {
+    clearInterval(pollInterval);
+    document.getElementById('run-btn').disabled = false;
+  }
+}
+
+async function refreshConfigs() {
+  const res   = await fetch(window.location.href);
+  const html  = await res.text();
+  const parser = new DOMParser();
+  const doc   = parser.parseFromString(html, 'text/html');
+  const newList = doc.getElementById('configs-list');
+  if (newList) document.getElementById('configs-list').innerHTML = newList.innerHTML;
+}
+
+async function deleteAll() {
+  if (!confirm('Delete all generated configs?')) return;
+  const rows = document.querySelectorAll('.config-row');
+  for (const row of rows) {
+    const filename = row.id.replace('row-', '');
+    await fetch('/projects/' + PROJECT_NAME + '/generate/delete/' + encodeURIComponent(filename), {method: 'POST'});
+    row.remove();
+  }
+  if (!document.querySelector('.config-row')) {
+    document.getElementById('configs-list').innerHTML = '<div class="empty" id="no-configs"><p>No configs generated yet.</p></div>';
+  }
+}
+
+async function deleteConfig(filename) {
+  if (!confirm('Delete ' + filename + '?')) return;
+  const res  = await fetch('/projects/' + PROJECT_NAME + '/generate/delete/' + encodeURIComponent(filename), {method: 'POST'});
+  const data = await res.json();
+  if (data.ok) {
+    const row = document.getElementById('row-' + filename);
+    if (row) row.remove();
+    if (!document.querySelector('.config-row')) {
+      document.getElementById('configs-list').innerHTML = '<div class="empty" id="no-configs"><p>No configs generated yet.</p></div>';
+    }
+  }
+}
+</script>
+{% endblock %}
