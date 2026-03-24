@@ -2,13 +2,16 @@
 docker_runner.py — sandboxed Ansible execution via ephemeral Docker containers.
 
 Each generate run spawns a fresh container from a minimal Ansible image.
-The container is destroyed on exit (auto_remove=True) so no state is retained
-between runs and user-supplied YAML values cannot affect the NetForgeUI process.
+The container mounts the same named volumes as the NetForgeUI container,
+so no host paths are needed — this works on any OS including Mac with Docker Desktop.
 
-Mounts (all host paths, read-only except output):
-    /ansible        ← configgen repo  (roles, playbooks, templates)
-    /inventory      ← hosts.ini + host_vars/  (project workspace)
-    /output         ← generated_configs/  (writable)
+Volume layout inside the ephemeral container:
+    /ansible        ← netforgeui_repo volume (configgen repo, read-only)
+    /data           ← netforgeui_data volume (all user data, read-only)
+    /output         ← netforgeui_data volume (writable, same volume, different mount)
+
+The inventory path and output path inside the container are derived from the
+known structure of the data volume relative to /data.
 
 The container is named netforge-generate-<job_id> so the startup cleanup
 in run.py can find and remove any orphaned containers from previous crashes.
@@ -19,10 +22,12 @@ import logging
 
 log = logging.getLogger(__name__)
 
-# Lightweight official Ansible image. Override with ANSIBLE_IMAGE env var.
-DEFAULT_ANSIBLE_IMAGE = 'cytopia/ansible:latest'
-
+DEFAULT_ANSIBLE_IMAGE = os.environ.get('ANSIBLE_IMAGE', 'cytopia/ansible:latest')
 CONTAINER_PREFIX = 'netforge-generate-'
+
+# Named volume names — must match what is configured in docker-compose / Terraform
+REPO_VOLUME  = os.environ.get('REPO_VOLUME_NAME',  'netforgeui_repo')
+DATA_VOLUME  = os.environ.get('DATA_VOLUME_NAME',  'netforgeui_data')
 
 
 def _get_client():
@@ -79,21 +84,21 @@ def cleanup_orphaned_containers():
         log.error(f'[docker_runner] Orphan cleanup failed: {e}')
 
 
-def run_generate(job_id, configgen_repo, hosts_ini_path, host_vars_dir,
-                 output_dir, playbook_rel, roles_rel, limit=None, tags=None):
+def run_generate(job_id, username, project_name, data_dir, limit=None, tags=None):
     """
     Run ansible-playbook in an ephemeral Docker container.
 
+    Mounts the named volumes directly — no host paths required.
+    The data volume is mounted read-only at /data; a separate writable mount
+    covers just the output directory within the same volume.
+
     Args:
-        job_id:          UUID string for this job — used to name the container
-        configgen_repo:  Absolute host path to the NetForge repo
-        hosts_ini_path:  Absolute host path to the project hosts.ini
-        host_vars_dir:   Absolute host path to the project host_vars/ directory
-        output_dir:      Absolute host path to the generated_configs/ directory
-        playbook_rel:    Path to the playbook relative to configgen_repo
-        roles_rel:       Path to roles/ relative to configgen_repo
-        limit:           Optional ansible --limit string
-        tags:            Optional ansible --tags string
+        job_id:       UUID string for this job
+        username:     NetForgeUI username
+        project_name: Project name
+        data_dir:     Container-internal DATA_DIR (e.g. /app/service/data)
+        limit:        Optional ansible --limit string
+        tags:         Optional ansible --tags string
 
     Returns:
         (returncode, output_text)
@@ -101,53 +106,45 @@ def run_generate(job_id, configgen_repo, hosts_ini_path, host_vars_dir,
     Raises:
         RuntimeError if Docker socket is unavailable
     """
-    client = _get_client()  # hard-fail if socket missing
+    client = _get_client()
 
-    image = os.environ.get('ANSIBLE_IMAGE', DEFAULT_ANSIBLE_IMAGE)
+    # Derive paths inside the ephemeral container from known volume structure.
+    # The data volume is mounted at /data — it contains users/ and users.db at its root.
+    inventory_path = f'/data/users/{username}/projects/{project_name}/hosts.ini'
+    output_path    = f'/data/users/{username}/projects/{project_name}/generated_configs'
 
     # Pull image if not present
     try:
-        client.images.get(image)
+        client.images.get(DEFAULT_ANSIBLE_IMAGE)
     except Exception:
-        log.info(f'[docker_runner] Pulling image {image} ...')
-        client.images.pull(image)
+        log.info(f'[docker_runner] Pulling image {DEFAULT_ANSIBLE_IMAGE} ...')
+        client.images.pull(DEFAULT_ANSIBLE_IMAGE)
 
-    # Build the ansible-playbook command
-    playbook_in_container = f'/ansible/{playbook_rel}'
     cmd = [
         'ansible-playbook',
-        '-i', '/inventory/hosts.ini',
-        playbook_in_container,
-        '-e', 'config_output_dir=/output',
+        '-i', inventory_path,
+        '/ansible/playbooks/generate_configs.yml',
+        '-e', f'config_output_dir={output_path}',
     ]
     if limit:
         cmd += ['--limit', limit]
     if tags:
         cmd += ['--tags', tags]
 
-    # Bind mounts
+    # Mount named volumes directly — works on any OS, no host paths needed
     volumes = {
-        configgen_repo: {
+        REPO_VOLUME: {
             'bind': '/ansible',
             'mode': 'ro',
         },
-        hosts_ini_path: {
-            'bind': '/inventory/hosts.ini',
-            'mode': 'ro',
-        },
-        host_vars_dir: {
-            'bind': '/inventory/host_vars',
-            'mode': 'ro',
-        },
-        output_dir: {
-            'bind': '/output',
+        DATA_VOLUME: {
+            'bind': '/data',
             'mode': 'rw',
         },
     }
 
-    # Environment inside the container
     environment = {
-        'ANSIBLE_ROLES_PATH': f'/ansible/{roles_rel}',
+        'ANSIBLE_ROLES_PATH': '/ansible/roles',
         'ANSIBLE_HOST_KEY_CHECKING': 'False',
         'ANSIBLE_STDOUT_CALLBACK': 'default',
         'ANSIBLE_FORCE_COLOR': '0',
@@ -155,35 +152,36 @@ def run_generate(job_id, configgen_repo, hosts_ini_path, host_vars_dir,
 
     container_name = f'{CONTAINER_PREFIX}{job_id}'
     log.info(f'[docker_runner] Starting container {container_name}')
+    log.info(f'[docker_runner] inventory={inventory_path} output={output_path}')
 
     try:
         container = client.containers.run(
-            image=image,
+            image=DEFAULT_ANSIBLE_IMAGE,
             command=cmd,
             name=container_name,
             volumes=volumes,
             environment=environment,
             working_dir='/ansible',
-            network_mode='none',       # no network access needed
-            read_only=False,           # output mount needs writes
-            auto_remove=True,          # Docker removes on exit
-            detach=False,              # block until complete
+            network_mode='none',
+            auto_remove=False,
+            detach=True,
             stdout=True,
             stderr=True,
         )
-        # container is bytes when detach=False and auto_remove=True
-        output = container.decode('utf-8', errors='replace') if isinstance(container, bytes) else str(container)
-        returncode = 0
+
+        result = container.wait()
+        returncode = result.get('StatusCode', -1)
+        output = container.logs(stdout=True, stderr=True).decode('utf-8', errors='replace')
+
+        try:
+            container.remove(force=True)
+        except Exception:
+            pass
+
     except Exception as e:
-        import docker.errors
-        if hasattr(e, 'exit_status'):
-            # ContainerError — playbook ran but exited non-zero
-            output = e.stderr.decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else str(e.stderr)
-            returncode = e.exit_status
-        else:
-            output = str(e)
-            returncode = -1
-        log.error(f'[docker_runner] Container {container_name} failed (rc={returncode}): {output[:200]}')
+        output = str(e)
+        returncode = -1
+        log.error(f'[docker_runner] Container {container_name} error: {output[:200]}')
 
     log.info(f'[docker_runner] Container {container_name} finished rc={returncode}')
     return returncode, output
