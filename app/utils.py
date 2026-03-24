@@ -53,7 +53,8 @@ def user_dir(app, username):
     return os.path.join(app.config['DATA_DIR'], username)
 
 def ensure_workspace(app, username):
-    """Create the user's base workspace directory."""    os.makedirs(user_dir(app, username), exist_ok=True)
+    """Create the user's base workspace directory."""    
+    os.makedirs(user_dir(app, username), exist_ok=True)
     os.makedirs(os.path.join(user_dir(app, username), 'projects'), exist_ok=True)
 
 
