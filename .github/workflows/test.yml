@@ -30,9 +30,3 @@ jobs:
             --cov=app --cov-report=term-missing \
             --cov-fail-under=60
 
-      - name: Run Jinja2 template smoke tests
-        run: |
-          pytest tests/test_generation.py::TestJinja2Templates \
-            -v --tb=short
-        # These require the NetForge repo to be cloned — skip gracefully if not present
-        continue-on-error: true
