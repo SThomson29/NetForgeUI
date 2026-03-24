@@ -70,7 +70,9 @@ services:
       SECRET_KEY: "change-me-to-a-long-random-string"
       CONFIGGEN_REPO_URL: "git@github.com:SThomson29/NetForge.git"
       # ADMIN_PASSWORD: "changeme123"
-      # FLASK_PROXY_FIX: "false"
+      # PORT: "5000"
+      # FLASK_DEBUG: "false"
+      # ANSIBLE_PLAYBOOK: "ansible-playbook"
     volumes:
       - netforgeui_data:/app/service/data
       - netforgeui_repo:/app/service/configgen
