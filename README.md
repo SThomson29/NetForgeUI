@@ -63,7 +63,6 @@ services:
       # ADMIN_PASSWORD: "changeme123"
       # PORT: "5000"
       # FLASK_DEBUG: "false"
-      # SSH_KEY_PATH: "/root/.ssh/id_rsa"
       # ANSIBLE_PLAYBOOK: "ansible-playbook"
     volumes:
       - netforge_data:/app/service/data
