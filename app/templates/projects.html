@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Projects — NetForgeUI{% endblock %}
+{% block page_title %}Projects{% endblock %}
+
+{% block topbar_actions %}
+<button class="btn btn-primary" onclick="document.getElementById('new-project-modal').style.display='flex'">
+  + New project
+</button>
+{% endblock %}
+
+{% block content %}
+
+{% if projects %}
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
+  {% for p in projects %}
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:16px 18px 14px">
+      <div style="display:flex;align-items:start;justify-content:space-between;margin-bottom:8px">
+        <div>
+          <div style="font-size:15px;font-weight:600">{{ p.display_name }}</div>
+          <div style="font-size:11px;color:#888;margin-top:2px">Created {{ p.created }}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:16px;margin-top:10px">
+        <div style="font-size:12px;color:#666">
+          <span style="font-weight:600;color:#1a1a1a">{{ p.host_count }}</span> host{{ 's' if p.host_count != 1 }}
+        </div>
+        <div style="font-size:12px;color:#666">
+          <span style="font-weight:600;color:#1a1a1a">{{ p.config_count }}</span> config{{ 's' if p.config_count != 1 }}
+        </div>
+      </div>
+    </div>
+    <div style="padding:10px 18px;border-top:1px solid #f0efe8;display:flex;align-items:center;justify-content:space-between;background:#faf9f7">
+      <a href="{{ url_for('projects.hosts_page', project_name=p.name) }}" class="btn btn-primary btn-sm">Open</a>
+      <div style="display:flex;gap:6px">
+        {% if p.config_count > 0 %}
+        <a href="{{ url_for('projects.download_all', project_name=p.name) }}" class="btn btn-sm">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download all
+        </a>
+        {% endif %}
+        <form method="post" action="{{ url_for('projects.delete', project_name=p.name) }}"
+              onsubmit="return confirm('Delete project {{ p.display_name }} and all its data? This cannot be undone.')">
+          <button class="btn btn-sm btn-danger">Delete</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="card">
+  <div class="empty">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:40px;height:40px;margin:0 auto"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+    <p>No projects yet. Create one to get started.</p>
+  </div>
+</div>
+{% endif %}
+
+<!-- New project modal -->
+<div id="new-project-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:100;align-items:center;justify-content:center">
+  <div class="card" style="width:400px;margin:0">
+    <div class="card-header">New project</div>
+    <form method="post" action="{{ url_for('projects.new_project') }}">
+      <div class="fld">
+        <label class="lbl">Project name</label>
+        <input type="text" name="name" placeholder="core-network-buildout" autofocus
+               pattern="[A-Za-z0-9_\-]+" title="Letters, numbers, hyphens and underscores only">
+        <div class="hint">Letters, numbers, hyphens and underscores only.</div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn" onclick="document.getElementById('new-project-modal').style.display='none'">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+document.getElementById('new-project-modal').addEventListener('click', function(e) {
+  if (e.target === this) this.style.display = 'none';
+});
+</script>
+
+{% endblock %}

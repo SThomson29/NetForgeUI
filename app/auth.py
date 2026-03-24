@@ -9,14 +9,14 @@ auth_bp = Blueprint('auth', __name__)
 @auth_bp.route('/')
 def index():
     if current_user.is_authenticated:
-        return redirect(url_for('hosts.hosts_page'))
+        return redirect(url_for('projects.projects_page'))
     return redirect(url_for('auth.login'))
 
 
 @auth_bp.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for('hosts.hosts_page'))
+        return redirect(url_for('projects.projects_page'))
 
     if request.method == 'POST':
         username = request.form.get('username', '').strip().lower()
@@ -25,7 +25,7 @@ def login():
         if user:
             login_user(user)
             ensure_workspace(current_app._get_current_object(), user.username)
-            return redirect(url_for('hosts.hosts_page'))
+            return redirect(url_for('projects.projects_page'))
         flash('Invalid username or password.', 'error')
 
     return render_template('login.html')

@@ -1,23 +1,24 @@
 # NetForgeUI
 
-A web-based interface for generating AOS-CX switch configurations. Provides
-per-user workspaces, a browser-based variable editor, and a config generation
-interface powered by the
-[NetForge](https://github.com/SThomson29/NetForge)
-Ansible project.
+A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — the Ansible-based AOS-CX switch configuration generator. NetForgeUI provides project-based workspaces, a browser-based host variable editor, IP pool management, and a config generation interface that runs against a shared read-only clone of the NetForge repo.
 
 ---
 
-## How It Works
+## Features
 
-The service runs as a Docker container alongside a read-only clone of the
-NetForge repo. Users log in, add their switches, fill in variable
-tabs in the editor, and generate `.ios` config files which can be downloaded
-directly from the browser.
+- **Projects** — isolated workspaces per network build, each with their own hosts, variables, and generated configs
+- **IP pool management** — define unique, point-to-point (/31), and VLAN supernet pools per project with automatic allocation tracking across switches
+- **Host variable editor** — browser-based React form covering all AOS-CX template sections with per-section include/exclude toggles
+- **Config generation** — runs `ansible-playbook` against the project workspace with optional host and section filtering
+- **Common infrastructure** — per-project DNS, NTP, DHCP, RADIUS, and syslog server lists that feed into editor field suggestions
+- **Multi-user** — per-user data isolation with an admin panel for user management
 
-Each user has a completely isolated workspace — they only see their own hosts
-and generated configs. A shared admin account manages the config repo and user
-accounts.
+---
+
+## Requirements
+
+- Docker and Docker Compose
+- A GitHub account
 
 ---
 
@@ -25,10 +26,17 @@ accounts.
 
 ### 1. Configure docker-compose.yml
 
-Edit the environment variables in `docker-compose.yml`:
+Set the two required environment variables:
 
 ```yaml
 SECRET_KEY: "change-me-to-a-long-random-string"
+CONFIGGEN_REPO_URL: "https://github.com/SThomson29/NetForge.git"
+```
+
+Alternatively generate a secure secret key with:
+
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 ### 2. Start the container
@@ -37,14 +45,15 @@ SECRET_KEY: "change-me-to-a-long-random-string"
 docker compose up -d
 ```
 
-### 3. First login
+The NetForge repo is cloned automatically on first boot — check logs for `[repo] Clone successful`.
+
+### 5. First login
 
 Browse to `http://yourhost:5000` and log in with:
 - Username: `admin`
 - Password: `changeme123` (or whatever you set `ADMIN_PASSWORD` to)
 
-Go to **Admin** → **Pull** to clone the NetForge repo, then go to
-**Account** and change the admin password.
+Go to **Account** and change the admin password immediately.
 
 ---
 
@@ -53,31 +62,31 @@ Go to **Admin** → **Pull** to clone the NetForge repo, then go to
 ```yaml
 services:
   netforge-ui:
-    build: .
+    image: ghcr.io/sthomson29/netforge-ui:latest
     container_name: netforge-ui
     ports:
       - "5000:5000"
     environment:
       SECRET_KEY: "change-me-to-a-long-random-string"
-      CONFIGGEN_REPO_URL: "https://github.com/SThomson29/NetForge.git"
+      CONFIGGEN_REPO_URL: "git@github.com:SThomson29/NetForge.git"
       # ADMIN_PASSWORD: "changeme123"
       # PORT: "5000"
       # FLASK_DEBUG: "false"
       # ANSIBLE_PLAYBOOK: "ansible-playbook"
     volumes:
-      - netforge_data:/app/service/data
-      - netforge_repo:/app/service/configgen
+      - netforgeui_data:/app/service/data
+      - netforgeui_repo:/app/service/configgen
     restart: unless-stopped
 
 volumes:
-  netforge_data:
-  netforge_repo:
+  netforgeui_data:
+  netforgeui_repo:
 ```
 
 **Volumes:**
-
-- `netforge_data` — persists all user workspaces, hosts and generated configs across container restarts
-- `netforge_repo` — persists the cloned NetForge repo across restarts so it doesn't need to be re-cloned on every start
+- `netforgeui_data` — persists all user and project data across restarts
+- `netforgeui_repo` — persists the cloned NetForge repo
+- `./deploy_key/cx_configgen_deploy_key` — SSH deploy key mounted read-only
 
 ---
 
@@ -87,40 +96,71 @@ volumes:
 |---|---|---|---|
 | `SECRET_KEY` | Yes | `change-me-in-production` | Flask session secret — use a long random string |
 | `CONFIGGEN_REPO_URL` | Yes | — | SSH URL of your NetForge repo |
-| `ADMIN_PASSWORD` | No | `changeme123` | Initial admin password, only applied on first run |
-| `CONFIGGEN_REPO_PATH` | No | `/app/service/configgen` | Where the config repo is cloned inside the container |
+| `ADMIN_PASSWORD` | No | `changeme123` | Initial admin password, applied only on first run |
+| `CONFIGGEN_REPO_PATH` | No | `/app/service/configgen` | Where the NetForge repo is cloned inside the container |
 | `ANSIBLE_PLAYBOOK` | No | `ansible-playbook` | Path to the ansible-playbook binary |
 | `PORT` | No | `5000` | Port the Flask app listens on |
-| `FLASK_DEBUG` | No | `false` | Enable Flask debug mode — development only |
+| `FLASK_DEBUG` | No | `false` | Enable Flask debug mode — never use in production |
 | `FLASK_PROXY_FIX` | No | `false` | Set to `true` when running behind a reverse proxy |
 
 ---
 
 ## Reverse Proxy
 
-The container listens on port `5000` and is designed to sit behind a reverse
-proxy for TLS termination. Set `FLASK_PROXY_FIX=true` in the environment when
-doing so. Do not expose this container to the internet.
-
----
-
-## Updating the Config Repo
-
-When templates or skeletons are updated in the NetForge repo:
-
-1. Log in as an admin
-2. Go to **Admin** → click **Pull latest**
-
-This pulls the latest commit. Existing user host_vars files are not affected —
-only newly scaffolded switches will use updated skeletons.
+NetForgeUI is designed to sit behind a reverse proxy for TLS termination. Set `FLASK_PROXY_FIX=true` when doing so. Do not expose port `5000` directly.
 
 ---
 
 ## User Workflow
 
-1. **Hosts** — add a switch with its hostname and stacking type
-2. **Editor** — select the switch and fill in the variable tabs
-3. Use the include/exclude toggles to control which files get saved
-4. **Save** — writes the variables to your workspace
-5. **Generate** — optionally select specific sections, then generate
-6. Download the resulting `.ios` config file(s) individually or as a zip
+### 1. Create a project
+
+Go to **Projects** → **New project**. Each project has its own switches, variables, IP pools, and generated configs completely isolated from other projects.
+
+### 2. Define IP pools (optional)
+
+Go to the project → **Resources** → **Pools**. Three pool types are supported:
+
+- **Unique** — one IP per allocation, for loopbacks and VTEPs (e.g. `10.255.0.0/24`, prefix `/32`)
+- **Point-to-point** — /31 pairs with automatic peer end tracking
+- **VLAN supernet** — a supernet pre-carved into equal subnets for SVI addressing (e.g. `10.100.0.0/16` → 256 × `/24`)
+
+All IP fields fall back to free-text entry if no pools are defined.
+
+### 3. Configure common infrastructure (optional)
+
+Go to **Resources** → **Common Infrastructure**. Add project-wide DNS, NTP, DHCP, RADIUS, and syslog servers. These appear as autocomplete suggestions in the relevant editor fields.
+
+### 4. Add switches
+
+Go to **Hosts** → add a switch with its hostname and stacking type (None / VSX / VSF). Host variable files are scaffolded automatically from the NetForge skeleton.
+
+### 5. Edit host variables
+
+Go to **Editor** → select a switch. Fill in the tabs:
+
+- **General** — hostname, NTP, DNS, timezone
+- **Management** — management VRF, source interface, local users
+- **SNMP** — v2c community or v3 users
+- **AAA** — RADIUS servers, dynamic authorisation
+- **VRFs / VLANs** — VRFs and VLANs for the switch
+- **Interfaces** — physical, LAG, loopback, and VLAN interfaces. Routed IP fields show a pool picker when pools are defined; SVI fields show a subnet picker from VLAN supernet pools
+- **Routing** — OSPF instances (multiple supported, VRF-scoped), iBGP neighbours
+- **VXLAN** — VTEP loopback, VNI map
+- **VSX / VSF** — stacking configuration
+
+Use the include/exclude toggle on each tab to control which files are saved. Click **Save** — IP allocations are tracked automatically.
+
+### 6. Generate configs
+
+Go to **Generate**. Optionally filter by switch or section. Click **Generate** — runs `ansible-playbook` against the project workspace. Download the resulting `.ios` files individually or as a zip.
+
+---
+
+## Updating NetForge Templates
+
+The NetForge repo is pulled automatically each time the container restarts. For a mid-session refresh without restarting, go to **Admin** → **Pull latest**.
+
+Pulling does not affect existing `host_vars` files. Only newly added switches will pick up updated skeletons.
+
+---

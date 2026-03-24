@@ -1,6 +1,6 @@
 services:
   netforge-ui:
-    image: image: ghcr.io/sthomson29/netforge-ui:latest
+    image: ghcr.io/sthomson29/netforge-ui:latest
     container_name: netforge-ui
     ports:
       - "5000:5000"

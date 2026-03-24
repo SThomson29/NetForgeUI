@@ -1,0 +1,418 @@
+{% extends "base_project.html" %}
+{% block title %}Resources — {{ project_name }} — NetForgeUI{% endblock %}
+{% block page_title %}{{ project_name }} / Resources{% endblock %}
+
+{% block extra_head %}
+<style>
+.tab-bar{display:flex;gap:2px;border-bottom:2px solid #e5e4dc;margin-bottom:20px}
+.tab-btn{padding:8px 16px;font-size:13px;font-weight:500;color:#888;background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer}
+.tab-btn.active{color:#1a1a1a;border-bottom-color:#1a1a1a}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+.pool-card{background:#faf9f7;border:1px solid #e5e4dc;border-radius:8px;padding:14px 16px;margin-bottom:10px}
+.pool-type-badge{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+.type-unique{background:#eff6ff;color:#1e40af}
+.type-ptp{background:#fef9c3;color:#854d0e}
+.type-svi{background:#f0fdf4;color:#166534}
+.type-vlan{background:#fdf4ff;color:#7e22ce}
+.alloc-table td{font-family:'Courier New',monospace;font-size:12px}
+.alloc-table td.meta{font-family:inherit;font-size:12px;color:#666}
+.peer-note{font-size:11px;color:#888;margin-top:2px}
+.partial-badge{background:#fef9c3;color:#854d0e;padding:1px 6px;border-radius:999px;font-size:10px;font-weight:600}
+.complete-badge{background:#f0fdf4;color:#166534;padding:1px 6px;border-radius:999px;font-size:10px;font-weight:600}
+.carved-badge{background:#f5f5f4;color:#666;padding:1px 6px;border-radius:999px;font-size:10px;font-weight:600}
+.assigned-badge{background:#eff6ff;color:#1e40af;padding:1px 6px;border-radius:999px;font-size:10px;font-weight:600}
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('pools')">Pools</button>
+  <button class="tab-btn" onclick="switchTab('conventions')">Conventions</button>
+  <button class="tab-btn" onclick="switchTab('common')">Common Infrastructure</button>
+  <button class="tab-btn" onclick="switchTab('allocations')">Allocations</button>
+</div>
+
+<!-- ============================================================ -->
+<!-- POOLS TAB -->
+<!-- ============================================================ -->
+<div id="tab-pools" class="tab-panel active">
+
+  {% if config.pools %}
+  {% for pool in config.pools %}
+  <div class="pool-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-weight:600;font-size:14px">{{ pool.name }}</span>
+        <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ pool.type.replace('_',' ') }}</span>
+      </div>
+      <button class="btn btn-sm btn-danger" onclick="removePool('{{ pool.id }}', '{{ pool.name }}')">Remove</button>
+    </div>
+    <div style="font-size:12px;color:#666;font-family:'Courier New',monospace">
+      {{ pool.subnet }}
+      {% if pool.type == 'vlan_supernet' %} → /{{ pool.carve_prefix }} subnets{% endif %}
+      {% if pool.type in ['unique'] %} /{{ pool.prefix }}{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="card"><div class="empty"><p>No pools defined yet.</p></div></div>
+  {% endif %}
+
+  <div class="card" style="margin-top:16px">
+    <div class="card-header">Add pool</div>
+    <div class="grid3" style="margin-bottom:12px">
+      <div class="fld">
+        <label class="lbl">Name</label>
+        <input type="text" id="pool-name" placeholder="Loopbacks">
+      </div>
+      <div class="fld">
+        <label class="lbl">Type</label>
+        <select id="pool-type" onchange="updatePoolForm()">
+          <option value="unique">Unique</option>
+          <option value="point_to_point">Point-to-point (/31)</option>
+          <option value="vlan_supernet">VLAN supernet</option>
+        </select>
+      </div>
+      <div class="fld">
+        <label class="lbl">Subnet</label>
+        <input type="text" id="pool-subnet" placeholder="10.255.0.0/24">
+      </div>
+    </div>
+    <div class="grid3" id="pool-extra-fields">
+      <div class="fld" id="field-prefix">
+        <label class="lbl">Prefix length</label>
+        <input type="number" id="pool-prefix" value="32" min="1" max="32">
+      </div>
+      <div class="fld" id="field-carve" style="display:none">
+        <label class="lbl">Carve size (prefix)</label>
+        <input type="number" id="pool-carve" value="24" min="1" max="32">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="addPool()" style="margin-top:4px">Add pool</button>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- CONVENTIONS TAB -->
+<!-- ============================================================ -->
+<div id="tab-conventions" class="tab-panel">
+  <div class="card">
+    <div class="card-header">SVI conventions</div>
+    <p class="hint" style="margin-bottom:16px">
+      These offsets define where gateway and active gateway IPs sit within each /24 carved from a VLAN supernet pool.
+      Offset 1 = first host address (.1), offset 254 = last host in a /24 (.254).
+    </p>
+    <div class="grid3">
+      <div class="fld">
+        <label class="lbl">Gateway offset</label>
+        <input type="number" id="conv-gw" value="{{ config.conventions.svi.gateway_offset | default(1) }}" min="1" max="254">
+      </div>
+      <div class="fld">
+        <label class="lbl">Active gateway offset</label>
+        <input type="number" id="conv-agw" value="{{ config.conventions.svi.active_gateway_offset | default(254) }}" min="1" max="254">
+      </div>
+      <div class="fld">
+        <label class="lbl">Reserved from start</label>
+        <input type="number" id="conv-res" value="{{ config.conventions.svi.reserved_from_start | default(10) }}" min="0" max="254">
+        <div class="hint">Number of addresses reserved at the start of each subnet (for infrastructure).</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="saveConventions()" style="margin-top:8px">Save conventions</button>
+    <span id="conv-status" style="font-size:12px;color:#666;margin-left:10px"></span>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- COMMON INFRASTRUCTURE TAB -->
+<!-- ============================================================ -->
+<div id="tab-common" class="tab-panel">
+
+  {% set categories = [
+    ('dns_servers',    'DNS servers',    '10.0.0.53'),
+    ('ntp_servers',    'NTP servers',    '10.0.0.123'),
+    ('dhcp_servers',   'DHCP servers',   '10.0.0.67'),
+    ('radius_servers', 'RADIUS servers', '10.0.0.100'),
+    ('syslog_servers', 'Syslog servers', '10.0.0.200'),
+  ] %}
+
+  {% for key, label, placeholder in categories %}
+  <div class="card">
+    <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+      {{ label }}
+      <button class="btn btn-sm" onclick="addCommonEntry('{{ key }}', '{{ placeholder }}')">+ Add</button>
+    </div>
+    <div id="common-{{ key }}">
+      {% for ip in config.common.get(key, []) %}
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px" class="common-entry" data-key="{{ key }}">
+        <input type="text" value="{{ ip }}" style="max-width:220px" onchange="saveCommon()">
+        <button class="btn btn-sm btn-danger" onclick="removeCommonEntry(this)">Remove</button>
+      </div>
+      {% endfor %}
+    </div>
+    {% if not config.common.get(key) %}
+    <div style="font-size:12px;color:#888;font-style:italic">None configured.</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <span id="common-status" style="font-size:12px;color:#666"></span>
+</div>
+
+<!-- ============================================================ -->
+<!-- ALLOCATIONS TAB -->
+<!-- ============================================================ -->
+<div id="tab-allocations" class="tab-panel">
+
+  {% if not config.pools %}
+  <div class="card"><div class="empty"><p>No pools defined. Add pools to see allocations here.</p></div></div>
+  {% else %}
+
+  {% for pool in config.pools %}
+  <div class="card">
+    <div class="card-header" style="display:flex;align-items:center;gap:10px">
+      {{ pool.name }}
+      <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ pool.type.replace('_',' ') }}</span>
+    </div>
+
+    {% if pool.type == 'unique' %}
+    {% set pool_allocs = allocations.unique.get(pool.id, {}) %}
+    {% if pool_allocs %}
+    <table class="alloc-table">
+      <thead><tr><th>IP</th><th>Hostname</th><th>Interface</th><th></th></tr></thead>
+      <tbody>
+        {% for ip, entry in pool_allocs.items() %}
+        <tr>
+          <td>{{ ip }}</td>
+          <td class="meta">{{ entry.hostname }}</td>
+          <td class="meta">{{ entry.interface }}</td>
+          <td style="text-align:right">
+            <button class="btn btn-sm btn-danger"
+              onclick="releaseUnique('{{ pool.id }}', '{{ ip }}')">Release</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="font-size:12px;color:#888;font-style:italic">No allocations yet.</div>
+    {% endif %}
+
+    {% elif pool.type == 'point_to_point' %}
+    {% set pool_allocs = allocations.point_to_point.get(pool.id, {}) %}
+    {% if pool_allocs %}
+    <table class="alloc-table">
+      <thead><tr><th>IP</th><th>Hostname</th><th>Interface</th><th>Peer IP</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for ip, entry in pool_allocs.items() %}
+        {% if entry.get('status') != 'reserved_for_peer' %}
+        <tr>
+          <td>{{ ip }}</td>
+          <td class="meta">{{ entry.hostname or '—' }}</td>
+          <td class="meta">{{ entry.interface or '—' }}</td>
+          <td>
+            {{ entry.peer_ip }}
+            {% if entry.peer_note %}
+            <div class="peer-note">{{ entry.peer_note }}</div>
+            {% endif %}
+          </td>
+          <td>
+            {% set peer = pool_allocs.get(entry.peer_ip, {}) %}
+            {% if peer.get('hostname') %}
+            <span class="complete-badge">Complete</span>
+            {% else %}
+            <span class="partial-badge">Partial</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right">
+            <button class="btn btn-sm btn-danger"
+              onclick="releasePtp('{{ pool.id }}', '{{ ip }}')">Release</button>
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="font-size:12px;color:#888;font-style:italic">No allocations yet.</div>
+    {% endif %}
+
+    {% elif pool.type == 'vlan_supernet' %}
+    {% set pool_allocs = allocations.vlan_supernet.get(pool.id, {}) %}
+    {% if pool_allocs %}
+    <table class="alloc-table">
+      <thead><tr><th>Subnet</th><th>VLAN ID</th><th>VLAN Name</th><th>Hostname</th><th>Peer</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for subnet, entry in pool_allocs.items() %}
+        <tr>
+          <td>{{ subnet }}</td>
+          <td class="meta">{{ entry.vlan_id or '—' }}</td>
+          <td class="meta">{{ entry.vlan_name or '—' }}</td>
+          <td class="meta">{{ entry.hostname or '—' }}</td>
+          <td class="meta">{{ entry.peer_hostname or '—' }}</td>
+          <td>
+            {% if entry.status == 'assigned' %}
+            <span class="assigned-badge">Assigned</span>
+            {% else %}
+            <span class="carved-badge">Available</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right">
+            {% if entry.status == 'assigned' %}
+            <button class="btn btn-sm btn-danger"
+              onclick="releaseVlan('{{ pool.id }}', '{{ subnet }}')">Release</button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="font-size:12px;color:#888;font-style:italic">No subnets carved yet.</div>
+    {% endif %}
+
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+
+</div>
+
+<script>
+const PROJECT = {{ project_name | tojson }};
+
+function switchTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+}
+
+function updatePoolForm() {
+  const type = document.getElementById('pool-type').value;
+  document.getElementById('field-prefix').style.display  = type === 'unique' ? '' : 'none';
+  document.getElementById('field-carve').style.display   = type === 'vlan_supernet' ? '' : 'none';
+}
+
+async function addPool() {
+  const name   = document.getElementById('pool-name').value.trim();
+  const type   = document.getElementById('pool-type').value;
+  const subnet = document.getElementById('pool-subnet').value.trim();
+  const prefix = parseInt(document.getElementById('pool-prefix').value) || 32;
+  const carve  = parseInt(document.getElementById('pool-carve').value)  || 24;
+
+  if (!name || !subnet) { alert('Name and subnet are required.'); return; }
+
+  const payload = { name, type, subnet };
+  if (type === 'unique')        payload.prefix = prefix;
+  if (type === 'vlan_supernet') payload.carve_prefix = carve;
+
+  const res  = await fetch('/projects/' + PROJECT + '/api/pools', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (data.ok) location.reload();
+  else alert('Error: ' + data.error);
+}
+
+async function removePool(poolId, poolName) {
+  if (!confirm('Remove pool ' + poolName + ' and all its allocations?')) return;
+  const res  = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId, { method: 'DELETE' });
+  const data = await res.json();
+  if (data.ok) location.reload();
+}
+
+async function saveConventions() {
+  const conv = {
+    svi: {
+      gateway_offset:        parseInt(document.getElementById('conv-gw').value),
+      active_gateway_offset: parseInt(document.getElementById('conv-agw').value),
+      reserved_from_start:   parseInt(document.getElementById('conv-res').value),
+    }
+  };
+  const res  = await fetch('/projects/' + PROJECT + '/api/conventions', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(conv)
+  });
+  const data = await res.json();
+  const status = document.getElementById('conv-status');
+  status.textContent = data.ok ? 'Saved ✓' : 'Error saving';
+  setTimeout(() => status.textContent = '', 3000);
+}
+
+function addCommonEntry(key, placeholder) {
+  const container = document.getElementById('common-' + key);
+  const div = document.createElement('div');
+  div.className = 'common-entry';
+  div.dataset.key = key;
+  div.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+  div.innerHTML = '<input type="text" placeholder="' + placeholder + '" style="max-width:220px" onchange="saveCommon()">' +
+    '<button class="btn btn-sm btn-danger" onclick="removeCommonEntry(this)">Remove</button>';
+  container.appendChild(div);
+}
+
+function removeCommonEntry(btn) {
+  btn.closest('.common-entry').remove();
+  saveCommon();
+}
+
+async function saveCommon() {
+  const common = {};
+  document.querySelectorAll('.common-entry').forEach(entry => {
+    const key   = entry.dataset.key;
+    const value = entry.querySelector('input').value.trim();
+    if (!common[key]) common[key] = [];
+    if (value) common[key].push(value);
+  });
+
+  // Ensure all keys exist
+  ['dns_servers','ntp_servers','dhcp_servers','radius_servers','syslog_servers'].forEach(k => {
+    if (!common[k]) common[k] = [];
+  });
+
+  const res  = await fetch('/projects/' + PROJECT + '/api/common', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(common)
+  });
+  const data = await res.json();
+  const status = document.getElementById('common-status');
+  status.textContent = data.ok ? 'Saved ✓' : 'Error saving';
+  setTimeout(() => status.textContent = '', 3000);
+}
+
+async function releaseUnique(poolId, ip) {
+  if (!confirm('Release ' + ip + '?')) return;
+  await fetch('/projects/' + PROJECT + '/api/allocations/unique/release', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({pool_id: poolId, ip})
+  });
+  location.reload();
+}
+
+async function releasePtp(poolId, ip) {
+  if (!confirm('Release ' + ip + ' and its reserved peer end?')) return;
+  await fetch('/projects/' + PROJECT + '/api/allocations/ptp/release', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({pool_id: poolId, ip})
+  });
+  location.reload();
+}
+
+async function releaseVlan(poolId, subnet) {
+  if (!confirm('Release ' + subnet + '? This will also remove the derived SVI allocations.')) return;
+  await fetch('/projects/' + PROJECT + '/api/allocations/vlan/release', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({pool_id: poolId, subnet})
+  });
+  location.reload();
+}
+</script>
+{% endblock %}
