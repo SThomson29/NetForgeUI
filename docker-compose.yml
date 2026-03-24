@@ -20,6 +20,7 @@ services:
       # Persist user data and the cloned repo across container restarts
       - netforge_data:/app/service/data
       - netforge_repo:/app/service/configgen
+      - /var/run/docker.sock:/var/run/docker.sock
 
     restart: unless-stopped
 
