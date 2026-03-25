@@ -424,11 +424,7 @@ class TestGenerate:
 
     def test_run_generate_returns_job_id(self, app, auth_client):
         self.setup_project_with_host(app, auth_client)
-        # Mock subprocess.run to avoid needing Ansible
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = 'Playbook complete.\n'
-        with patch('app.projects.subprocess.run', return_value=mock_result):
+        with patch('app.docker_runner.run_generate', return_value=(0, 'Playbook complete.\n')):
             res = auth_client.post(
                 '/projects/gen-proj/generate/run',
                 json={'limit': '', 'tags': ''},
@@ -440,10 +436,7 @@ class TestGenerate:
 
     def test_generate_status_endpoint(self, app, auth_client):
         self.setup_project_with_host(app, auth_client)
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = 'Done\n'
-        with patch('app.projects.subprocess.run', return_value=mock_result):
+        with patch('app.docker_runner.run_generate', return_value=(0, 'Done\n')):
             run_res = auth_client.post(
                 '/projects/gen-proj/generate/run',
                 json={'limit': 'Core-01', 'tags': ''},

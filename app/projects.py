@@ -3,7 +3,6 @@ import io
 import zipfile
 import uuid
 import threading
-import subprocess
 
 from flask import (Blueprint, render_template, redirect, url_for,
                    request, flash, current_app, jsonify, send_file, abort)
@@ -229,52 +228,47 @@ def generate_page(project_name):
 @projects_bp.route('/projects/<project_name>/generate/run', methods=['POST'])
 @login_required
 def run_generate(project_name):
-    app     = current_app._get_current_object()
-    limit   = request.json.get('limit', '').strip()
-    tags    = request.json.get('tags', '').strip()
+    from .docker_runner import run_generate as docker_run_generate
 
-    ini_path = project_hosts_ini_path(app, current_user.username, project_name)
-    out_dir  = project_generated_configs_dir(app, current_user.username, project_name)
+    app   = current_app._get_current_object()
+    limit = request.json.get('limit', '').strip()
+    tags  = request.json.get('tags', '').strip()
+
+    out_dir = project_generated_configs_dir(app, current_user.username, project_name)
     os.makedirs(out_dir, exist_ok=True)
 
-    cmd = [
-        app.config['ANSIBLE_BIN'],
-        '-i', ini_path,
-        app.config['PLAYBOOK'],
-        '-e', f'config_output_dir={out_dir}',
-    ]
-    if limit:
-        cmd += ['--limit', limit]
-    if tags:
-        cmd += ['--tags', tags]
-
-    env = os.environ.copy()
-    env['ANSIBLE_ROLES_PATH'] = app.config['ROLES_PATH']
+    username = current_user.username  # capture before thread starts — request context won't exist inside thread
 
     job_id = str(uuid.uuid4())
     with _jobs_lock:
         _jobs[job_id] = {'status': 'running', 'output': '', 'returncode': None}
 
-    def _run(jid, c, cwd, e):
+    def _run(jid):
         try:
-            proc = subprocess.run(c, cwd=cwd, env=e,
-                                  stdout=subprocess.PIPE,
-                                  stderr=subprocess.STDOUT, text=True)
+            rc, output = docker_run_generate(
+                job_id       = jid,
+                username     = username,
+                project_name = project_name,
+                data_dir     = app.config['DATA_DIR'],
+                limit        = limit or None,
+                tags         = tags or None,
+            )
             with _jobs_lock:
-                _jobs[jid]['output']     = proc.stdout
-                _jobs[jid]['returncode'] = proc.returncode
-                _jobs[jid]['status']     = 'done' if proc.returncode == 0 else 'failed'
+                _jobs[jid]['output']     = output
+                _jobs[jid]['returncode'] = rc
+                _jobs[jid]['status']     = 'done' if rc == 0 else 'failed'
+        except RuntimeError as ex:
+            with _jobs_lock:
+                _jobs[jid]['output']     = str(ex)
+                _jobs[jid]['returncode'] = -1
+                _jobs[jid]['status']     = 'failed'
         except Exception as ex:
             with _jobs_lock:
                 _jobs[jid]['output']     = str(ex)
                 _jobs[jid]['returncode'] = -1
                 _jobs[jid]['status']     = 'failed'
 
-    threading.Thread(
-        target=_run,
-        args=(job_id, cmd, app.config['CONFIGGEN_REPO'], env),
-        daemon=True
-    ).start()
+    threading.Thread(target=_run, args=(job_id,), daemon=True).start()
 
     return jsonify({'job_id': job_id})
 

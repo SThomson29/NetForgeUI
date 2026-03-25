@@ -67,6 +67,9 @@ if __name__ == '__main__':
     _bootstrap_admin()
     _sync_repo()
 
+    from app.docker_runner import cleanup_orphaned_containers
+    cleanup_orphaned_containers()
+
     app.run(
         host='0.0.0.0',
         port=int(os.environ.get('PORT', 5000)),
