@@ -59,7 +59,8 @@ def _sync_repo():
             print(f'[repo] Pull failed: {result.stderr.strip()}')
 
 
-if __name__ == '__main__':
+def _run_bootstrap():
+    """Run all startup tasks — called before Gunicorn starts."""
     with app.app_context():
         from app.ssh_setup import setup_ssh
         setup_ssh(app)
@@ -70,8 +71,17 @@ if __name__ == '__main__':
     from app.docker_runner import cleanup_orphaned_containers
     cleanup_orphaned_containers()
 
-    app.run(
-        host='0.0.0.0',
-        port=int(os.environ.get('PORT', 5000)),
-        debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
-    )
+
+if __name__ == '__main__':
+    if '--bootstrap' in sys.argv:
+        # Bootstrap mode — run startup tasks then exit.
+        # Gunicorn is started separately by the Dockerfile CMD.
+        _run_bootstrap()
+    else:
+        # Dev mode — bootstrap and run Flask dev server.
+        _run_bootstrap()
+        app.run(
+            host='0.0.0.0',
+            port=int(os.environ.get('PORT', 5000)),
+            debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+        )
