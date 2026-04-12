@@ -9,12 +9,12 @@
     <div class="grid3">
       <div class="fld">
         <label class="lbl">Hostname</label>
-        <input type="text" name="hostname" placeholder="core-01" required
+        <input class="form-input" type="text" name="hostname" placeholder="core-01" required
                pattern="[A-Za-z0-9_\-]+" title="Letters, numbers, hyphens and underscores only">
       </div>
       <div class="fld">
         <label class="lbl">Stacking</label>
-        <select name="stacking">
+        <select class="form-select" name="stacking">
           <option value="none">None</option>
           <option value="vsx">VSX</option>
           <option value="vsf">VSF</option>
@@ -30,7 +30,8 @@
 <div class="card">
   <div class="card-header">Switches ({{ hosts|length }})</div>
   {% if hosts %}
-  <table>
+  <div class="table-wrap">
+<table>
     <thead>
       <tr>
         <th>Hostname</th>
@@ -60,6 +61,7 @@
       {% endfor %}
     </tbody>
   </table>
+</div>
   {% else %}
   <div class="empty"><p>No switches added yet.</p></div>
   {% endif %}

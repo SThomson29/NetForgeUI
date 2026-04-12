@@ -65,7 +65,7 @@
     <form method="post" action="{{ url_for('projects.new_project') }}">
       <div class="fld">
         <label class="lbl">Project name</label>
-        <input type="text" name="name" placeholder="core-network-buildout" autofocus
+        <input class="form-input" type="text" name="name" placeholder="core-network-buildout" autofocus
                pattern="[A-Za-z0-9_\-]+" title="Letters, numbers, hyphens and underscores only">
         <div class="hint">Letters, numbers, hyphens and underscores only.</div>
       </div>

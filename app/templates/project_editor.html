@@ -45,7 +45,7 @@
 {% block content %}
 <div class="host-select-bar">
   <label class="lbl" style="margin:0;white-space:nowrap">Select switch:</label>
-  <select id="host-select" onchange="selectHost(this.value)">
+  <select class="form-select" id="host-select" onchange="selectHost(this.value)">
     <option value="">— choose a switch —</option>
     {% for host in hosts %}
     <option value="{{ host.hostname }}" {% if host.hostname == selected %}selected{% endif %}>

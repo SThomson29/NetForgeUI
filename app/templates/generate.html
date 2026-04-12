@@ -25,7 +25,7 @@
   <div class="run-controls">
     <div class="fld" style="width:220px">
       <label class="lbl">Switch (leave empty for all)</label>
-      <select id="limit-select">
+      <select class="form-select" id="limit-select">
         <option value="">All switches</option>
         {% for host in hosts %}
         <option value="{{ host.hostname }}">{{ host.hostname }}</option>

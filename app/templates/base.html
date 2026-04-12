@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -50,32 +51,6 @@
           <path d="M3 3h7l2 2h9a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/>
         </svg>
         Projects
-      </a>
-
-      <a href="{{ url_for('hosts.hosts_page') }}"
-         class="nav-item {% if request.endpoint and request.endpoint.startswith('hosts') %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="2" y="3" width="20" height="14" rx="2"/>
-          <path d="M8 21h8M12 17v4"/>
-        </svg>
-        Hosts
-      </a>
-
-      <a href="{{ url_for('hostvars.editor') }}"
-         class="nav-item {% if request.endpoint and request.endpoint.startswith('hostvars') %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-          <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-        </svg>
-        Editor
-      </a>
-
-      <a href="{{ url_for('generate.generate_page') }}"
-         class="nav-item {% if request.endpoint and request.endpoint.startswith('generate') %}active{% endif %}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="5 3 19 12 5 21 5 3"/>
-        </svg>
-        Generate
       </a>
 
       {% if current_user.is_admin %}

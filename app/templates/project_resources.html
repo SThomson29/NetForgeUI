@@ -65,11 +65,11 @@
     <div class="grid3" style="margin-bottom:12px">
       <div class="fld">
         <label class="lbl">Name</label>
-        <input type="text" id="pool-name" placeholder="Loopbacks">
+        <input class="form-input" type="text" id="pool-name" placeholder="Loopbacks">
       </div>
       <div class="fld">
         <label class="lbl">Type</label>
-        <select id="pool-type" onchange="updatePoolForm()">
+        <select class="form-select" id="pool-type" onchange="updatePoolForm()">
           <option value="unique">Unique</option>
           <option value="point_to_point">Point-to-point (/31)</option>
           <option value="vlan_supernet">VLAN supernet</option>
@@ -77,17 +77,17 @@
       </div>
       <div class="fld">
         <label class="lbl">Subnet</label>
-        <input type="text" id="pool-subnet" placeholder="10.255.0.0/24">
+        <input class="form-input" type="text" id="pool-subnet" placeholder="10.255.0.0/24">
       </div>
     </div>
     <div class="grid3" id="pool-extra-fields">
       <div class="fld" id="field-prefix">
         <label class="lbl">Prefix length</label>
-        <input type="number" id="pool-prefix" value="32" min="1" max="32">
+        <input class="form-input" type="number" id="pool-prefix" value="32" min="1" max="32">
       </div>
       <div class="fld" id="field-carve" style="display:none">
         <label class="lbl">Carve size (prefix)</label>
-        <input type="number" id="pool-carve" value="24" min="1" max="32">
+        <input class="form-input" type="number" id="pool-carve" value="24" min="1" max="32">
       </div>
     </div>
     <button class="btn btn-primary" onclick="addPool()" style="margin-top:4px">Add pool</button>
@@ -107,15 +107,15 @@
     <div class="grid3">
       <div class="fld">
         <label class="lbl">Gateway offset</label>
-        <input type="number" id="conv-gw" value="{{ config.conventions.svi.gateway_offset | default(1) }}" min="1" max="254">
+        <input class="form-input" type="number" id="conv-gw" value="{{ config.conventions.svi.gateway_offset | default(1) }}" min="1" max="254">
       </div>
       <div class="fld">
         <label class="lbl">Active gateway offset</label>
-        <input type="number" id="conv-agw" value="{{ config.conventions.svi.active_gateway_offset | default(254) }}" min="1" max="254">
+        <input class="form-input" type="number" id="conv-agw" value="{{ config.conventions.svi.active_gateway_offset | default(254) }}" min="1" max="254">
       </div>
       <div class="fld">
         <label class="lbl">Reserved from start</label>
-        <input type="number" id="conv-res" value="{{ config.conventions.svi.reserved_from_start | default(10) }}" min="0" max="254">
+        <input class="form-input" type="number" id="conv-res" value="{{ config.conventions.svi.reserved_from_start | default(10) }}" min="0" max="254">
         <div class="hint">Number of addresses reserved at the start of each subnet (for infrastructure).</div>
       </div>
     </div>
@@ -146,7 +146,7 @@
     <div id="common-{{ key }}">
       {% for ip in config.common.get(key, []) %}
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px" class="common-entry" data-key="{{ key }}">
-        <input type="text" value="{{ ip }}" style="max-width:220px" onchange="saveCommon()">
+        <input class="form-input" type="text" value="{{ ip }}" style="max-width:220px" onchange="saveCommon()">
         <button class="btn btn-sm btn-danger" onclick="removeCommonEntry(this)">Remove</button>
       </div>
       {% endfor %}
@@ -179,7 +179,8 @@
     {% if pool.type == 'unique' %}
     {% set pool_allocs = allocations.unique.get(pool.id, {}) %}
     {% if pool_allocs %}
-    <table class="alloc-table">
+    <div class="table-wrap">
+<table class="alloc-table">
       <thead><tr><th>IP</th><th>Hostname</th><th>Interface</th><th></th></tr></thead>
       <tbody>
         {% for ip, entry in pool_allocs.items() %}
@@ -195,6 +196,7 @@
         {% endfor %}
       </tbody>
     </table>
+</div>
     {% else %}
     <div style="font-size:12px;color:#888;font-style:italic">No allocations yet.</div>
     {% endif %}
@@ -202,7 +204,8 @@
     {% elif pool.type == 'point_to_point' %}
     {% set pool_allocs = allocations.point_to_point.get(pool.id, {}) %}
     {% if pool_allocs %}
-    <table class="alloc-table">
+    <div class="table-wrap">
+<table class="alloc-table">
       <thead><tr><th>IP</th><th>Hostname</th><th>Interface</th><th>Peer IP</th><th>Status</th><th></th></tr></thead>
       <tbody>
         {% for ip, entry in pool_allocs.items() %}
@@ -234,6 +237,7 @@
         {% endfor %}
       </tbody>
     </table>
+</div>
     {% else %}
     <div style="font-size:12px;color:#888;font-style:italic">No allocations yet.</div>
     {% endif %}
@@ -241,7 +245,8 @@
     {% elif pool.type == 'vlan_supernet' %}
     {% set pool_allocs = allocations.vlan_supernet.get(pool.id, {}) %}
     {% if pool_allocs %}
-    <table class="alloc-table">
+    <div class="table-wrap">
+<table class="alloc-table">
       <thead><tr><th>Subnet</th><th>VLAN ID</th><th>VLAN Name</th><th>Hostname</th><th>Peer</th><th>Status</th><th></th></tr></thead>
       <tbody>
         {% for subnet, entry in pool_allocs.items() %}
@@ -268,6 +273,7 @@
         {% endfor %}
       </tbody>
     </table>
+</div>
     {% else %}
     <div style="font-size:12px;color:#888;font-style:italic">No subnets carved yet.</div>
     {% endif %}
@@ -350,7 +356,7 @@ function addCommonEntry(key, placeholder) {
   div.className = 'common-entry';
   div.dataset.key = key;
   div.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
-  div.innerHTML = '<input type="text" placeholder="' + placeholder + '" style="max-width:220px" onchange="saveCommon()">' +
+  div.innerHTML = '<input class="form-input" type="text" placeholder="' + placeholder + '" style="max-width:220px" onchange="saveCommon()">' +
     '<button class="btn btn-sm btn-danger" onclick="removeCommonEntry(this)">Remove</button>';
   container.appendChild(div);
 }
