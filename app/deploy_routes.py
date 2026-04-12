@@ -1,0 +1,354 @@
+"""
+Deploy routes — extends the projects blueprint.
+
+Add these routes to projects.py or register as a separate blueprint.
+Handles:
+  - Deploy mapping editor (hostname → mgmt IP)
+  - Dry-run (diff preview)
+  - Config push with checkpoint + rollback
+"""
+
+import json
+import os
+import subprocess
+import tempfile
+import glob
+import yaml
+from datetime import datetime
+from flask import (
+    Blueprint, render_template, request, jsonify,
+    current_app, abort
+)
+from flask_login import login_required, current_user
+
+# If adding to existing projects blueprint, skip this and add
+# routes directly. If standalone:
+# deploy_bp = Blueprint('deploy', __name__)
+
+
+# ── Helpers ────────────────────────────────────────────────
+
+def _project_dir(project_name):
+    """Return the project data directory for the current user."""
+    base = os.path.join(
+        current_app.config.get('DATA_DIR', 'data'),
+        'users', current_user.username,
+        'projects', project_name
+    )
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def _mapping_path(project_name):
+    return os.path.join(_project_dir(project_name), 'deploy_mapping.yml')
+
+
+def _load_mapping(project_name):
+    """Load deploy mapping from YAML."""
+    path = _mapping_path(project_name)
+    if not os.path.exists(path):
+        return {'hosts': [], 'settings': {'rollback_timeout': 5}}
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    return {
+        'hosts': data.get('hosts', []),
+        'settings': data.get('settings', {'rollback_timeout': 5})
+    }
+
+
+def _save_mapping(project_name, mapping_data):
+    """Save deploy mapping to YAML."""
+    path = _mapping_path(project_name)
+    with open(path, 'w') as f:
+        yaml.dump(mapping_data, f, default_flow_style=False)
+
+
+def _generated_configs_dir(project_name):
+    """Path to generated configs for this project."""
+    return os.path.join(_project_dir(project_name), 'generated_configs')
+
+
+def _build_inventory(hosts, username, password):
+    """
+    Build a dynamic Ansible inventory dict from the mapping + creds.
+    Returns a dict suitable for writing to a YAML inventory file.
+    """
+    inventory = {
+        'all': {
+            'hosts': {},
+            'vars': {
+                'ansible_network_os': 'arubanetworks.aoscx.aoscx',
+                'ansible_connection': 'network_cli',
+                'ansible_user': username,
+                'ansible_password': password,
+                'ansible_become': True,
+                'ansible_become_method': 'enable',
+                'ansible_become_password': password,
+            }
+        }
+    }
+    for h in hosts:
+        inventory['all']['hosts'][h['hostname']] = {
+            'ansible_host': h['mgmt_ip']
+        }
+    return inventory
+
+
+def _run_playbook(playbook_name, inventory_dict, extra_vars, limit_hosts=None):
+    """
+    Run an Ansible playbook inside the ephemeral container (or directly
+    if not using Docker execution).
+
+    Returns (success: bool, output: str, results: list[dict])
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Write inventory
+        inv_path = os.path.join(tmpdir, 'inventory.yml')
+        with open(inv_path, 'w') as f:
+            yaml.dump(inventory_dict, f, default_flow_style=False)
+
+        # Write extra vars
+        extra_vars['results_file'] = os.path.join(tmpdir, 'results')
+        os.makedirs(extra_vars['results_file'], exist_ok=True)
+
+        vars_path = os.path.join(tmpdir, 'extra_vars.yml')
+        with open(vars_path, 'w') as f:
+            yaml.dump(extra_vars, f, default_flow_style=False)
+
+        # Locate playbook
+        repo_dir = current_app.config.get('CONFIGGEN_DIR', 'configgen')
+        playbook_path = os.path.join(repo_dir, 'playbooks', playbook_name)
+
+        if not os.path.exists(playbook_path):
+            return False, f'Playbook not found: {playbook_path}', []
+
+        # Build command
+        cmd = [
+            'ansible-playbook',
+            playbook_path,
+            '-i', inv_path,
+            '-e', f'@{vars_path}',
+        ]
+        if limit_hosts:
+            cmd.extend(['--limit', ','.join(limit_hosts)])
+
+        # For dry run playbook, add check+diff flags
+        if 'dryrun' in playbook_name:
+            cmd.extend(['--check', '--diff'])
+
+        env = os.environ.copy()
+        env['ANSIBLE_HOST_KEY_CHECKING'] = 'False'
+        env['ANSIBLE_STDOUT_CALLBACK'] = 'json'
+        # Prevent Ansible from prompting
+        env['ANSIBLE_NOCOLOR'] = '1'
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 min timeout
+                env=env,
+                cwd=repo_dir
+            )
+        except subprocess.TimeoutExpired:
+            return False, 'Playbook execution timed out (5 min limit)', []
+
+        # Collect per-host result files
+        results = []
+        result_files = glob.glob(os.path.join(
+            extra_vars['results_file'], '*.json'
+        ))
+        for rf in result_files:
+            try:
+                with open(rf) as f:
+                    results.append(json.load(f))
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        success = proc.returncode == 0
+        output = proc.stdout + proc.stderr
+
+        return success, output, results
+
+
+# ── Routes ─────────────────────────────────────────────────
+# These should be registered under the projects blueprint.
+# URL prefix: /projects/<project_name>/deploy/...
+
+# Add to projects.py:
+
+@login_required
+def project_deploy(project_name):
+    """Render the deploy tab."""
+    mapping = _load_mapping(project_name)
+    config_dir = _generated_configs_dir(project_name)
+
+    # Enrich mappings with config file availability
+    enriched = []
+    for h in mapping['hosts']:
+        config_file = os.path.join(config_dir, f"{h['hostname']}.ios")
+        enriched.append({
+            'hostname': h['hostname'],
+            'mgmt_ip': h.get('mgmt_ip', ''),
+            'has_config': os.path.exists(config_file)
+        })
+
+    return render_template(
+        'project_deploy.html',
+        project_name=project_name,
+        mappings=enriched,
+        settings=mapping.get('settings', {})
+    )
+
+
+@login_required
+def deploy_save_mapping(project_name):
+    """Save the mapping table."""
+    data = request.get_json()
+    if not data:
+        return jsonify(ok=False, error='No data'), 400
+
+    mapping_data = {
+        'hosts': data.get('mappings', []),
+        'settings': {
+            'rollback_timeout': data.get('rollback_timeout', 5)
+        }
+    }
+    _save_mapping(project_name, mapping_data)
+    return jsonify(ok=True)
+
+
+@login_required
+def deploy_auto_populate(project_name):
+    """Auto-populate mapping from project hosts."""
+    from app.utils import read_project_hosts  # adjust import to your project
+
+    try:
+        hosts = read_project_hosts(project_name, current_user.username)
+    except Exception:
+        hosts = []
+
+    mapping = _load_mapping(project_name)
+    existing_names = {h['hostname'] for h in mapping['hosts']}
+
+    for h in hosts:
+        name = h if isinstance(h, str) else h.get('name', '')
+        if name and name not in existing_names:
+            mapping['hosts'].append({
+                'hostname': name,
+                'mgmt_ip': ''  # user fills in the IP
+            })
+
+    _save_mapping(project_name, mapping)
+    return jsonify(ok=True)
+
+
+@login_required
+def deploy_dryrun(project_name):
+    """Run dry-run playbook — returns diffs per host."""
+    data = request.get_json()
+    if not data:
+        return jsonify(ok=False, error='No data'), 400
+
+    hosts = data.get('hosts', [])
+    username = data.get('username', '')
+    password = data.get('password', '')
+
+    if not hosts or not username or not password:
+        return jsonify(ok=False, error='Missing hosts or credentials'), 400
+
+    config_dir = _generated_configs_dir(project_name)
+    inventory = _build_inventory(hosts, username, password)
+
+    extra_vars = {
+        'config_dir': config_dir,
+        'deploy_username': username,
+        'deploy_password': password,
+    }
+
+    success, output, results = _run_playbook(
+        'deploy_dryrun.yml',
+        inventory,
+        extra_vars,
+        limit_hosts=[h['hostname'] for h in hosts]
+    )
+
+    return jsonify(
+        ok=success,
+        output=output if not success else '',
+        results=results
+    )
+
+
+@login_required
+def deploy_push(project_name):
+    """Run deploy playbook — checkpoint, push, verify, confirm."""
+    data = request.get_json()
+    if not data:
+        return jsonify(ok=False, error='No data'), 400
+
+    hosts = data.get('hosts', [])
+    username = data.get('username', '')
+    password = data.get('password', '')
+    rollback_timeout = data.get('rollback_timeout', 5)
+
+    if not hosts or not username or not password:
+        return jsonify(ok=False, error='Missing hosts or credentials'), 400
+
+    config_dir = _generated_configs_dir(project_name)
+    inventory = _build_inventory(hosts, username, password)
+
+    extra_vars = {
+        'config_dir': config_dir,
+        'deploy_username': username,
+        'deploy_password': password,
+        'rollback_timeout': rollback_timeout,
+    }
+
+    success, output, results = _run_playbook(
+        'deploy_push.yml',
+        inventory,
+        extra_vars,
+        limit_hosts=[h['hostname'] for h in hosts]
+    )
+
+    return jsonify(
+        ok=success,
+        output=output if not success else '',
+        results=results
+    )
+
+
+# ── Route registration ────────────────────────────────────
+# Add these to your projects blueprint URL rules.
+# Example (in projects.py or __init__.py):
+#
+#   projects_bp.add_url_rule(
+#       '/<project_name>/deploy',
+#       'project_deploy',
+#       deploy_routes.project_deploy
+#   )
+#   projects_bp.add_url_rule(
+#       '/<project_name>/deploy/save-mapping',
+#       'deploy_save_mapping',
+#       deploy_routes.deploy_save_mapping,
+#       methods=['POST']
+#   )
+#   projects_bp.add_url_rule(
+#       '/<project_name>/deploy/auto-populate',
+#       'deploy_auto_populate',
+#       deploy_routes.deploy_auto_populate
+#   )
+#   projects_bp.add_url_rule(
+#       '/<project_name>/deploy/dryrun',
+#       'deploy_dryrun',
+#       deploy_routes.deploy_dryrun,
+#       methods=['POST']
+#   )
+#   projects_bp.add_url_rule(
+#       '/<project_name>/deploy/push',
+#       'deploy_push',
+#       deploy_routes.deploy_push,
+#       methods=['POST']
+#   )

@@ -1,0 +1,16 @@
+# deploy_mapping.yml — per-project file
+# Stored at: data/users/<username>/projects/<project>/deploy_mapping.yml
+# Edited via the Deploy tab in the GUI.
+
+hosts:
+  - hostname: CO-CORE-SW-01
+    mgmt_ip: "10.1.100.1"
+  - hostname: CO-ACC-SW-01
+    mgmt_ip: "10.1.100.2"
+  - hostname: CO-ACC-SW-02
+    mgmt_ip: "10.1.100.3"
+  - hostname: CO-DIST-SW-01
+    mgmt_ip: "10.1.100.4"
+
+settings:
+  rollback_timeout: 5       # minutes — dead-man's switch timer

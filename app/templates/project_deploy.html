@@ -1,0 +1,618 @@
+{% extends "base_project.html" %}
+{% block title %}Deploy — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}Deploy{% endblock %}
+
+{% block project_extra_head %}
+<style>
+/* Deploy-specific styles */
+.mapping-table input {
+  border: none;
+  background: transparent;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  padding: 4px 0;
+  width: 100%;
+  color: var(--text-primary);
+  outline: none;
+}
+.mapping-table input:focus {
+  background: var(--accent-subtle);
+  border-radius: 3px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  width: calc(100% + 12px);
+}
+.mapping-table input::placeholder { color: var(--text-tertiary); }
+
+.diff-block {
+  background: #1a1a1a;
+  border-radius: var(--radius-md);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.diff-block pre { margin: 0; padding: 16px; }
+.diff-line-add   { color: #4ade80; }
+.diff-line-del   { color: #f87171; }
+.diff-line-ctx   { color: #737373; }
+.diff-line-hdr   { color: #60a5fa; font-weight: 600; }
+
+.deploy-host-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.deploy-host-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+}
+.deploy-host-header:hover { background: var(--bg-hover); }
+.deploy-host-header .host-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.deploy-host-body {
+  border-top: 1px solid var(--border-subtle);
+  display: none;
+}
+.deploy-host-body.open { display: block; }
+
+.step-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+.step.active { color: var(--text-primary); }
+.step.done   { color: var(--success); }
+.step-num {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+}
+.step.active .step-num { border-color: var(--text-primary); background: var(--text-primary); color: var(--text-inverse); }
+.step.done .step-num   { border-color: var(--success); background: var(--success); color: #fff; }
+.step-connector {
+  width: 24px; height: 2px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.step.done + .step-connector { background: var(--success); }
+
+.cred-modal-fields { display: grid; gap: 12px; }
+</style>
+{% endblock %}
+
+{% block topbar_actions %}
+<button class="btn btn-secondary btn-sm" onclick="saveMappings()">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+  Save mapping
+</button>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Deploy</h1>
+  <p>Push generated configurations to switches with checkpoint rollback protection.</p>
+</div>
+
+<!-- Step indicator -->
+<div class="step-indicator" id="steps">
+  <div class="step active" id="step-1"><span class="step-num">1</span> Mapping</div>
+  <div class="step-connector"></div>
+  <div class="step" id="step-2"><span class="step-num">2</span> Dry Run</div>
+  <div class="step-connector"></div>
+  <div class="step" id="step-3"><span class="step-num">3</span> Deploy</div>
+</div>
+
+<!-- ─── Step 1: Mapping table ─── -->
+<div id="panel-mapping">
+  <div class="card mb-4">
+    <div class="card-body-compact">
+      <div class="flex items-center justify-between" style="margin-bottom:12px">
+        <span class="form-label" style="margin-bottom:0">Host → Management IP mapping</span>
+        <button class="btn btn-ghost btn-sm" onclick="addMappingRow()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add row
+        </button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="mapping-table">
+          <thead>
+            <tr>
+              <th style="width:30px">
+                <input type="checkbox" id="select-all" onchange="toggleAllMapping(this)" style="width:14px;height:14px;accent-color:var(--accent)">
+              </th>
+              <th>Hostname</th>
+              <th>Management IP</th>
+              <th>Config file</th>
+              <th style="width:40px"></th>
+            </tr>
+          </thead>
+          <tbody id="mapping-body">
+            {% for m in mappings %}
+            <tr data-hostname="{{ m.hostname }}">
+              <td><input type="checkbox" class="map-check" checked style="width:14px;height:14px;accent-color:var(--accent)"></td>
+              <td><input type="text" class="map-hostname" value="{{ m.hostname }}" placeholder="hostname"></td>
+              <td><input type="text" class="map-ip" value="{{ m.mgmt_ip }}" placeholder="10.x.x.x"></td>
+              <td>
+                {% if m.has_config %}
+                <span class="badge badge-green">{{ m.hostname }}.ios</span>
+                {% else %}
+                <span class="badge badge-yellow">Not generated</span>
+                {% endif %}
+              </td>
+              <td>
+                <button class="btn btn-ghost btn-icon btn-sm" onclick="this.closest('tr').remove()">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if not mappings %}
+      <div class="form-hint mt-2" style="margin-top:8px">
+        No mappings yet — add rows manually or click <strong>Auto-populate</strong> to fill from project hosts.
+      </div>
+      <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="autoPopulate()">Auto-populate from hosts</button>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Rollback timeout setting -->
+  <div class="card mb-4">
+    <div class="card-body-compact">
+      <div class="form-row">
+        <div class="form-group" style="max-width:200px;margin-bottom:0">
+          <label class="form-label">Rollback timeout</label>
+          <div class="flex items-center gap-2">
+            <input type="number" id="rollback-timeout" class="form-input" value="{{ settings.rollback_timeout | default(5) }}" min="1" max="30" style="width:70px">
+            <span class="text-sm text-secondary">minutes</span>
+          </div>
+          <div class="form-hint">Switch auto-reverts if unreachable after this duration.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex gap-2" style="justify-content:flex-end">
+    <button class="btn btn-accent" onclick="startDryRun()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      Dry Run — show diffs
+    </button>
+  </div>
+</div>
+
+<!-- ─── Step 2: Dry run results ─── -->
+<div id="panel-dryrun" style="display:none">
+
+  <div id="dryrun-results"></div>
+
+  <div class="flex gap-2" style="justify-content:flex-end;margin-top:16px">
+    <button class="btn btn-secondary" onclick="goToStep(1)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      Back to mapping
+    </button>
+    <button class="btn btn-primary" onclick="confirmDeploy()" id="deploy-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+      Confirm &amp; Deploy
+    </button>
+  </div>
+</div>
+
+<!-- ─── Step 3: Deploy results ─── -->
+<div id="panel-deploy" style="display:none">
+
+  <div id="deploy-results"></div>
+
+  <div class="flex gap-2" style="justify-content:flex-end;margin-top:16px">
+    <button class="btn btn-secondary" onclick="goToStep(1)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      Start over
+    </button>
+  </div>
+</div>
+
+<!-- ─── Credential prompt modal ─── -->
+<div class="modal-overlay" id="credModal">
+  <div class="modal">
+    <div class="modal-header">Switch credentials</div>
+    <div class="modal-body">
+      <p class="text-sm text-secondary" style="margin-bottom:16px">
+        Enter credentials for the target switches. These are used for this operation only and are not stored.
+      </p>
+      <div class="cred-modal-fields">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label" for="cred-user">Username</label>
+          <input type="text" id="cred-user" class="form-input" placeholder="admin" autocomplete="off">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label" for="cred-pass">Password</label>
+          <input type="password" id="cred-pass" class="form-input" placeholder="Password" autocomplete="off">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="hideCredModal()">Cancel</button>
+      <button class="btn btn-primary" id="cred-submit">Continue</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const PROJECT = {{ project_name | tojson }};
+let sessionCreds = null;  // held in memory only, never persisted
+
+/* ── Helpers ── */
+
+function getSelectedMappings() {
+  const rows = document.querySelectorAll('#mapping-body tr');
+  const selected = [];
+  rows.forEach(row => {
+    const check = row.querySelector('.map-check');
+    if (check && check.checked) {
+      selected.push({
+        hostname: row.querySelector('.map-hostname').value.trim(),
+        mgmt_ip: row.querySelector('.map-ip').value.trim()
+      });
+    }
+  });
+  return selected.filter(m => m.hostname && m.mgmt_ip);
+}
+
+function toggleAllMapping(el) {
+  document.querySelectorAll('.map-check').forEach(c => c.checked = el.checked);
+}
+
+function addMappingRow() {
+  const tbody = document.getElementById('mapping-body');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="checkbox" class="map-check" checked style="width:14px;height:14px;accent-color:var(--accent)"></td>
+    <td><input type="text" class="map-hostname" placeholder="hostname"></td>
+    <td><input type="text" class="map-ip" placeholder="10.x.x.x"></td>
+    <td><span class="badge badge-neutral">—</span></td>
+    <td><button class="btn btn-ghost btn-icon btn-sm" onclick="this.closest('tr').remove()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button></td>`;
+  tbody.appendChild(tr);
+  tr.querySelector('.map-hostname').focus();
+}
+
+async function autoPopulate() {
+  const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/auto-populate`);
+  const data = await res.json();
+  if (data.ok) {
+    location.reload();
+  } else {
+    toast(data.error || 'Failed to populate');
+  }
+}
+
+async function saveMappings() {
+  const rows = document.querySelectorAll('#mapping-body tr');
+  const mappings = [];
+  rows.forEach(row => {
+    const hostname = row.querySelector('.map-hostname').value.trim();
+    const ip = row.querySelector('.map-ip').value.trim();
+    if (hostname) mappings.push({ hostname, mgmt_ip: ip });
+  });
+
+  const timeout = parseInt(document.getElementById('rollback-timeout').value) || 5;
+
+  const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/save-mapping`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mappings, rollback_timeout: timeout })
+  });
+  const data = await res.json();
+  if (data.ok) toast('Mapping saved');
+  else toast(data.error || 'Save failed');
+}
+
+/* ── Step navigation ── */
+
+function goToStep(n) {
+  ['panel-mapping', 'panel-dryrun', 'panel-deploy'].forEach((id, i) => {
+    document.getElementById(id).style.display = (i === n - 1) ? '' : 'none';
+  });
+  for (let i = 1; i <= 3; i++) {
+    const el = document.getElementById('step-' + i);
+    el.classList.remove('active', 'done');
+    if (i < n) el.classList.add('done');
+    if (i === n) el.classList.add('active');
+  }
+}
+
+/* ── Credential modal ── */
+
+function promptCredentials() {
+  return new Promise((resolve) => {
+    if (sessionCreds) { resolve(sessionCreds); return; }
+    const modal = document.getElementById('credModal');
+    modal.classList.add('visible');
+    document.getElementById('cred-user').focus();
+
+    const submit = document.getElementById('cred-submit');
+    const handler = () => {
+      const user = document.getElementById('cred-user').value.trim();
+      const pass = document.getElementById('cred-pass').value;
+      if (!user || !pass) { toast('Enter both username and password'); return; }
+      sessionCreds = { username: user, password: pass };
+      modal.classList.remove('visible');
+      submit.removeEventListener('click', handler);
+      resolve(sessionCreds);
+    };
+    submit.addEventListener('click', handler);
+  });
+}
+
+function hideCredModal() {
+  document.getElementById('credModal').classList.remove('visible');
+}
+
+/* ── Dry run ── */
+
+async function startDryRun() {
+  const selected = getSelectedMappings();
+  if (selected.length === 0) { toast('Select at least one host with a management IP'); return; }
+
+  // Save mapping first
+  await saveMappings();
+
+  const creds = await promptCredentials();
+  if (!creds) return;
+
+  goToStep(2);
+  const container = document.getElementById('dryrun-results');
+  container.innerHTML = '<div class="flex items-center gap-2" style="padding:24px;justify-content:center"><span class="text-secondary">Running dry run…</span></div>';
+
+  try {
+    const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/dryrun`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        hosts: selected,
+        username: creds.username,
+        password: creds.password
+      })
+    });
+    const data = await res.json();
+
+    if (!data.ok) {
+      container.innerHTML = `
+        <div class="alert alert-danger">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          <span>${data.error || 'Dry run failed'}</span>
+        </div>
+        <pre class="code-block">${data.output || ''}</pre>`;
+      return;
+    }
+
+    renderDryRunResults(data.results);
+  } catch (err) {
+    container.innerHTML = `<div class="alert alert-danger"><span>${err.message}</span></div>`;
+  }
+}
+
+function renderDryRunResults(results) {
+  const container = document.getElementById('dryrun-results');
+  if (!results || results.length === 0) {
+    container.innerHTML = '<div class="alert alert-info"><span>No results returned.</span></div>';
+    return;
+  }
+
+  let html = '';
+  results.forEach(r => {
+    const statusBadge = r.changed
+      ? '<span class="badge badge-yellow">Changes detected</span>'
+      : '<span class="badge badge-green">No changes</span>';
+
+    const diffHtml = formatDiff(r.diff, r.commands);
+
+    html += `
+    <div class="deploy-host-card">
+      <div class="deploy-host-header" onclick="this.nextElementSibling.classList.toggle('open')">
+        <div class="host-info">
+          <span style="font-weight:600;font-size:13px">${r.hostname}</span>
+          <span class="text-sm text-tertiary mono">${r.mgmt_ip}</span>
+          ${statusBadge}
+        </div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;color:var(--text-tertiary)">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="deploy-host-body${r.changed ? ' open' : ''}">
+        ${diffHtml}
+      </div>
+    </div>`;
+  });
+
+  container.innerHTML = html;
+}
+
+function formatDiff(diff, commands) {
+  let lines = '';
+
+  // If we have commands (config lines that would be applied)
+  if (commands && commands.length > 0) {
+    lines = commands.map(cmd => `<span class="diff-line-add">+ ${escapeHtml(cmd)}</span>`).join('\n');
+  }
+
+  // If we have a unified diff
+  if (diff && (diff.before || diff.after || diff.prepared)) {
+    const raw = diff.prepared || '';
+    if (raw) {
+      lines = raw.split('\n').map(line => {
+        if (line.startsWith('+++') || line.startsWith('---'))
+          return `<span class="diff-line-hdr">${escapeHtml(line)}</span>`;
+        if (line.startsWith('+'))
+          return `<span class="diff-line-add">${escapeHtml(line)}</span>`;
+        if (line.startsWith('-'))
+          return `<span class="diff-line-del">${escapeHtml(line)}</span>`;
+        if (line.startsWith('@@'))
+          return `<span class="diff-line-hdr">${escapeHtml(line)}</span>`;
+        return `<span class="diff-line-ctx">${escapeHtml(line)}</span>`;
+      }).join('\n');
+    }
+  }
+
+  if (!lines) {
+    return '<div style="padding:16px;color:var(--text-tertiary);font-size:12px">No diff available — configuration is identical.</div>';
+  }
+
+  return `<div class="diff-block"><pre>${lines}</pre></div>`;
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+/* ── Deploy ── */
+
+async function confirmDeploy() {
+  const selected = getSelectedMappings();
+  if (!confirm(`Deploy to ${selected.length} switch${selected.length === 1 ? '' : 'es'}? A rollback checkpoint will be created on each switch.`)) return;
+
+  const btn = document.getElementById('deploy-btn');
+  btn.disabled = true;
+  btn.innerHTML = `
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite;width:14px;height:14px"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+    Deploying…`;
+
+  goToStep(3);
+  const container = document.getElementById('deploy-results');
+  container.innerHTML = '<div class="flex items-center gap-2" style="padding:24px;justify-content:center"><span class="text-secondary">Deploying to switches…</span></div>';
+
+  const timeout = parseInt(document.getElementById('rollback-timeout').value) || 5;
+
+  try {
+    const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        hosts: selected,
+        username: sessionCreds.username,
+        password: sessionCreds.password,
+        rollback_timeout: timeout
+      })
+    });
+    const data = await res.json();
+    renderDeployResults(data.results || [], data);
+  } catch (err) {
+    container.innerHTML = `<div class="alert alert-danger"><span>${err.message}</span></div>`;
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = `
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+    Confirm & Deploy`;
+}
+
+function renderDeployResults(results, data) {
+  const container = document.getElementById('deploy-results');
+
+  if (data && !data.ok) {
+    container.innerHTML = `
+      <div class="alert alert-danger">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        <span>${data.error || 'Deploy failed'}</span>
+      </div>
+      <pre class="code-block">${data.output || ''}</pre>`;
+    return;
+  }
+
+  let html = '';
+  results.forEach(r => {
+    let statusBadge, statusIcon;
+    if (r.confirmed) {
+      statusBadge = '<span class="badge badge-green">Confirmed — write mem</span>';
+      statusIcon = '<span class="status-dot status-dot-green"></span>';
+    } else if (r.rollback_pending) {
+      statusBadge = `<span class="badge badge-red">Unreachable — rollback in ${r.rollback_timeout_mins}m</span>`;
+      statusIcon = '<span class="status-dot status-dot-red"></span>';
+    } else {
+      statusBadge = '<span class="badge badge-neutral">Unknown</span>';
+      statusIcon = '<span class="status-dot status-dot-gray"></span>';
+    }
+
+    html += `
+    <div class="deploy-host-card">
+      <div class="deploy-host-header">
+        <div class="host-info">
+          ${statusIcon}
+          <span style="font-weight:600;font-size:13px">${r.hostname}</span>
+          <span class="text-sm text-tertiary mono">${r.mgmt_ip}</span>
+          ${statusBadge}
+        </div>
+        <span class="text-xs text-tertiary">checkpoint: ${r.checkpoint || '—'}</span>
+      </div>
+    </div>`;
+  });
+
+  // Summary
+  const confirmed = results.filter(r => r.confirmed).length;
+  const failed = results.filter(r => r.rollback_pending).length;
+  const summaryClass = failed > 0 ? 'alert-warning' : 'alert-success';
+  const summaryMsg = failed > 0
+    ? `${confirmed} of ${results.length} switches confirmed. ${failed} unreachable — rollback pending.`
+    : `All ${confirmed} switches deployed and confirmed successfully.`;
+
+  html = `
+    <div class="alert ${summaryClass}" style="margin-bottom:16px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        ${failed > 0
+          ? '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>'
+          : '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'}
+      </svg>
+      <span>${summaryMsg}</span>
+    </div>` + html;
+
+  container.innerHTML = html;
+}
+
+/* ── Keyboard shortcuts ── */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') hideCredModal();
+});
+document.getElementById('credModal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) hideCredModal();
+});
+document.getElementById('cred-pass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('cred-submit').click();
+});
+</script>
+<style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+{% endblock %}
