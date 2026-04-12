@@ -166,15 +166,15 @@ class TestMappingIO:
         with app.app_context():
             from app.deploy_routes import _save_mapping, _load_mapping
 
-            _save_mapping('deploy-test', {
+            _save_mapping(app, 'admin', 'deploy-test', {
                 'hosts': [{'hostname': 'OLD', 'mgmt_ip': '1.1.1.1'}],
                 'settings': {'rollback_timeout': 5}
             })
-            _save_mapping('deploy-test', {
+            _save_mapping(app, 'admin', 'deploy-test', {
                 'hosts': [{'hostname': 'NEW', 'mgmt_ip': '2.2.2.2'}],
                 'settings': {'rollback_timeout': 3}
             })
-            loaded = _load_mapping('deploy-test')
+            loaded = _load_mapping(app, 'admin', 'deploy-test')
 
         assert len(loaded['hosts']) == 1
         assert loaded['hosts'][0]['hostname'] == 'NEW'
