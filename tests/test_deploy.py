@@ -39,8 +39,8 @@ def setup_deploy_project(app, auth_client, project_name='deploy-test',
     for hostname, stacking in hosts:
         auth_client.post(
             f'/projects/{project_name}/hosts/add',
-            json={'hostname': hostname, 'stack_type': stacking},
-            content_type='application/json',
+            data={'hostname': hostname, 'stacking': stacking},
+            follow_redirects=True,
         )
 
     # Stub generated config files
