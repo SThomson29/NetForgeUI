@@ -60,12 +60,12 @@
     <div class="grid3">
       <div class="fld">
         <label class="lbl">Username</label>
-        <input type="text" name="username" placeholder="sam" required pattern="[a-z0-9_\-]+"
+        <input class="form-input" type="text" name="username" placeholder="sam" required pattern="[a-z0-9_\-]+"
                title="Lowercase letters, numbers, hyphens and underscores only">
       </div>
       <div class="fld">
         <label class="lbl">Password</label>
-        <input type="password" name="password" placeholder="min 8 characters" required minlength="8">
+        <input class="form-input" type="password" name="password" placeholder="min 8 characters" required minlength="8">
       </div>
       <div class="fld" style="display:flex;align-items:flex-end;padding-bottom:2px">
         <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
@@ -81,7 +81,8 @@
 <div class="card">
   <div class="card-header">Users ({{ users|length }})</div>
   {% if users %}
-  <table>
+  <div class="table-wrap">
+<table>
     <thead>
       <tr>
         <th>Username</th>
@@ -115,6 +116,7 @@
     {% endfor %}
     </tbody>
   </table>
+</div>
   {% endif %}
 </div>
 

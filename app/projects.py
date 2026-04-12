@@ -479,3 +479,44 @@ def api_save_conventions(project_name):
 def api_get_allocations(project_name):
     app = current_app._get_current_object()
     return jsonify(get_all_allocations(app, current_user.username, project_name))
+
+
+# ---------------------------------------------------------------------------
+# Deploy routes
+# ---------------------------------------------------------------------------
+from .deploy_routes import (
+    project_deploy,
+    deploy_save_mapping,
+    deploy_auto_populate,
+    deploy_dryrun,
+    deploy_push,
+)
+
+projects_bp.add_url_rule(
+    '/projects/<project_name>/deploy',
+    'project_deploy',
+    project_deploy
+)
+projects_bp.add_url_rule(
+    '/projects/<project_name>/deploy/save-mapping',
+    'deploy_save_mapping',
+    deploy_save_mapping,
+    methods=['POST']
+)
+projects_bp.add_url_rule(
+    '/projects/<project_name>/deploy/auto-populate',
+    'deploy_auto_populate',
+    deploy_auto_populate
+)
+projects_bp.add_url_rule(
+    '/projects/<project_name>/deploy/dryrun',
+    'deploy_dryrun',
+    deploy_dryrun,
+    methods=['POST']
+)
+projects_bp.add_url_rule(
+    '/projects/<project_name>/deploy/push',
+    'deploy_push',
+    deploy_push,
+    methods=['POST']
+)

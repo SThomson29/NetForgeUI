@@ -8,11 +8,11 @@
   <form method="POST" action="{{ url_for('hosts.add') }}" style="display:flex;gap:10px;align-items:flex-end">
     <div class="fld" style="flex:1;margin:0">
       <label class="lbl">Hostname</label>
-      <input type="text" name="hostname" placeholder="Enter switch hostname" required pattern="[A-Za-z0-9_\-]+" autocomplete="off">
+      <input class="form-input" type="text" name="hostname" placeholder="Enter switch hostname" required pattern="[A-Za-z0-9_\-]+" autocomplete="off">
     </div>
     <div class="fld" style="width:160px;margin:0">
       <label class="lbl">Stacking</label>
-      <select name="stacking">
+      <select class="form-select" name="stacking">
         <option value="vsx">VSX</option>
         <option value="vsf">VSF</option>
         <option value="none">None</option>
@@ -25,7 +25,8 @@
 <div class="card">
   <div class="card-header">Switches ({{ hosts|length }})</div>
   {% if hosts %}
-  <table>
+  <div class="table-wrap">
+<table>
     <thead>
       <tr>
         <th>Hostname</th>
@@ -52,6 +53,7 @@
     {% endfor %}
     </tbody>
   </table>
+</div>
   {% else %}
   <div class="empty">
     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
