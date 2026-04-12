@@ -58,25 +58,15 @@ def setup_deploy_project(app, auth_client, project_name='deploy-test',
 
 
 def write_mapping(app, project_name, mapping_data):
-    """Write a deploy_mapping.yml directly to the project directory."""
-    data_dir = app.config.get('DATA_DIR', 'data')
-    mapping_dir = os.path.join(data_dir, 'admin', 'projects', project_name)
-    os.makedirs(mapping_dir, exist_ok=True)
-    mapping_path = os.path.join(mapping_dir, 'deploy_mapping.yml')
-    with open(mapping_path, 'w') as f:
-        yaml.dump(mapping_data, f, default_flow_style=False)
+    from app.deploy_routes import _save_mapping
+    with app.app_context():
+        _save_mapping(app, 'admin', project_name, mapping_data)
 
 
 def read_mapping(app, project_name):
-    """Read the deploy_mapping.yml from disk."""
-    data_dir = app.config.get('DATA_DIR', 'data')
-    mapping_path = os.path.join(
-        data_dir, 'admin', 'projects', project_name, 'deploy_mapping.yml'
-    )
-    if not os.path.exists(mapping_path):
-        return None
-    with open(mapping_path) as f:
-        return yaml.safe_load(f)
+    from app.deploy_routes import _load_mapping
+    with app.app_context():
+        return _load_mapping(app, 'admin', project_name)
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +138,7 @@ class TestMappingIO:
         setup_deploy_project(app, auth_client)
         with app.app_context():
             from app.deploy_routes import _load_mapping
-            mapping = _load_mapping('deploy-test')
+            mapping = _load_mapping(app, 'admin', 'deploy-test')
             assert mapping['hosts'] == []
             assert mapping['settings']['rollback_timeout'] == 5
 
@@ -163,8 +153,8 @@ class TestMappingIO:
         }
         with app.app_context():
             from app.deploy_routes import _save_mapping, _load_mapping
-            _save_mapping('deploy-test', mapping_data)
-            loaded = _load_mapping('deploy-test')
+            _save_mapping(app, 'admin', 'deploy-test', mapping_data)
+            loaded = _load_mapping(app, 'admin', 'deploy-test')
 
         assert len(loaded['hosts']) == 2
         assert loaded['hosts'][0]['hostname'] == 'CO-CORE-SW-01'
@@ -232,7 +222,7 @@ class TestDeployPage:
 
     def test_deploy_page_requires_login(self, client):
         res = client.get('/projects/deploy-test/deploy', follow_redirects=False)
-        assert res.status_code == 302
+        assert res.status_code == 401 
 
 
 # ---------------------------------------------------------------------------
