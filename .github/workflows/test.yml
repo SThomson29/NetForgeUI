@@ -25,8 +25,8 @@ jobs:
 
       - name: Run unit and integration tests
         run: |
-          pytest tests/test_project.py tests/test_hostvars.py tests/test_integration.py \
+          pytest tests/ \
             -v --tb=short \
             --cov=app --cov-report=term-missing \
-            --cov-fail-under=50
+            --cov-fail-under=60
 
