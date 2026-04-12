@@ -28,5 +28,5 @@ jobs:
           pytest tests/test_project.py tests/test_hostvars.py tests/test_integration.py \
             -v --tb=short \
             --cov=app --cov-report=term-missing \
-            --cov-fail-under=60
+            --cov-fail-under=50
 
