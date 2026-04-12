@@ -15,7 +15,7 @@
 {% block breadcrumb %}
 <a href="{{ url_for('projects.projects_page') }}">Projects</a>
 <span class="sep">/</span>
-<a href="{{ url_for('projects.projects.hosts_page', project_name=project_name) }}">{{ project_name }}</a>
+<a href="{{ url_for('projects.hosts_page', project_name=project_name) }}">{{ project_name }}</a>
 <span class="sep">/</span>
 <span class="current">{% block project_page_title %}{% endblock %}</span>
 {% endblock %}
