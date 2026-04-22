@@ -463,27 +463,27 @@ def get_all_allocations(app, username, project_name):
 def sync_allocations(app, username, project_name, hostname):
     """Scan host_vars for a hostname and update allocations.json to match."""
     import yaml as _yaml
-
+ 
     cfg    = _load_config(app, username, project_name)
     allocs = _load_allocations(app, username, project_name)
     pools  = cfg.get('pools', [])
-
+ 
     if not pools:
         return
-
+ 
     # Build a map of subnet -> pool for quick lookup
     pool_map = {}
     for pool in pools:
         if pool['type'] in ('unique', 'point_to_point'):
             pool_map[pool['subnet']] = pool
-
+ 
     def ip_in_pool(ip, pool):
         try:
             net = ipaddress.ip_network(pool['subnet'], strict=False)
             return ipaddress.ip_address(ip) in net
         except Exception:
             return False
-
+ 
     def find_pool(ip):
         if not ip or not str(ip).strip():
             return None
@@ -495,7 +495,7 @@ def sync_allocations(app, username, project_name, hostname):
             if pool['type'] in ('unique', 'point_to_point') and ip_in_pool(ip, pool):
                 return pool
         return None
-
+ 
     def load_hv(filename):
         hvdir = os.path.join(project_host_vars_dir(app, username, project_name), hostname)
         fpath = os.path.join(hvdir, filename)
@@ -503,10 +503,10 @@ def sync_allocations(app, username, project_name, hostname):
             return {}
         with open(fpath) as f:
             return _yaml.load(f, Loader=_yaml.BaseLoader) or {}
-
+ 
     interfaces = load_hv('interfaces.yml')
     vxlan      = load_hv('vxlan.yml')
-
+ 
     def register_unique(ip, interface_name, pool):
         pid = pool['id']
         if pid not in allocs['unique']:
@@ -517,15 +517,15 @@ def sync_allocations(app, username, project_name, hostname):
         for k in to_remove:
             del allocs['unique'][pid][k]
         allocs['unique'][pid][ip] = {'hostname': hostname, 'interface': interface_name}
-
+ 
     def register_ptp(ip, interface_name, pool):
         pid = pool['id']
         if pid not in allocs['point_to_point']:
             allocs['point_to_point'][pid] = {}
-
+ 
         host_obj = ipaddress.ip_address(ip)
         peer_ip  = str(host_obj + 1) if int(host_obj) % 2 == 0 else str(host_obj - 1)
-
+ 
         # Remove old entries for this hostname+interface
         to_remove = [k for k, v in allocs['point_to_point'][pid].items()
                      if v.get('hostname') == hostname and v.get('interface') == interface_name]
@@ -536,9 +536,9 @@ def sync_allocations(app, username, project_name, hostname):
             if old_peer and old_peer in allocs['point_to_point'][pid]:
                 if allocs['point_to_point'][pid][old_peer].get('status') == 'reserved_for_peer':
                     del allocs['point_to_point'][pid][old_peer]
-
+ 
         existing_peer = allocs['point_to_point'][pid].get(peer_ip)
-
+ 
         allocs['point_to_point'][pid][ip] = {
             'hostname':       hostname,
             'interface':      interface_name,
@@ -547,7 +547,7 @@ def sync_allocations(app, username, project_name, hostname):
             'peer_interface': existing_peer.get('interface') if existing_peer else None,
             'peer_note':      None,
         }
-
+ 
         if existing_peer and existing_peer.get('status') == 'reserved_for_peer':
             # Complete the link — peer was reserved, now fill it in
             allocs['point_to_point'][pid][peer_ip] = {
@@ -575,16 +575,20 @@ def sync_allocations(app, username, project_name, hostname):
                 'peer_note':      None,
                 'status':         'reserved_for_peer',
             }
-
+ 
+    def strip_prefix(ip_str):
+        """Remove CIDR prefix length if present: '10.0.0.20/31' -> '10.0.0.20'"""
+        s = str(ip_str).strip()
+        return s.split('/')[0] if '/' in s else s
+ 
     def process_ip(ip, interface_name):
         if not ip or not str(ip).strip():
             return
-        # Validate it looks like a real IP address before doing anything
+        ip = strip_prefix(ip)
         try:
-            ipaddress.ip_address(str(ip).strip())
+            ipaddress.ip_address(ip)
         except ValueError:
             return
-        ip = str(ip).strip()
         pool = find_pool(ip)
         if not pool:
             return
@@ -592,23 +596,23 @@ def sync_allocations(app, username, project_name, hostname):
             register_unique(ip, interface_name, pool)
         elif pool['type'] == 'point_to_point':
             register_ptp(ip, interface_name, pool)
-
+ 
     def is_valid_ip(ip):
         if not ip or not str(ip).strip():
             return False
         try:
-            ipaddress.ip_address(str(ip).strip())
+            ipaddress.ip_address(strip_prefix(ip))
             return True
         except ValueError:
             return False
-
+ 
     # Clear all existing allocations for this hostname before re-scanning
     # This ensures deleted or renamed interfaces don't leave stale reservations
     for pid in list(allocs['unique'].keys()):
         for ip in list(allocs['unique'][pid].keys()):
             if allocs['unique'][pid][ip].get('hostname') == hostname:
                 del allocs['unique'][pid][ip]
-
+ 
     for pid in list(allocs['point_to_point'].keys()):
         # Collect all IPs to remove first, then delete — avoids mutation during iteration
         to_delete = set()
@@ -626,25 +630,25 @@ def sync_allocations(app, username, project_name, hostname):
                 to_delete.add(ip)
         for ip in to_delete:
             pool_allocs.pop(ip, None)
-
+ 
     # Scan all interface types — only process explicitly set valid IPs
     for lo in (interfaces.get('loopback_interfaces') or []):
         ip = lo.get('ip_address', '')
         if is_valid_ip(ip):
             process_ip(ip, lo.get('name', 'loopback0'))
-
+ 
     for phy in (interfaces.get('physical_interfaces') or []):
         if str(phy.get('routed', '')).lower() == 'true' or phy.get('port_type') == 'routed':
             ip = phy.get('ip_address', '')
             if is_valid_ip(ip):
                 process_ip(ip, phy.get('name', ''))
-
+ 
     for lag in (interfaces.get('lag_interfaces') or []):
         if str(lag.get('routed', '')).lower() == 'true' or lag.get('port_type') == 'routed':
             ip = lag.get('ip_address', '')
             if is_valid_ip(ip):
                 process_ip(ip, lag.get('name', ''))
-
+ 
     for svi in (interfaces.get('vlan_interfaces') or []):
         ip = svi.get('ip_address', '')
         if is_valid_ip(ip):
@@ -652,11 +656,11 @@ def sync_allocations(app, username, project_name, hostname):
         agw = svi.get('active_gateway_ip', '')
         if is_valid_ip(agw):
             process_ip(agw, svi.get('name', '') + ':active_gw')
-
+ 
     vtep_ip = vxlan.get('loopback_ip', '')
     if is_valid_ip(vtep_ip):
         process_ip(vtep_ip, vxlan.get('loopback_interface', 'loopback1'))
-
+ 
     _save_allocations(app, username, project_name, allocs)
 
 
