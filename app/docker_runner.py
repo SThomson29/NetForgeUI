@@ -84,7 +84,8 @@ def cleanup_orphaned_containers():
         log.error(f'[docker_runner] Orphan cleanup failed: {e}')
 
 
-def run_generate(job_id, username, project_name, data_dir, limit=None, tags=None):
+def run_generate(job_id, username, project_name, data_dir, limit=None, tags=None,
+                 progress_callback=None):
     """
     Run ansible-playbook in an ephemeral Docker container.
 
@@ -99,6 +100,7 @@ def run_generate(job_id, username, project_name, data_dir, limit=None, tags=None
         data_dir:     Container-internal DATA_DIR (e.g. /app/service/data)
         limit:        Optional ansible --limit string
         tags:         Optional ansible --tags string
+        progress_callback: Optional callable(output_so_far) called as log lines arrive
 
     Returns:
         (returncode, output_text)
@@ -169,9 +171,18 @@ def run_generate(job_id, username, project_name, data_dir, limit=None, tags=None
             stderr=True,
         )
 
+        # Stream logs as they arrive so the frontend can show progress
+        output_parts = []
+        for chunk in container.logs(stream=True, follow=True):
+            line = chunk.decode('utf-8', errors='replace')
+            output_parts.append(line)
+            if progress_callback:
+                progress_callback(''.join(output_parts))
+
+        output = ''.join(output_parts)
+
         result = container.wait()
         returncode = result.get('StatusCode', -1)
-        output = container.logs(stdout=True, stderr=True).decode('utf-8', errors='replace')
 
         try:
             container.remove(force=True)
