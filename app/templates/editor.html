@@ -167,11 +167,12 @@ function genVxlan(s) {
   return `---\nloopback_interface: ${s.vtepLoopback || 'loopback1'}\nloopback_ip: "${s.vtepIp}"\nospf_area: "${s.vtepArea || '0.0.0.0'}"\nvxlan:\n  vni_map: ${vnis}\n`;}
 
 function genVsx(s) {
-  return `---\nvsx:\n  enabled: ${yb(s.vsxEnabled)}\n  role: ${s.vsxRole || 'primary'}\n  system_mac: "${s.vsxMac}"\n  isl_port: "${s.vsxIsl}"\n  keepalive:\n    peer_ip: "${s.vsxKaPeer}"\n    src_ip: "${s.vsxKaSrc}"\n    vrf: ${s.vsxKaVrf || ''}\n  peer_ip: "${s.vsxPeer}"\n`;}
+  return `---\nvsx:\n  enabled: ${yb(s.vsxEnabled)}\n  role: ${s.vsxRole || 'primary'}\n  system_mac: "${s.vsxMac}"\n  isl_port: "${s.vsxIsl}"\n  keepalive:\n    peer_ip: "${s.vsxKaPeer}"\n    src_ip: "${s.vsxKaSrc}"\n    vrf: ${s.vsxKaVrf || ''}\n`;}
 
 function genVsf(s) {
-  const members = s.vsfMembers.length === 0 ? '[]' : '\n' + s.vsfMembers.map(m => `  - id: ${m.id}`).join('\n');
-  return `---\nvsf:\n  enabled: ${yb(s.vsfEnabled)}\n  interface1: "${s.vsfIf1}"\n  interface2: "${s.vsfIf2}"\n  members: ${members}\n`;}
+  const members = s.vsfMembers.length === 0 ? '[]' : '\n' + s.vsfMembers.map(m =>
+    `  - id: ${m.id}\n    link1: "${m.link1 || ''}"\n    link2: "${m.link2 || ''}"`).join('\n');
+  return `---\nvsf:\n  enabled: ${yb(s.vsfEnabled)}\n  members: ${members}\n`;}
 
 // ── Helper components ──────────────────────────────────────────────────────
 
@@ -244,10 +245,7 @@ function App() {
   const [vsxKaPeer, setVsxKaPeer] = useState('');
   const [vsxKaSrc, setVsxKaSrc] = useState('');
   const [vsxKaVrf, setVsxKaVrf] = useState('');
-  const [vsxPeer, setVsxPeer] = useState('');
   const [vsfEnabled, setVsfEnabled] = useState(false);
-  const [vsfIf1, setVsfIf1] = useState('');
-  const [vsfIf2, setVsfIf2] = useState('');
   const [vsfMembers, setVsfMembers] = useState([]);
 
   // Load state from server on mount
@@ -304,10 +302,7 @@ function App() {
         setVsxKaPeer(s.vsxKaPeer || '');
         setVsxKaSrc(s.vsxKaSrc || '');
         setVsxKaVrf(s.vsxKaVrf || '');
-        setVsxPeer(s.vsxPeer || '');
         setVsfEnabled(!!s.vsfEnabled);
-        setVsfIf1(s.vsfIf1 || '');
-        setVsfIf2(s.vsfIf2 || '');
         setVsfMembers(s.vsfMembers || []);
         setLoading(false);
         setInitialLoad(false);
@@ -367,8 +362,8 @@ function App() {
       snmpContact, snmpCommunity, v3Users, radiusServerKey, radiusGroup, dynAuth, radiusServers, vrfs, vlans,
       routes, ifGroups, physical, lags, loopbacks, vlanIfs, ospfInstances,
       deviceRole, bgpAsn, bgpRid, bgpNeighbors, vtepLoopback, vtepIp, vtepArea, vnis,
-      vsxEnabled, vsxRole, vsxMac, vsxIsl, vsxKaPeer, vsxKaSrc, vsxKaVrf, vsxPeer,
-      vsfEnabled, vsfIf1, vsfIf2, vsfMembers};
+      vsxEnabled, vsxRole, vsxMac, vsxIsl, vsxKaPeer, vsxKaSrc, vsxKaVrf,
+      vsfEnabled, vsfMembers};
 
     const files = [];
     if (included.device)     files.push({filename: 'general.yml',      content: genGeneral(state)});
@@ -729,14 +724,13 @@ function App() {
     stackingType === 'vsf' && ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'VSF'),
       ce('label', {className:'chk', style:{marginBottom:14}}, ce('input', {type:'checkbox', checked:vsfEnabled, onChange:ev=>setVsfEnabled(ev.target.checked)}), 'Enable VSF'),
-      ce('div', {className:'grid2', style:{marginBottom:14}},
-        ce(Field, {label:'ISL link 1'}, ce('input', {value:vsfIf1, onChange:ev=>setVsfIf1(ev.target.value), disabled:!vsfEnabled})),
-        ce(Field, {label:'ISL link 2'}, ce('input', {value:vsfIf2, onChange:ev=>setVsfIf2(ev.target.value), disabled:!vsfEnabled}))),
       vsfMembers.map((m,i) => ce('div', {key:i, className:'item-card'},
-        ce('div', {style:{display:'grid',gridTemplateColumns:'1fr auto',gap:8,alignItems:'end'}},
-          ce(Field, {label:'Member ID'}, ce('input', {value:m.id||'', onChange:ev=>updateItem(setVsfMembers,i,'id',ev.target.value), disabled:!vsfEnabled})),
+        ce('div', {style:{display:'grid',gridTemplateColumns:'100px 1fr 1fr auto',gap:8,alignItems:'end'}},
+          ce(Field, {label:'Member ID'}, ce('input', {value:m.id||'', onChange:ev=>updateItem(setVsfMembers,i,'id',ev.target.value), disabled:!vsfEnabled, placeholder:'1'})),
+          ce(Field, {label:'Stacking link 1'}, ce('input', {value:m.link1||'', onChange:ev=>updateItem(setVsfMembers,i,'link1',ev.target.value), disabled:!vsfEnabled, placeholder:'1/1/49'})),
+          ce(Field, {label:'Stacking link 2'}, ce('input', {value:m.link2||'', onChange:ev=>updateItem(setVsfMembers,i,'link2',ev.target.value), disabled:!vsfEnabled, placeholder:'1/1/50'})),
           ce('button', {className:'remove-btn', style:{marginBottom:12}, onClick:()=>removeItem(setVsfMembers,i), disabled:!vsfEnabled}, 'Remove')))),
-      ce('button', {className:'add-btn', onClick:()=>addItem(setVsfMembers,{id:''}), disabled:!vsfEnabled}, '+ Add member')),
+      ce('button', {className:'add-btn', onClick:()=>addItem(setVsfMembers,{id:'',link1:'',link2:''}), disabled:!vsfEnabled}, '+ Add member')),
     stackingType === 'none' && ce('div', {className:'sec'},
       ce('p', {style:{fontSize:13,color:'#888'}}, 'No stacking file will be generated.')));
 

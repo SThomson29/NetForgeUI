@@ -139,6 +139,40 @@ function commonDatalist(key, listId) {
   );
 }
 
+// ── Instant pool allocation ───────────────────────────────────────────────
+
+var __triggerAllocRefresh = null; // Set by App on mount
+
+function poolAllocateIP(poolId, poolType, ip, hostname, interfaceLabel) {
+  var endpoint = poolType === 'point_to_point'
+    ? '/api/allocations/ptp' : '/api/allocations/unique';
+  fetch('/projects/' + PROJECT_NAME + endpoint, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({pool_id:poolId, ip:ip, hostname:hostname, interface:interfaceLabel||''})
+  }).catch(function(){});
+  // Update local state immediately
+  var bucket = poolType === 'point_to_point' ? 'point_to_point' : 'unique';
+  if (!PROJECT_ALLOCS[bucket]) PROJECT_ALLOCS[bucket] = {};
+  if (!PROJECT_ALLOCS[bucket][poolId]) PROJECT_ALLOCS[bucket][poolId] = {};
+  PROJECT_ALLOCS[bucket][poolId][ip] = {hostname:hostname, interface:interfaceLabel||''};
+  if (__triggerAllocRefresh) __triggerAllocRefresh();
+}
+
+function poolReleaseIP(poolId, poolType, ip) {
+  var endpoint = poolType === 'point_to_point'
+    ? '/api/allocations/ptp/release' : '/api/allocations/unique/release';
+  fetch('/projects/' + PROJECT_NAME + endpoint, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({pool_id:poolId, ip:ip})
+  }).catch(function(){});
+  // Update local state immediately
+  var bucket = poolType === 'point_to_point' ? 'point_to_point' : 'unique';
+  if (PROJECT_ALLOCS[bucket] && PROJECT_ALLOCS[bucket][poolId]) {
+    delete PROJECT_ALLOCS[bucket][poolId][ip];
+  }
+  if (__triggerAllocRefresh) __triggerAllocRefresh();
+}
+
 // PooledIPField — pure render function, no hooks, all state from props
 function PooledIPField(props) {
   const { label, fieldKey, value, onChange, prefix, onPrefixChange,
@@ -189,7 +223,13 @@ function PooledIPField(props) {
       poolSelector,
       ce('select', {
         value: value||'',
-        onChange: ev => ev.target.value === '__free' ? setFreeText(true) : onChange(ev.target.value),
+        onChange: ev => {
+          var newIp = ev.target.value;
+          if (newIp === '__free') { setFreeText(true); return; }
+          if (value && value !== newIp) poolReleaseIP(pool.id, pool.type, value);
+          if (newIp) poolAllocateIP(pool.id, pool.type, newIp, hostname, label);
+          onChange(newIp);
+        },
         style:{width:'100%'}
       },
         ce('option', {value:''}, '— select IP —'),
@@ -212,7 +252,13 @@ function PooledIPField(props) {
       poolSelector,
       ce('select', {
         value: value||'',
-        onChange: ev => ev.target.value === '__free' ? setFreeText(true) : onChange(ev.target.value),
+        onChange: ev => {
+          var newIp = ev.target.value;
+          if (newIp === '__free') { setFreeText(true); return; }
+          if (value && value !== newIp) poolReleaseIP(pool.id, pool.type, value);
+          if (newIp) poolAllocateIP(pool.id, pool.type, newIp, hostname, label);
+          onChange(newIp);
+        },
         style:{width:'100%'}
       },
         ce('option', {value:''}, '— select IP —'),
@@ -314,11 +360,12 @@ function genVxlan(s) {
   return `---\nloopback_interface: ${s.vtepLoopback || 'loopback1'}\nloopback_ip: "${s.vtepIp}"\nospf_area: "${s.vtepArea || '0.0.0.0'}"\nvxlan:\n  vni_map: ${vnis}\n`;}
 
 function genVsx(s) {
-  return `---\nvsx:\n  enabled: ${yb(s.vsxEnabled)}\n  role: ${s.vsxRole || 'primary'}\n  system_mac: "${s.vsxMac}"\n  isl_port: "${s.vsxIsl}"\n  keepalive:\n    peer_ip: "${s.vsxKaPeer}"\n    src_ip: "${s.vsxKaSrc}"\n    vrf: ${s.vsxKaVrf || ''}\n  peer_ip: "${s.vsxPeer}"\n`;}
+  return `---\nvsx:\n  enabled: ${yb(s.vsxEnabled)}\n  role: ${s.vsxRole || 'primary'}\n  system_mac: "${s.vsxMac}"\n  isl_port: "${s.vsxIsl}"\n  keepalive:\n    peer_ip: "${s.vsxKaPeer}"\n    src_ip: "${s.vsxKaSrc}"\n    vrf: ${s.vsxKaVrf || ''}\n`;}
 
 function genVsf(s) {
-  const members = s.vsfMembers.length === 0 ? '[]' : '\n' + s.vsfMembers.map(m => `  - id: ${m.id}`).join('\n');
-  return `---\nvsf:\n  enabled: ${yb(s.vsfEnabled)}\n  interface1: "${s.vsfIf1}"\n  interface2: "${s.vsfIf2}"\n  members: ${members}\n`;}
+  const members = s.vsfMembers.length === 0 ? '[]' : '\n' + s.vsfMembers.map(m =>
+    `  - id: ${m.id}\n    link1: "${m.link1 || ''}"\n    link2: "${m.link2 || ''}"`).join('\n');
+  return `---\nvsf:\n  enabled: ${yb(s.vsfEnabled)}\n  members: ${members}\n`;}
 
 // ── Helper components ──────────────────────────────────────────────────────
 
@@ -387,6 +434,62 @@ function App() {
   const [freeTextMap,     setFreeTextMap]     = useState({});
   const [subnetSearchMap, setSubnetSearchMap] = useState({});
 
+  // Bulk routed interface builder
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkStart, setBulkStart] = useState('1/1/1');
+  const [bulkCount, setBulkCount] = useState('4');
+  const [bulkIp, setBulkIp] = useState('');
+  const [bulkPrefix, setBulkPrefix] = useState('31');
+  const [bulkSpacing, setBulkSpacing] = useState('4');
+  const [bulkVrf, setBulkVrf] = useState('');
+  const [bulkOspfArea, setBulkOspfArea] = useState('');
+  const [bulkOspfPid, setBulkOspfPid] = useState('1');
+  const [bulkDesc, setBulkDesc] = useState('');
+  const [bulkPoolId, setBulkPoolId] = useState('');
+
+  function bulkGenerate() {
+    var count   = parseInt(bulkCount) || 0;
+    var spacing = parseInt(bulkSpacing) || 1;
+    if (!count || !bulkStart || !bulkIp) return;
+
+    // Parse start interface — increment last number
+    var parts = bulkStart.split('/');
+    var lastIdx = parts.length - 1;
+    var portStart = parseInt(parts[lastIdx]) || 1;
+
+    // Parse start IP to integer
+    var ipParts = bulkIp.split('.').map(Number);
+    var ipInt   = (ipParts[0]<<24)|(ipParts[1]<<16)|(ipParts[2]<<8)|ipParts[3];
+
+    var newInterfaces = [];
+    for (var n = 0; n < count; n++) {
+      var ifParts = parts.slice();
+      ifParts[lastIdx] = String(portStart + n);
+      var ifName = ifParts.join('/');
+
+      var thisIpInt = ipInt + (n * spacing);
+      var thisIp = intToIP(thisIpInt);
+
+      var desc = bulkDesc ? bulkDesc.replace('%n', String(n+1)).replace('%i', ifName) : '';
+
+      newInterfaces.push({
+        name: ifName, description: desc, admin: 'up', mtu: '9198',
+        port_type: 'routed', ip_address: thisIp, ip_prefix: bulkPrefix,
+        vrf: bulkVrf, ospf_area: bulkOspfArea, ospf_process_id: bulkOspfPid
+      });
+
+      // Instant-allocate if a pool is selected
+      if (bulkPoolId) {
+        var pool = PROJECT_POOLS.find(function(p){return p.id === bulkPoolId;});
+        if (pool) poolAllocateIP(pool.id, pool.type, thisIp, SELECTED_HOST, ifName);
+      }
+    }
+
+    setIsDirty(true);
+    setPhysical(function(prev) { return prev.concat(newInterfaces); });
+    setBulkOpen(false);
+  }
+
   // Get pools of a specific type for a dropdown
   const poolsOfType = (types) => PROJECT_POOLS.filter(p => types.includes(p.type));
   const uniquePools   = () => poolsOfType(['unique']);
@@ -402,10 +505,7 @@ function App() {
   const [vsxKaPeer, setVsxKaPeer] = useState('');
   const [vsxKaSrc, setVsxKaSrc] = useState('');
   const [vsxKaVrf, setVsxKaVrf] = useState('');
-  const [vsxPeer, setVsxPeer] = useState('');
   const [vsfEnabled, setVsfEnabled] = useState(false);
-  const [vsfIf1, setVsfIf1] = useState('');
-  const [vsfIf2, setVsfIf2] = useState('');
   const [vsfMembers, setVsfMembers] = useState([]);
 
   // Load state from server on mount
@@ -476,10 +576,7 @@ function App() {
         setVsxKaPeer(s.vsxKaPeer || '');
         setVsxKaSrc(s.vsxKaSrc || '');
         setVsxKaVrf(s.vsxKaVrf || '');
-        setVsxPeer(s.vsxPeer || '');
         setVsfEnabled(!!s.vsfEnabled);
-        setVsfIf1(s.vsfIf1 || '');
-        setVsfIf2(s.vsfIf2 || '');
         setVsfMembers(s.vsfMembers || []);
         setLoading(false);
         setInitialLoad(false);
@@ -530,6 +627,26 @@ function App() {
   const removeStr = (setter, i) => { setIsDirty(true); setter(p => p.filter((_, j) => j !== i)); };
   const updateStr = (setter, i, val) => { setIsDirty(true); setter(p => p.map((x, j) => j === i ? val : x)); };
 
+  // Duplicate interface name detection
+  function getDuplicateNames(items) {
+    var counts = {};
+    items.forEach(function(item) {
+      var n = (item.name || '').trim();
+      if (n) counts[n] = (counts[n] || 0) + 1;
+    });
+    var dupes = {};
+    for (var k in counts) { if (counts[k] > 1) dupes[k] = true; }
+    return dupes;
+  }
+  function dupStyle(name, dupes) {
+    if (!name || !dupes[(name||'').trim()]) return {};
+    return {borderColor:'#dc2626', boxShadow:'0 0 0 2px rgba(220,38,38,0.15)'};
+  }
+  function dupHint(name, dupes) {
+    if (!name || !dupes[(name||'').trim()]) return null;
+    return ce('div', {style:{fontSize:11,color:'#dc2626',marginTop:2}}, 'Duplicate interface name');
+  }
+
   // Include/exclude state for each tab's files
   const [included, setIncluded] = useState({
     device:true, management:true, banner:true, snmp:true, aaa:true,
@@ -557,14 +674,17 @@ function App() {
     );
   }
 
+  const [allocRefresh, setAllocRefresh] = useState(0);
+  useEffect(function() { __triggerAllocRefresh = function() { setAllocRefresh(function(c){return c+1}); }; }, []);
+
   const handleSave = async () => {
     const state = {hostname, platform, profile, timezone, ntpServers, centralDisabled, dnsDomain, dnsServers,
       mgmtVrf, mgmtSrc, localUsers, bannerMotd, bannerExec, snmpVersion, snmpVrf, snmpDesc, snmpLocation,
       snmpContact, snmpCommunity, v3Users, radiusServerKey, radiusGroup, dynAuth, radiusServers, vrfs, vlans,
       routes, ifGroups, physical, lags, loopbacks, vlanIfs, ospfInstances,
       deviceRole, bgpAsn, bgpRid, bgpNeighbors, vtepLoopback, vtepIp, vtepArea, vnis,
-      vsxEnabled, vsxRole, vsxMac, vsxIsl, vsxKaPeer, vsxKaSrc, vsxKaVrf, vsxPeer,
-      vsfEnabled, vsfIf1, vsfIf2, vsfMembers};
+      vsxEnabled, vsxRole, vsxMac, vsxIsl, vsxKaPeer, vsxKaSrc, vsxKaVrf,
+      vsfEnabled, vsfMembers};
 
     const files = [];
     if (included.device)     files.push({filename: 'general.yml',      content: genGeneral(state)});
@@ -587,7 +707,15 @@ function App() {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(files)});
       const data = await res.json();
       setSaveOk(data.ok);
-      if (data.ok) setIsDirty(false);
+      if (data.ok) {
+        setIsDirty(false);
+        // Refresh pool allocations so pool pickers show updated assignments
+        if (data.allocations) {
+          for (var k in PROJECT_ALLOCS) delete PROJECT_ALLOCS[k];
+          Object.assign(PROJECT_ALLOCS, data.allocations);
+          setAllocRefresh(function(c) { return c + 1; });
+        }
+      }
       setSaveStatus(data.ok ? 'Saved ✓' : 'Error saving');
       setTimeout(() => setSaveStatus(''), 3000);
     } catch(err) {
@@ -599,6 +727,12 @@ function App() {
   const tabLabels = {device:'Device',management:'Management',banner:'Banner',snmp:'SNMP',aaa:'AAA',vrfs:'VRFs',vlans:'VLANs',routes:'Static Routes',interfaces:'Interfaces',routing:'Routing',vxlan:'VXLAN',stacking:'Stacking'};
 
   // ── Tab render functions ─────────────────────────────────────────────────
+
+  // Compute duplicate interface names for warnings
+  const phyDupes = getDuplicateNames(physical);
+  const lagDupes = getDuplicateNames(lags);
+  const loDupes  = getDuplicateNames(loopbacks);
+  const sviDupes = getDuplicateNames(vlanIfs);
 
   const renderDevice = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'device', filename:'general.yml'}),
@@ -756,7 +890,7 @@ function App() {
       ce('div', {className:'sec-h'}, 'Physical interfaces'),
       physical.map((p,i) => ce('div', {key:i, className:'item-card'},
         ce('div', {className:'grid3'},
-          ce(Field, {label:'Name'}, ce('input', {value:p.name||'', onChange:ev=>updateItem(setPhysical,i,'name',ev.target.value), placeholder:'1/1/1'})),
+          ce(Field, {label:'Name'}, ce('input', {value:p.name||'', onChange:ev=>updateItem(setPhysical,i,'name',ev.target.value), placeholder:'1/1/1', style:dupStyle(p.name,phyDupes)}), dupHint(p.name,phyDupes)),
           ce(Field, {label:'Description'}, ce('input', {value:p.description||'', onChange:ev=>updateItem(setPhysical,i,'description',ev.target.value)})),
           ce(Field, {label:'Admin'}, ce('select', {value:p.admin||'up', onChange:ev=>updateItem(setPhysical,i,'admin',ev.target.value)},
             ce('option',{value:'up'},'up'), ce('option',{value:'down'},'down'))),
@@ -778,12 +912,38 @@ function App() {
               ce(Field, {label:'Trunk allowed VLANs'}, ce('input', {value:p.trunk_allowed||'', onChange:ev=>updateItem(setPhysical,i,'trunk_allowed',ev.target.value), placeholder:'all or 100,200'})),
               ce(Field, {label:'Native VLAN'}, ce('input', {value:p.trunk_native||'1', onChange:ev=>updateItem(setPhysical,i,'trunk_native',ev.target.value)}))),
         ce('button', {className:'remove-btn', style:{marginTop:10}, onClick:()=>removeItem(setPhysical,i)}, 'Remove interface'))),
-      ce('button', {className:'add-btn', onClick:()=>addItem(setPhysical,{name:'',admin:'up',mtu:'9198',port_type:'access'})}, '+ Add physical interface')),
+      ce('button', {className:'add-btn', onClick:()=>addItem(setPhysical,{name:'',admin:'up',mtu:'9198',port_type:'access'})}, '+ Add physical interface'),
+      ce('button', {className:'add-btn', style:{marginLeft:8}, onClick:()=>setBulkOpen(!bulkOpen)}, bulkOpen ? '− Close bulk builder' : '+ Bulk add routed'),
+      bulkOpen && ce('div', {className:'item-card', style:{marginTop:10}},
+        ce('div', {style:{fontSize:13,fontWeight:600,marginBottom:10}}, 'Bulk routed interface builder'),
+        ce('div', {className:'hint'}, 'Creates multiple routed interfaces with sequential names and evenly spaced IPs. Use %n for sequence number and %i for interface name in description.'),
+        ce('div', {className:'grid3'},
+          ce(Field, {label:'Start interface'}, ce('input', {value:bulkStart, onChange:ev=>setBulkStart(ev.target.value), placeholder:'1/1/1'})),
+          ce(Field, {label:'Number of interfaces'}, ce('input', {type:'number', min:'1', value:bulkCount, onChange:ev=>setBulkCount(ev.target.value)})),
+          ce(Field, {label:'Start IP'}, ce('input', {value:bulkIp, onChange:ev=>setBulkIp(ev.target.value), placeholder:'10.100.2.0'})),
+          ce(Field, {label:'IP prefix'}, ce('input', {value:bulkPrefix, onChange:ev=>setBulkPrefix(ev.target.value), placeholder:'31'})),
+          ce(Field, {label:'IP spacing', hint:'e.g. 4 = .0, .4, .8, .12'}, ce('input', {type:'number', min:'1', value:bulkSpacing, onChange:ev=>setBulkSpacing(ev.target.value)})),
+          ce(Field, {label:'Pool (optional)'}, ce('select', {value:bulkPoolId, onChange:ev=>setBulkPoolId(ev.target.value)},
+            ce('option', {value:''}, 'No pool — free text'),
+            PROJECT_POOLS.filter(function(p){return p.type==='unique'||p.type==='point_to_point';}).map(function(p){
+              return ce('option', {key:p.id, value:p.id}, p.name + ' (' + p.type.replace('_',' ') + ')');
+            }))),
+          ce(Field, {label:'VRF'}, ce('input', {value:bulkVrf, onChange:ev=>setBulkVrf(ev.target.value)})),
+          ce(Field, {label:'OSPF area'}, ce('input', {value:bulkOspfArea, onChange:ev=>setBulkOspfArea(ev.target.value), placeholder:'0.0.0.0'})),
+          ce(Field, {label:'OSPF process ID'}, ce('input', {value:bulkOspfPid, onChange:ev=>setBulkOspfPid(ev.target.value), placeholder:'1'})),
+          ce(Field, {label:'Description pattern'}, ce('input', {value:bulkDesc, onChange:ev=>setBulkDesc(ev.target.value), placeholder:'P2P to spine %n'}))),
+        ce('div', {style:{marginTop:10, display:'flex', gap:8, alignItems:'center'}},
+          ce('button', {className:'save-btn', onClick:bulkGenerate, disabled:!bulkStart||!bulkIp||!parseInt(bulkCount)}, 'Generate ' + (parseInt(bulkCount)||0) + ' interfaces'),
+          (bulkStart && bulkIp && parseInt(bulkCount) > 0) && ce('span', {style:{fontSize:12,color:'#888'}},
+            'Preview: ' + bulkStart + ' → ' + bulkIp + ', ' +
+            (function(){var p=bulkStart.split('/');p[p.length-1]=String(parseInt(p[p.length-1]||1)+1);return p.join('/');}()) +
+            ' → ' + intToIP(((bulkIp.split('.').map(Number).reduce(function(a,b){return (a<<8)|b;})>>>0) + parseInt(bulkSpacing||1))>>>0) +
+            ', ..')))),
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'LAG interfaces'),
       lags.map((l,i) => ce('div', {key:i, className:'item-card'},
         ce('div', {className:'grid3'},
-          ce(Field, {label:'Name'}, ce('input', {value:l.name||'', onChange:ev=>updateItem(setLags,i,'name',ev.target.value), placeholder:'lag1'})),
+          ce(Field, {label:'Name'}, ce('input', {value:l.name||'', onChange:ev=>updateItem(setLags,i,'name',ev.target.value), placeholder:'lag1', style:dupStyle(l.name,lagDupes)}), dupHint(l.name,lagDupes)),
           ce(Field, {label:'Description'}, ce('input', {value:l.description||'', onChange:ev=>updateItem(setLags,i,'description',ev.target.value)})),
           ce(Field, {label:'LACP mode'}, ce('select', {value:l.lacp_mode||'active', onChange:ev=>updateItem(setLags,i,'lacp_mode',ev.target.value)},
             ce('option',{value:'active'},'active'), ce('option',{value:'passive'},'passive'), ce('option',{value:'off'},'off'))),
@@ -805,7 +965,7 @@ function App() {
       ce('div', {className:'sec-h'}, 'Loopback interfaces'),
       loopbacks.map((l,i) => ce('div', {key:i, className:'item-card'},
         ce('div', {style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 100px 1fr 160px auto',gap:8,alignItems:'end'}},
-          ce(Field, {label:'Name'}, ce('input', {value:l.name||'', onChange:ev=>updateItem(setLoopbacks,i,'name',ev.target.value), placeholder:'loopback0'})),
+          ce(Field, {label:'Name'}, ce('input', {value:l.name||'', onChange:ev=>updateItem(setLoopbacks,i,'name',ev.target.value), placeholder:'loopback0', style:dupStyle(l.name,loDupes)}), dupHint(l.name,loDupes)),
           ce(Field, {label:'Description'}, ce('input', {value:l.description||'', onChange:ev=>updateItem(setLoopbacks,i,'description',ev.target.value)})),
           ce(PooledIPField, {label:'IP address', fieldKey:'loopback_'+i, value:l.ip_address||'', onChange:v=>updateItem(setLoopbacks,i,'ip_address',v), allowedPoolTypes:['unique'], hostname:SELECTED_HOST, ipPoolMap:(ipPoolMap[SELECTED_HOST]||{}), setIpPoolMap:(u)=>setIpPoolMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), freeTextMap:(freeTextMap[SELECTED_HOST]||{}), setFreeTextMap:(u)=>setFreeTextMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), subnetSearchMap:(subnetSearchMap[SELECTED_HOST]||{}), setSubnetSearchMap:(u)=>setSubnetSearchMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}}))}),
           ce(Field, {label:'VRF'}, ce('input', {value:l.vrf||'', onChange:ev=>updateItem(setLoopbacks,i,'vrf',ev.target.value)})),
@@ -846,7 +1006,7 @@ function App() {
             )
           ),
           ce('div', {className:'grid3'},
-            ce(Field, {label:'Name'}, ce('input', {value:v.name||'', onChange:ev=>updateItem(setVlanIfs,i,'name',ev.target.value), placeholder:'vlan100'})),
+            ce(Field, {label:'Name'}, ce('input', {value:v.name||'', onChange:ev=>updateItem(setVlanIfs,i,'name',ev.target.value), placeholder:'vlan100', style:dupStyle(v.name,sviDupes)}), dupHint(v.name,sviDupes)),
             ce(Field, {label:'Description'}, ce('input', {value:v.description||'', onChange:ev=>updateItem(setVlanIfs,i,'description',ev.target.value)})),
             ce(Field, {label:'VRF'}, ce('input', {value:v.vrf||'', onChange:ev=>updateItem(setVlanIfs,i,'vrf',ev.target.value)})),
             // IP address — dropdown from subnet IPs if subnet selected, else freetext
@@ -1000,19 +1160,17 @@ function App() {
         ce(Field, {label:'ISL port'}, ce('input', {value:vsxIsl, onChange:ev=>setVsxIsl(ev.target.value), placeholder:'lag256', disabled:!vsxEnabled})),
         ce(Field, {label:'Keepalive peer IP'}, ce('input', {value:vsxKaPeer, onChange:ev=>setVsxKaPeer(ev.target.value), disabled:!vsxEnabled})),
         ce(Field, {label:'Keepalive source IP'}, ce('input', {value:vsxKaSrc, onChange:ev=>setVsxKaSrc(ev.target.value), disabled:!vsxEnabled})),
-        ce(Field, {label:'Keepalive VRF'}, ce('input', {value:vsxKaVrf, onChange:ev=>setVsxKaVrf(ev.target.value), disabled:!vsxEnabled})),
-        ce(Field, {label:'Peer IP'}, ce('input', {value:vsxPeer, onChange:ev=>setVsxPeer(ev.target.value), disabled:!vsxEnabled})))),
+        ce(Field, {label:'Keepalive VRF'}, ce('input', {value:vsxKaVrf, onChange:ev=>setVsxKaVrf(ev.target.value), disabled:!vsxEnabled})))),
     stackingType === 'vsf' && ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'VSF'),
       ce('label', {className:'chk', style:{marginBottom:14}}, ce('input', {type:'checkbox', checked:vsfEnabled, onChange:ev=>setVsfEnabled(ev.target.checked)}), 'Enable VSF'),
-      ce('div', {className:'grid2', style:{marginBottom:14}},
-        ce(Field, {label:'ISL link 1'}, ce('input', {value:vsfIf1, onChange:ev=>setVsfIf1(ev.target.value), disabled:!vsfEnabled})),
-        ce(Field, {label:'ISL link 2'}, ce('input', {value:vsfIf2, onChange:ev=>setVsfIf2(ev.target.value), disabled:!vsfEnabled}))),
       vsfMembers.map((m,i) => ce('div', {key:i, className:'item-card'},
-        ce('div', {style:{display:'grid',gridTemplateColumns:'1fr auto',gap:8,alignItems:'end'}},
-          ce(Field, {label:'Member ID'}, ce('input', {value:m.id||'', onChange:ev=>updateItem(setVsfMembers,i,'id',ev.target.value), disabled:!vsfEnabled})),
+        ce('div', {style:{display:'grid',gridTemplateColumns:'100px 1fr 1fr auto',gap:8,alignItems:'end'}},
+          ce(Field, {label:'Member ID'}, ce('input', {value:m.id||'', onChange:ev=>updateItem(setVsfMembers,i,'id',ev.target.value), disabled:!vsfEnabled, placeholder:'1'})),
+          ce(Field, {label:'Stacking link 1'}, ce('input', {value:m.link1||'', onChange:ev=>updateItem(setVsfMembers,i,'link1',ev.target.value), disabled:!vsfEnabled, placeholder:'1/1/49'})),
+          ce(Field, {label:'Stacking link 2'}, ce('input', {value:m.link2||'', onChange:ev=>updateItem(setVsfMembers,i,'link2',ev.target.value), disabled:!vsfEnabled, placeholder:'1/1/50'})),
           ce('button', {className:'remove-btn', style:{marginBottom:12}, onClick:()=>removeItem(setVsfMembers,i), disabled:!vsfEnabled}, 'Remove')))),
-      ce('button', {className:'add-btn', onClick:()=>addItem(setVsfMembers,{id:''}), disabled:!vsfEnabled}, '+ Add member')),
+      ce('button', {className:'add-btn', onClick:()=>addItem(setVsfMembers,{id:'',link1:'',link2:''}), disabled:!vsfEnabled}, '+ Add member')),
     stackingType === 'none' && ce('div', {className:'sec'},
       ce('p', {style:{fontSize:13,color:'#888'}}, 'No stacking file will be generated.')));
 

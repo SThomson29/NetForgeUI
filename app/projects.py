@@ -206,7 +206,9 @@ def save_all_hostvars(project_name, hostname):
     except Exception as e:
         pass  # Don't fail the save if allocation sync errors
 
-    return jsonify({'ok': True, 'saved': len(files)})
+    # Return updated allocations so the frontend can refresh pool pickers
+    allocs = get_all_allocations(app, current_user.username, project_name)
+    return jsonify({'ok': True, 'saved': len(files), 'allocations': allocs})
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +247,10 @@ def run_generate(project_name):
 
     def _run(jid):
         try:
+            def _progress(output_so_far):
+                with _jobs_lock:
+                    _jobs[jid]['output'] = output_so_far
+
             rc, output = docker_run_generate(
                 job_id       = jid,
                 username     = username,
@@ -252,6 +258,7 @@ def run_generate(project_name):
                 data_dir     = app.config['DATA_DIR'],
                 limit        = limit or None,
                 tags         = tags or None,
+                progress_callback = _progress,
             )
             with _jobs_lock:
                 _jobs[jid]['output']     = output
