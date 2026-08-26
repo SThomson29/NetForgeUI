@@ -42,6 +42,8 @@ HOSTVARS_FILES = [
     'vxlan.yml',
     'vsx.yml',
     'vsf.yml',
+    'sflow.yml',
+    'syslog.yml',
 ]
 
 

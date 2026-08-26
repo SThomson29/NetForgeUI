@@ -309,6 +309,12 @@ function genSnmp(s) {
     `  - username: ${u.username}\n    auth_password: "${u.auth_password || ''}"\n    priv_password: "${u.priv_password || ''}"`).join('\n');
   return `---\nsnmp:\n  version: ${s.snmpVersion}\n  vrf: ${s.snmpVrf}\n  system_description: "${s.snmpDesc}"\n  location: "${s.snmpLocation}"\n  contact: "${s.snmpContact}"\n  community: "${s.snmpCommunity}"\n  v3_users: ${s.snmpVersion === 'v3' ? v3 : '[]'}\n`;}
 
+function genSyslog(s) {
+  return `---\nsyslog:\n  server: "${s.syslogServer || ''}"\n  severity: "${s.syslogSeverity || ''}"\n`;}
+
+function genSflow(s) {
+  return `---\nsflow:\n  collector_ip: "${s.sflowCollectorIp || ''}"\n  agent_ip: "${s.sflowAgentIp || ''}"\n`;}
+
 function genAaa(s) {
   const servers = s.radiusServers.length === 0 ? '[]' : '\n' + s.radiusServers.map(r =>
     `  - address: ${r.address}\n    key: "${r.key || ''}"`).join('\n');
@@ -337,7 +343,7 @@ function genInterfaces(s) {
     else { r += `\n    routed: false\n    port_type: ${i.port_type || 'access'}\n    access_vlan: "${i.access_vlan || ''}"\n    trunk_allowed_vlans: "${i.trunk_allowed || ''}"\n    trunk_native_vlan: ${i.trunk_native || 1}`; }
     return r; }).join('\n');
   const lag = s.lags.length === 0 ? '[]' : '\n' + s.lags.map(l => {
-    let r = `  - name: "${l.name}"\n    description: "${l.description || ''}"\n    admin: ${l.admin || 'up'}\n    mtu: ${l.mtu || 9198}\n    lacp_mode: "${l.lacp_mode || 'active'}"`;
+    let r = `  - name: "${l.name}"\n    description: "${l.description || ''}"\n    admin: ${l.admin || 'up'}\n    lacp_mode: "${l.lacp_mode || 'active'}"`;
     if (l.routed === 'true') { r += `\n    routed: true\n    vrf: "${l.vrf || ''}"\n    ip_address: "${l.ip_address || ''}"\n    ip_prefix: "${l.ip_prefix || ''}"\n    ospf_area: "${l.ospf_area || ''}"\n    ospf_process_id: ${l.ospf_process_id || 1}`; }
     else { r += `\n    routed: false\n    trunk_allowed_vlans: "${l.trunk_allowed || 'all'}"\n    trunk_native_vlan: ${l.trunk_native || 1}`; }
     return r; }).join('\n');
@@ -409,6 +415,10 @@ function App() {
   const [snmpContact, setSnmpContact] = useState('');
   const [snmpCommunity, setSnmpCommunity] = useState('');
   const [v3Users, setV3Users] = useState([]);
+  const [syslogServer, setSyslogServer] = useState('');
+  const [syslogSeverity, setSyslogSeverity] = useState('');
+  const [sflowCollectorIp, setSflowCollectorIp] = useState('');
+  const [sflowAgentIp, setSflowAgentIp] = useState('');
   const [radiusServerKey, setRadiusServerKey] = useState('');
   const [radiusGroup, setRadiusGroup] = useState('');
   const [dynAuth, setDynAuth] = useState(false);
@@ -533,6 +543,10 @@ function App() {
         setSnmpContact(s.snmpContact || '');
         setSnmpCommunity(s.snmpCommunity || '');
         setV3Users(s.v3Users || []);
+        setSyslogServer(s.syslogServer || '');
+        setSyslogSeverity(s.syslogSeverity || '');
+        setSflowCollectorIp(s.sflowCollectorIp || '');
+        setSflowAgentIp(s.sflowAgentIp || '');
         setRadiusServerKey(s.radiusServerKey || '');
         setRadiusGroup(s.radiusGroup || '');
         setDynAuth(!!s.dynAuth);
@@ -651,7 +665,7 @@ function App() {
   const [included, setIncluded] = useState({
     device:true, management:true, banner:true, snmp:true, aaa:true,
     vrfs:true, vlans:true, routes:true, interfaces:true, routing:true,
-    vxlan:true, stacking:true
+    vxlan:true, stacking:true, syslog:true, sflow:true
   });
   const toggleIncluded = (key) => setIncluded(p => ({...p, [key]: !p[key]}));
 
@@ -680,7 +694,8 @@ function App() {
   const handleSave = async () => {
     const state = {hostname, platform, profile, timezone, ntpServers, centralDisabled, dnsDomain, dnsServers,
       mgmtVrf, mgmtSrc, localUsers, bannerMotd, bannerExec, snmpVersion, snmpVrf, snmpDesc, snmpLocation,
-      snmpContact, snmpCommunity, v3Users, radiusServerKey, radiusGroup, dynAuth, radiusServers, vrfs, vlans,
+      snmpContact, snmpCommunity, v3Users, syslogServer, syslogSeverity,
+      sflowCollectorIp, sflowAgentIp, radiusServerKey, radiusGroup, dynAuth, radiusServers, vrfs, vlans,
       routes, ifGroups, physical, lags, loopbacks, vlanIfs, ospfInstances,
       deviceRole, bgpAsn, bgpRid, bgpNeighbors, vtepLoopback, vtepIp, vtepArea, vnis,
       vsxEnabled, vsxRole, vsxMac, vsxIsl, vsxKaPeer, vsxKaSrc, vsxKaVrf,
@@ -691,6 +706,8 @@ function App() {
     if (included.management) files.push({filename: 'management.yml',   content: genManagement(state)});
     if (included.banner)     files.push({filename: 'banner.yml',       content: genBanner(state)});
     if (included.snmp)       files.push({filename: 'snmp.yml',         content: genSnmp(state)});
+    if (included.syslog)     files.push({filename: 'syslog.yml',       content: genSyslog(state)});
+    if (included.sflow)      files.push({filename: 'sflow.yml',        content: genSflow(state)});
     if (included.aaa)        files.push({filename: 'aaa.yml',          content: genAaa(state)});
     if (included.vrfs)       files.push({filename: 'vrfs.yml',         content: genVrfs(state)});
     if (included.vlans)      files.push({filename: 'vlans.yml',        content: genVlans(state)});
@@ -700,6 +717,21 @@ function App() {
     if (included.vxlan)      files.push({filename: 'vxlan.yml',        content: genVxlan(state)});
     if (included.stacking && stackingType === 'vsx') files.push({filename: 'vsx.yml', content: genVsx(state)});
     if (included.stacking && stackingType === 'vsf') files.push({filename: 'vsf.yml', content: genVsf(state)});
+
+    // Block saves that would render an incomplete CLI line on the switch
+    const problems = [];
+    if (included.syslog && syslogServer && !syslogSeverity) {
+      problems.push('Syslog: severity is required when a server is set');
+    }
+    if (included.sflow && sflowCollectorIp && !sflowAgentIp) {
+      problems.push('sFlow: agent IP is required when a collector is set');
+    }
+    if (problems.length) {
+      setTab('logging');
+      setSaveOk(false);
+      setSaveStatus(problems.join('; '));
+      return;
+    }
 
     setSaveStatus('Saving...'); setSaveOk(null);
     try {
@@ -723,7 +755,7 @@ function App() {
     }
   };
 
-  const tabs = ['device','management','banner','snmp','aaa','vrfs','vlans','routes','interfaces','routing','vxlan','stacking'];
+  const tabs = ['device','management','banner','snmp','logging','aaa','vrfs','vlans','routes','interfaces','routing','vxlan','stacking'];
   const tabLabels = {device:'Device',management:'Management',banner:'Banner',snmp:'SNMP',aaa:'AAA',vrfs:'VRFs',vlans:'VLANs',routes:'Static Routes',interfaces:'Interfaces',routing:'Routing',vxlan:'VXLAN',stacking:'Stacking'};
 
   // ── Tab render functions ─────────────────────────────────────────────────
@@ -815,6 +847,37 @@ function App() {
           ce('div', {style:{flex:1}}, ce(Field, {label:'Priv password'}, ce('input', {type:'password', value:u.priv_password||'', onChange:ev=>updateItem(setV3Users,i,'priv_password',ev.target.value)}))),
           ce('button', {className:'remove-btn', style:{marginBottom:12}, onClick:()=>removeItem(setV3Users,i)}, 'Remove')))),
       ce('button', {className:'add-btn', onClick:()=>addItem(setV3Users,{username:'',auth_password:'',priv_password:''})}, '+ Add v3 user')));
+
+  const SYSLOG_SEVERITIES = ['emerg','alert','crit','err','warning','notice','info','debug'];
+
+  const renderLogging = () => ce('div', null,
+    ce('div', {className:'sec'},
+      ce(IncludeToggle, {tabKey:'syslog', filename:'syslog.yml'}),
+      ce('div', {className:'sec-h'}, 'Syslog'),
+      ce('div', {className:'grid3'},
+        ce(Field, {label:'Syslog server', hint:'Leave empty to omit logging config'},
+          ce('input', {value:syslogServer, onChange:ev=>setSyslogServer(ev.target.value), placeholder:'10.1.1.1'})),
+        ce(Field, {label:'Severity', hint:'Required when a server is set'},
+          ce('select', {value:syslogSeverity, onChange:ev=>setSyslogSeverity(ev.target.value),
+            style: (syslogServer && !syslogSeverity) ? {borderColor:'#dc2626'} : null},
+            ce('option', {value:''}, '-- select --'),
+            SYSLOG_SEVERITIES.map(lv => ce('option', {key:lv, value:lv}, lv)))),
+        syslogServer && !syslogSeverity
+          ? ce('div', {style:{fontSize:11,color:'#dc2626',alignSelf:'center'}}, 'Severity is required when a syslog server is set')
+          : null)),
+
+    ce('div', {className:'sec'},
+      ce(IncludeToggle, {tabKey:'sflow', filename:'sflow.yml'}),
+      ce('div', {className:'sec-h'}, 'sFlow'),
+      ce('div', {className:'grid3'},
+        ce(Field, {label:'Collector IP', hint:'Leave empty to omit sFlow config'},
+          ce('input', {value:sflowCollectorIp, onChange:ev=>setSflowCollectorIp(ev.target.value), placeholder:'10.2.2.2'})),
+        ce(Field, {label:'Agent IP', hint:'Required when a collector is set'},
+          ce('input', {value:sflowAgentIp, onChange:ev=>setSflowAgentIp(ev.target.value), placeholder:'10.0.0.1',
+            style: (sflowCollectorIp && !sflowAgentIp) ? {borderColor:'#dc2626'} : null})),
+        sflowCollectorIp && !sflowAgentIp
+          ? ce('div', {style:{fontSize:11,color:'#dc2626',alignSelf:'center'}}, 'Agent IP is required when a collector is set')
+          : null)));
 
   const renderAaa = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'aaa', filename:'aaa.yml'}),
@@ -948,8 +1011,7 @@ function App() {
           ce(Field, {label:'LACP mode'}, ce('select', {value:l.lacp_mode||'active', onChange:ev=>updateItem(setLags,i,'lacp_mode',ev.target.value)},
             ce('option',{value:'active'},'active'), ce('option',{value:'passive'},'passive'), ce('option',{value:'off'},'off'))),
           ce(Field, {label:'Mode'}, ce('select', {value:l.routed||'false', onChange:ev=>updateItem(setLags,i,'routed',ev.target.value)},
-            ce('option',{value:'false'},'L2 switched'), ce('option',{value:'true'},'L3 routed'))),
-          ce(Field, {label:'MTU'}, ce('input', {value:l.mtu||'9198', onChange:ev=>updateItem(setLags,i,'mtu',ev.target.value)}))),
+            ce('option',{value:'false'},'L2 switched'), ce('option',{value:'true'},'L3 routed')))),
         l.routed === 'true'
           ? ce('div', {className:'grid3', style:{marginTop:8}},
               ce(PooledIPField, {label:'IP address', fieldKey:'lag_'+i, value:l.ip_address||'', onChange:v=>updateItem(setLags,i,'ip_address',v), prefix:l.ip_prefix||'', onPrefixChange:v=>updateItem(setLags,i,'ip_prefix',v), allowedPoolTypes:['point_to_point','unique'], hostname:SELECTED_HOST, ipPoolMap:(ipPoolMap[SELECTED_HOST]||{}), setIpPoolMap:(u)=>setIpPoolMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), freeTextMap:(freeTextMap[SELECTED_HOST]||{}), setFreeTextMap:(u)=>setFreeTextMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), subnetSearchMap:(subnetSearchMap[SELECTED_HOST]||{}), setSubnetSearchMap:(u)=>setSubnetSearchMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}}))}),
@@ -960,7 +1022,7 @@ function App() {
               ce(Field, {label:'Trunk allowed VLANs'}, ce('input', {value:l.trunk_allowed||'all', onChange:ev=>updateItem(setLags,i,'trunk_allowed',ev.target.value)})),
               ce(Field, {label:'Native VLAN'}, ce('input', {value:l.trunk_native||'1', onChange:ev=>updateItem(setLags,i,'trunk_native',ev.target.value)}))),
         ce('button', {className:'remove-btn', style:{marginTop:10}, onClick:()=>removeItem(setLags,i)}, 'Remove LAG'))),
-      ce('button', {className:'add-btn', onClick:()=>addItem(setLags,{name:'',admin:'up',mtu:'9198',lacp_mode:'active',routed:'false'})}, '+ Add LAG')),
+      ce('button', {className:'add-btn', onClick:()=>addItem(setLags,{name:'',admin:'up',lacp_mode:'active',routed:'false'})}, '+ Add LAG')),
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'Loopback interfaces'),
       loopbacks.map((l,i) => ce('div', {key:i, className:'item-card'},
@@ -1175,7 +1237,7 @@ function App() {
       ce('p', {style:{fontSize:13,color:'#888'}}, 'No stacking file will be generated.')));
 
   const content = {device:renderDevice,management:renderManagement,banner:renderBanner,snmp:renderSnmp,
-    aaa:renderAaa,vrfs:renderVrfs,vlans:renderVlans,routes:renderRoutes,interfaces:renderInterfaces,
+    logging:renderLogging,aaa:renderAaa,vrfs:renderVrfs,vlans:renderVlans,routes:renderRoutes,interfaces:renderInterfaces,
     routing:renderRouting,vxlan:renderVxlan,stacking:renderStacking};
 
   if (loading) return ce('div', {className:'loading'}, 'Loading...');
@@ -1183,7 +1245,7 @@ function App() {
   return ce('div', null,
     ce('div', {className:'tab-bar'},
       tabs.map(t => ce('button', {key:t, className:`tab${tab===t?' active':''}`, onClick:()=>setTab(t)},
-        {device:'Device',management:'Management',banner:'Banner',snmp:'SNMP',aaa:'AAA',vrfs:'VRFs',
+        {device:'Device',management:'Management',banner:'Banner',snmp:'SNMP',logging:'Logging & Monitoring',aaa:'AAA',vrfs:'VRFs',
          vlans:'VLANs',routes:'Static Routes',interfaces:'Interfaces',routing:'Routing',vxlan:'VXLAN',stacking:'Stacking'}[t]))),
     content[tab] && content[tab](),
     ce('div', {className:'save-bar'},

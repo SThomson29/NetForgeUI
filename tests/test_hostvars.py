@@ -213,6 +213,66 @@ snmp:
 
 
 # ---------------------------------------------------------------------------
+# Syslog / sFlow section
+# ---------------------------------------------------------------------------
+
+class TestSyslog:
+
+    def test_syslog_absent_defaults_empty(self, hvdir):
+        state = _parse_state(hvdir)
+        assert state['syslogServer'] == ''
+        assert state['syslogSeverity'] == ''
+
+    def test_syslog_skeleton_defaults_empty(self, hvdir):
+        write_files(hvdir, {'syslog.yml': """\
+syslog:
+  server: ""
+  severity: ""
+"""})
+        state = _parse_state(hvdir)
+        assert state['syslogServer'] == ''
+        assert state['syslogSeverity'] == ''
+
+    def test_syslog_populated(self, hvdir):
+        write_files(hvdir, {'syslog.yml': """\
+syslog:
+  server: "10.1.1.1"
+  severity: "info"
+"""})
+        state = _parse_state(hvdir)
+        assert state['syslogServer'] == '10.1.1.1'
+        assert state['syslogSeverity'] == 'info'
+
+
+class TestSflow:
+
+    def test_sflow_absent_defaults_empty(self, hvdir):
+        state = _parse_state(hvdir)
+        assert state['sflowCollectorIp'] == ''
+        assert state['sflowAgentIp'] == ''
+
+    def test_sflow_skeleton_defaults_empty(self, hvdir):
+        write_files(hvdir, {'sflow.yml': """\
+sflow:
+  collector_ip: ""
+  agent_ip: ""
+"""})
+        state = _parse_state(hvdir)
+        assert state['sflowCollectorIp'] == ''
+        assert state['sflowAgentIp'] == ''
+
+    def test_sflow_populated(self, hvdir):
+        write_files(hvdir, {'sflow.yml': """\
+sflow:
+  collector_ip: "10.2.2.2"
+  agent_ip: "10.0.0.1"
+"""})
+        state = _parse_state(hvdir)
+        assert state['sflowCollectorIp'] == '10.2.2.2'
+        assert state['sflowAgentIp'] == '10.0.0.1'
+
+
+# ---------------------------------------------------------------------------
 # AAA section
 # ---------------------------------------------------------------------------
 
@@ -360,6 +420,23 @@ vlan_interfaces: []
         state = _parse_state(hvdir)
         p = state['physical'][0]
         assert p['port_type'] == 'routed'
+
+    def test_lag_has_no_mtu(self, hvdir):
+        """MTU is not applicable to a LAG on AOS-CX; it must not reach form state."""
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces: []
+lag_interfaces:
+  - name: lag1
+    admin: up
+    mtu: 9198
+    lacp_mode: active
+    routed: false
+loopback_interfaces: []
+vlan_interfaces: []
+"""})
+        state = _parse_state(hvdir)
+        assert 'mtu' not in state['lags'][0]
 
     def test_lag_parsed(self, hvdir):
         write_files(hvdir, {'interfaces.yml': """\
@@ -586,6 +663,14 @@ vsf:
 # ---------------------------------------------------------------------------
 
 class TestMissingFiles:
+
+    def test_missing_syslog_does_not_raise(self, hvdir):
+        state = _parse_state(hvdir)
+        assert state['syslogServer'] == ''
+
+    def test_missing_sflow_does_not_raise(self, hvdir):
+        state = _parse_state(hvdir)
+        assert state['sflowCollectorIp'] == ''
 
     def test_missing_snmp_does_not_raise(self, hvdir):
         os.remove(os.path.join(hvdir, 'snmp.yml'))
