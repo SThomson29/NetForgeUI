@@ -336,7 +336,9 @@ function genRoutes(s) {
 function genInterfaces(s) {
   const ig = s.ifGroups.length === 0 ? '[]' : '\n' + s.ifGroups.map(g => `  - name: ${g.name}\n    speed: ${g.speed}`).join('\n');
   const phy = s.physical.length === 0 ? '[]' : '\n' + s.physical.map(i => {
-    let r = `  - name: "${i.name}"\n    description: "${i.description || ''}"\n    admin: ${i.admin || 'up'}\n    mtu: ${i.mtu || 9198}`;
+    let r = `  - name: "${i.name}"\n    description: "${i.description || ''}"\n    admin: ${i.admin || 'up'}`;
+    // MTU is not applicable to authenticated ports — the template omits it
+    if (i.port_type !== 'authenticated') { r += `\n    mtu: ${i.mtu || 9198}`; }
     if (i.lag_member) { r += `\n    lag_member: "${i.lag_member}"\n    port_type: access`; }
     else if (i.port_type === 'routed') { r += `\n    routed: true\n    vrf: "${i.vrf || ''}"\n    ip_address: "${i.ip_address || ''}"\n    ip_prefix: "${i.ip_prefix || ''}"\n    ospf_area: "${i.ospf_area || ''}"\n    ospf_process_id: ${i.ospf_process_id || 1}`; }
     else if (i.port_type === 'authenticated') { r += `\n    routed: false\n    port_type: authenticated\n    auth_default_vlan: "${i.auth_default_vlan || '1'}"`; }
@@ -960,7 +962,9 @@ function App() {
           ce(Field, {label:'LAG member'}, ce('input', {value:p.lag_member||'', onChange:ev=>updateItem(setPhysical,i,'lag_member',ev.target.value), placeholder:'lag1 or leave empty'})),
           ce(Field, {label:'Mode'}, ce('select', {value:p.port_type||'access', onChange:ev=>updateItem(setPhysical,i,'port_type',ev.target.value)},
             ce('option',{value:'access'},'L2 access'), ce('option',{value:'trunk'},'L2 trunk'), ce('option',{value:'routed'},'L3 routed'), ce('option',{value:'authenticated'},'Authenticated'))),
-          ce(Field, {label:'MTU'}, ce('input', {value:p.mtu||'9198', onChange:ev=>updateItem(setPhysical,i,'mtu',ev.target.value)}))),
+          p.port_type === 'authenticated'
+            ? null
+            : ce(Field, {label:'MTU'}, ce('input', {value:p.mtu||'9198', onChange:ev=>updateItem(setPhysical,i,'mtu',ev.target.value)}))),
         p.port_type === 'routed'
           ? ce('div', {className:'grid3', style:{marginTop:8}},
               ce(PooledIPField, {label:'IP address', fieldKey:'phy_'+i, value:p.ip_address||'', onChange:v=>updateItem(setPhysical,i,'ip_address',v), prefix:p.ip_prefix||'', onPrefixChange:v=>updateItem(setPhysical,i,'ip_prefix',v), allowedPoolTypes:['point_to_point','unique'], hostname:SELECTED_HOST, ipPoolMap:(ipPoolMap[SELECTED_HOST]||{}), setIpPoolMap:(u)=>setIpPoolMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), freeTextMap:(freeTextMap[SELECTED_HOST]||{}), setFreeTextMap:(u)=>setFreeTextMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), subnetSearchMap:(subnetSearchMap[SELECTED_HOST]||{}), setSubnetSearchMap:(u)=>setSubnetSearchMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}}))}),

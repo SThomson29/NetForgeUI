@@ -421,6 +421,26 @@ vlan_interfaces: []
         p = state['physical'][0]
         assert p['port_type'] == 'routed'
 
+    def test_authenticated_port_mtu_not_required(self, hvdir):
+        """Authenticated ports carry no mtu; parsing must still succeed."""
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces:
+  - name: "1/1/1"
+    description: "NAC port"
+    admin: up
+    routed: false
+    port_type: authenticated
+    auth_default_vlan: "999"
+lag_interfaces: []
+loopback_interfaces: []
+vlan_interfaces: []
+"""})
+        state = _parse_state(hvdir)
+        p = state['physical'][0]
+        assert p['port_type'] == 'authenticated'
+        assert p['auth_default_vlan'] == '999'
+
     def test_lag_has_no_mtu(self, hvdir):
         """MTU is not applicable to a LAG on AOS-CX; it must not reach form state."""
         write_files(hvdir, {'interfaces.yml': """\
