@@ -29,6 +29,7 @@ def _bootstrap_admin():
 def _sync_repo():
     """Clone the config repo on first boot, pull on subsequent restarts."""
     import subprocess
+    import shutil
     repo = app.config['CONFIGGEN_REPO']
     url  = app.config.get('CONFIGGEN_REPO_URL', '')
 
@@ -37,6 +38,21 @@ def _sync_repo():
         return
 
     if not os.path.isdir(os.path.join(repo, '.git')):
+        # A non-empty directory with no .git means a previous clone was
+        # interrupted, or image content seeded the volume. git clone refuses
+        # to write into it, so clear it out rather than wedging every restart.
+        if os.path.isdir(repo) and os.listdir(repo):
+            print(f'[repo] {repo} is non-empty but not a git repo — clearing it')
+            for entry in os.listdir(repo):
+                path = os.path.join(repo, entry)
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+
         print(f'[repo] Cloning {url} into {repo} ...')
         os.makedirs(repo, exist_ok=True)
         result = subprocess.run(
