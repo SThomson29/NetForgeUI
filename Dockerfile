@@ -9,8 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app/service
 
 # Install Python dependencies
+# The pip cache is scoped per target platform — a shared cache across
+# architectures can serve the wrong wheels during a multi-arch build.
+ARG TARGETPLATFORM
 COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,target=/root/.cache/pip,id=pip-${TARGETPLATFORM} \
     pip install -r requirements.txt
 
 # Copy service source

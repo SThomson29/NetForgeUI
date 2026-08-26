@@ -1,0 +1,33 @@
+services:
+  netforgeui:
+    # Pulls the published multi-arch image (linux/amd64 + linux/arm64).
+    # Docker picks the right architecture automatically — no local build.
+    image: ghcr.io/sthomson29/netforge-ui:${NETFORGEUI_TAG:-latest}
+    container_name: netforge-ui
+    ports:
+      - "5001:5000"
+    environment:
+      # --- Required ---
+      SECRET_KEY: "change-me"
+      CONFIGGEN_REPO_URL: "https://github.com/SThomson29/NetForge.git"
+
+      # --- Optional overrides ---
+      ADMIN_PASSWORD: "changeme123"
+      # PORT: "5000"
+      # FLASK_DEBUG: "false"
+      # ANSIBLE_IMAGE: "cytopia/ansible:latest"
+      # REPO_VOLUME_NAME: "netforgeui_repo"
+      # DATA_VOLUME_NAME: "netforgeui_data"
+
+    volumes:
+      - netforgeui_data:/app/service/data
+      - netforgeui_repo:/app/service/configgen
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    restart: unless-stopped
+
+volumes:
+  netforgeui_data:
+    name: netforgeui_data
+  netforgeui_repo:
+    name: netforgeui_repo
