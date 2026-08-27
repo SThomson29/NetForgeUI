@@ -698,3 +698,70 @@ class TestMissingFiles:
         state = _parse_state(empty)
         assert state['hostname'] == ''
         assert state['ospfInstances'] == []
+
+
+# ---------------------------------------------------------------------------
+# OSPF authentication key
+# ---------------------------------------------------------------------------
+
+class TestOspfAuthKey:
+
+    def test_absent_key_parses_as_empty(self, hvdir):
+        """Interfaces written before this field existed must still load."""
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces:
+  - name: "1/1/1"
+    routed: true
+    port_type: routed
+    ip_address: "10.0.0.0"
+    ip_prefix: "31"
+    ospf_area: "0.0.0.0"
+    ospf_process_id: 1
+lag_interfaces: []
+loopback_interfaces: []
+vlan_interfaces: []
+"""})
+        state = _parse_state(hvdir)
+        assert state['physical'][0]['ospf_auth_key'] == ''
+
+    def test_key_is_parsed_for_each_interface_type(self, hvdir):
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces:
+  - name: "1/1/1"
+    routed: true
+    port_type: routed
+    ospf_area: "0.0.0.0"
+    ospf_auth_key: "PhyKey"
+lag_interfaces:
+  - name: lag1
+    routed: true
+    ospf_area: "0.0.0.0"
+    ospf_auth_key: "LagKey"
+loopback_interfaces: []
+vlan_interfaces:
+  - name: vlan100
+    ospf_area: "0.0.0.0"
+    ospf_auth_key: "SviKey"
+"""})
+        state = _parse_state(hvdir)
+        assert state['physical'][0]['ospf_auth_key'] == 'PhyKey'
+        assert state['lags'][0]['ospf_auth_key'] == 'LagKey'
+        assert state['vlanIfs'][0]['ospf_auth_key'] == 'SviKey'
+
+    def test_loopbacks_have_no_auth_key(self, hvdir):
+        """Not applicable to loopbacks — must not appear in form state."""
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces: []
+lag_interfaces: []
+loopback_interfaces:
+  - name: loopback0
+    ip_address: "10.255.0.1"
+    ip_prefix: "32"
+    ospf_area: "0.0.0.0"
+vlan_interfaces: []
+"""})
+        state = _parse_state(hvdir)
+        assert 'ospf_auth_key' not in state['loopbacks'][0]

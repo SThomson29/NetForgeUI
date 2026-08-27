@@ -73,9 +73,14 @@ def _build_inventory(hosts, username, password):
         }
     }
     for h in hosts:
-        inventory['all']['hosts'][h['hostname']] = {
-            'ansible_host': h['mgmt_ip']
-        }
+        hostvars = {'ansible_host': h['mgmt_ip']}
+        # Optional per-host override of which generated file to deploy.
+        # Set as a host var rather than an extra-var: a deploy run covers
+        # several hosts and each needs its own file. Omitted means the
+        # playbook falls back to <config_dir>/<hostname>_FULL.ios.
+        if h.get('config_file'):
+            hostvars['deploy_config_file'] = h['config_file']
+        inventory['all']['hosts'][h['hostname']] = hostvars
     return inventory
 
 
@@ -167,7 +172,10 @@ def project_deploy(project_name):
 
     enriched = []
     for h in mapping['hosts']:
-        config_file = os.path.join(config_dir, f"{h['hostname']}.ios")
+        # NetForge names a full generation <hostname>_FULL.ios; tag-filtered
+        # runs produce <hostname>_PARTIAL_<tags>.ios. There is no bare
+        # <hostname>.ios, so match the full-run name.
+        config_file = os.path.join(config_dir, f"{h['hostname']}_FULL.ios")
         enriched.append({
             'hostname': h['hostname'],
             'mgmt_ip': h.get('mgmt_ip', ''),

@@ -50,7 +50,7 @@ def setup_deploy_project(app, auth_client, project_name='deploy-test',
             gcdir = project_generated_configs_dir(app, 'admin', project_name)
             os.makedirs(gcdir, exist_ok=True)
             for hostname, _ in hosts:
-                config_path = os.path.join(gcdir, f'{hostname}.ios')
+                config_path = os.path.join(gcdir, f'{hostname}_FULL.ios')
                 with open(config_path, 'w') as f:
                     f.write(f'! Generated config\nhostname {hostname}\n')
 
@@ -897,3 +897,46 @@ class TestCredentialSecurity:
                             f'Credential found in {fpath}'
                     except (UnicodeDecodeError, IsADirectoryError):
                         pass  # skip binary files
+
+
+# ---------------------------------------------------------------------------
+# Config file selection — full vs per-host override
+# ---------------------------------------------------------------------------
+
+class TestDeployConfigFileSelection:
+
+    def test_has_config_false_without_full_file(self, app, auth_client):
+        """A bare <hostname>.ios is not what NetForge writes — must not count."""
+        setup_deploy_project(app, auth_client, generate_configs=False)
+        with app.app_context():
+            from app.project import project_generated_configs_dir
+            gcdir = project_generated_configs_dir(app, 'admin', 'deploy-test')
+            os.makedirs(gcdir, exist_ok=True)
+            with open(os.path.join(gcdir, 'CO-CORE-SW-01.ios'), 'w') as f:
+                f.write('! stale name\n')
+            write_mapping(app, 'deploy-test', {
+                'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
+                'settings': {'rollback_timeout': 5}
+            })
+        res = auth_client.get('/projects/deploy-test/deploy')
+        assert b'CO-CORE-SW-01_FULL.ios' not in res.data
+
+    def test_inventory_omits_config_file_by_default(self):
+        """No override means the playbook default applies."""
+        from app.deploy_routes import _build_inventory
+        inv = _build_inventory(
+            [{'hostname': 'sw1', 'mgmt_ip': '10.0.0.1'}], 'u', 'p')
+        assert 'deploy_config_file' not in inv['all']['hosts']['sw1']
+
+    def test_inventory_carries_per_host_config_file(self):
+        """An explicit file is set per host, not globally."""
+        from app.deploy_routes import _build_inventory
+        inv = _build_inventory([
+            {'hostname': 'sw1', 'mgmt_ip': '10.0.0.1',
+             'config_file': '/out/sw1_PARTIAL_syslog.ios'},
+            {'hostname': 'sw2', 'mgmt_ip': '10.0.0.2'},
+        ], 'u', 'p')
+        assert inv['all']['hosts']['sw1']['deploy_config_file'] == \
+            '/out/sw1_PARTIAL_syslog.ios'
+        assert 'deploy_config_file' not in inv['all']['hosts']['sw2']
+        assert 'deploy_config_file' not in inv['all']['vars']

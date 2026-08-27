@@ -340,19 +340,21 @@ function genInterfaces(s) {
     // MTU is not applicable to authenticated ports — the template omits it
     if (i.port_type !== 'authenticated') { r += `\n    mtu: ${i.mtu || 9198}`; }
     if (i.lag_member) { r += `\n    lag_member: "${i.lag_member}"\n    port_type: access`; }
-    else if (i.port_type === 'routed') { r += `\n    routed: true\n    vrf: "${i.vrf || ''}"\n    ip_address: "${i.ip_address || ''}"\n    ip_prefix: "${i.ip_prefix || ''}"\n    ospf_area: "${i.ospf_area || ''}"\n    ospf_process_id: ${i.ospf_process_id || 1}`; }
+    else if (i.port_type === 'routed') { r += `\n    routed: true\n    vrf: "${i.vrf || ''}"\n    ip_address: "${i.ip_address || ''}"\n    ip_prefix: "${i.ip_prefix || ''}"\n    ospf_area: "${i.ospf_area || ''}"\n    ospf_process_id: ${i.ospf_process_id || 1}`;
+      if (i.ospf_auth_key) { r += `\n    ospf_auth_key: "${i.ospf_auth_key}"`; } }
     else if (i.port_type === 'authenticated') { r += `\n    routed: false\n    port_type: authenticated\n    auth_default_vlan: "${i.auth_default_vlan || '1'}"`; }
     else { r += `\n    routed: false\n    port_type: ${i.port_type || 'access'}\n    access_vlan: "${i.access_vlan || ''}"\n    trunk_allowed_vlans: "${i.trunk_allowed || ''}"\n    trunk_native_vlan: ${i.trunk_native || 1}`; }
     return r; }).join('\n');
   const lag = s.lags.length === 0 ? '[]' : '\n' + s.lags.map(l => {
     let r = `  - name: "${l.name}"\n    description: "${l.description || ''}"\n    admin: ${l.admin || 'up'}\n    lacp_mode: "${l.lacp_mode || 'active'}"`;
-    if (l.routed === 'true') { r += `\n    routed: true\n    vrf: "${l.vrf || ''}"\n    ip_address: "${l.ip_address || ''}"\n    ip_prefix: "${l.ip_prefix || ''}"\n    ospf_area: "${l.ospf_area || ''}"\n    ospf_process_id: ${l.ospf_process_id || 1}`; }
+    if (l.routed === 'true') { r += `\n    routed: true\n    vrf: "${l.vrf || ''}"\n    ip_address: "${l.ip_address || ''}"\n    ip_prefix: "${l.ip_prefix || ''}"\n    ospf_area: "${l.ospf_area || ''}"\n    ospf_process_id: ${l.ospf_process_id || 1}`;
+      if (l.ospf_auth_key) { r += `\n    ospf_auth_key: "${l.ospf_auth_key}"`; } }
     else { r += `\n    routed: false\n    trunk_allowed_vlans: "${l.trunk_allowed || 'all'}"\n    trunk_native_vlan: ${l.trunk_native || 1}`; }
     return r; }).join('\n');
   const lo = s.loopbacks.length === 0 ? '[]' : '\n' + s.loopbacks.map(l =>
     `  - name: ${l.name}\n    description: "${l.description || ''}"\n    ip_address: "${l.ip_address || ''}"\n    ip_prefix: ${l.ip_prefix || 32}\n    vrf: "${l.vrf || ''}"\n    ospf_area: "${l.ospf_area || ''}"\n    ospf_process_id: ${l.ospf_process_id || 1}`).join('\n');
   const vi = s.vlanIfs.length === 0 ? '[]' : '\n' + s.vlanIfs.map(v =>
-    `  - name: ${v.name}\n    description: "${v.description || ''}"\n    admin: ${v.admin || 'up'}\n    vrf: "${v.vrf || ''}"\n    ip_address: "${v.ip_address || ''}"\n    ip_prefix: ${v.ip_prefix || 24}\n    helper_addresses: ${(v.helper_addresses||[]).length ? '\n' + (v.helper_addresses||[]).map(h=>`  - ${h}`).join('\n') : '[]'}\n    ospf_area: "${v.ospf_area || ''}"\n    ospf_process_id: ${v.ospf_process_id || 1}\n    ospf_passive: ${yb(v.ospf_passive)}\n    active_gateway_ip: "${v.active_gw_ip || ''}"\n    active_gateway_mac: "${v.active_gw_mac || ''}"\n    mtu_jumbo: ${yb(v.mtu_jumbo)}`).join('\n');
+    `  - name: ${v.name}\n    description: "${v.description || ''}"\n    admin: ${v.admin || 'up'}\n    vrf: "${v.vrf || ''}"\n    ip_address: "${v.ip_address || ''}"\n    ip_prefix: ${v.ip_prefix || 24}\n    helper_addresses: ${(v.helper_addresses||[]).length ? '\n' + (v.helper_addresses||[]).map(h=>`  - ${h}`).join('\n') : '[]'}\n    ospf_area: "${v.ospf_area || ''}"\n    ospf_process_id: ${v.ospf_process_id || 1}${v.ospf_auth_key ? `\n    ospf_auth_key: "${v.ospf_auth_key}"` : ''}\n    ospf_passive: ${yb(v.ospf_passive)}\n    active_gateway_ip: "${v.active_gw_ip || ''}"\n    active_gateway_mac: "${v.active_gw_mac || ''}"\n    mtu_jumbo: ${yb(v.mtu_jumbo)}`).join('\n');
   return `---\ninterface_groups: ${ig}\nphysical_interfaces: ${phy}\nlag_interfaces: ${lag}\nloopback_interfaces: ${lo}\nvlan_interfaces: ${vi}\n`;}
 
 function genRouting(s) {
@@ -455,6 +457,7 @@ function App() {
   const [bulkVrf, setBulkVrf] = useState('');
   const [bulkOspfArea, setBulkOspfArea] = useState('');
   const [bulkOspfPid, setBulkOspfPid] = useState('1');
+  const [bulkOspfAuthKey, setBulkOspfAuthKey] = useState('');
   const [bulkDesc, setBulkDesc] = useState('');
   const [bulkPoolId, setBulkPoolId] = useState('');
 
@@ -486,7 +489,8 @@ function App() {
       newInterfaces.push({
         name: ifName, description: desc, admin: 'up', mtu: '9198',
         port_type: 'routed', ip_address: thisIp, ip_prefix: bulkPrefix,
-        vrf: bulkVrf, ospf_area: bulkOspfArea, ospf_process_id: bulkOspfPid
+        vrf: bulkVrf, ospf_area: bulkOspfArea, ospf_process_id: bulkOspfPid,
+        ospf_auth_key: bulkOspfAuthKey
       });
 
       // Instant-allocate if a pool is selected
@@ -965,7 +969,8 @@ function App() {
               ce(PooledIPField, {label:'IP address', fieldKey:'phy_'+i, value:p.ip_address||'', onChange:v=>updateItem(setPhysical,i,'ip_address',v), prefix:p.ip_prefix||'', onPrefixChange:v=>updateItem(setPhysical,i,'ip_prefix',v), allowedPoolTypes:['point_to_point','unique'], hostname:SELECTED_HOST, ipPoolMap:(ipPoolMap[SELECTED_HOST]||{}), setIpPoolMap:(u)=>setIpPoolMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), freeTextMap:(freeTextMap[SELECTED_HOST]||{}), setFreeTextMap:(u)=>setFreeTextMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), subnetSearchMap:(subnetSearchMap[SELECTED_HOST]||{}), setSubnetSearchMap:(u)=>setSubnetSearchMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}}))}),
               ce(Field, {label:'VRF'}, ce('input', {value:p.vrf||'', onChange:ev=>updateItem(setPhysical,i,'vrf',ev.target.value)})),
               ce(Field, {label:'OSPF area', hint:'Leave empty to omit OSPF'}, ce('input', {value:p.ospf_area||'', onChange:ev=>updateItem(setPhysical,i,'ospf_area',ev.target.value), placeholder:'0.0.0.0'})),
-              ce(Field, {label:'OSPF process ID'}, ce('input', {value:p.ospf_process_id||'1', onChange:ev=>updateItem(setPhysical,i,'ospf_process_id',ev.target.value)})))
+              ce(Field, {label:'OSPF process ID'}, ce('input', {value:p.ospf_process_id||'1', onChange:ev=>updateItem(setPhysical,i,'ospf_process_id',ev.target.value)})),
+              ce(Field, {label:'OSPF auth key', hint:'MD5 key — leave empty for no authentication'}, ce('input', {type:'password', value:p.ospf_auth_key||'', onChange:ev=>updateItem(setPhysical,i,'ospf_auth_key',ev.target.value)})))
           : p.port_type === 'authenticated'
           ? ce('div', {className:'grid2', style:{marginTop:8}},
               ce(Field, {label:'Default/unauth VLAN', hint:'VLAN list for loop-protect pulled from vlans.yml'}, ce('input', {value:p.auth_default_vlan||'', onChange:ev=>updateItem(setPhysical,i,'auth_default_vlan',ev.target.value), placeholder:'1'})))
@@ -993,6 +998,7 @@ function App() {
           ce(Field, {label:'VRF'}, ce('input', {value:bulkVrf, onChange:ev=>setBulkVrf(ev.target.value)})),
           ce(Field, {label:'OSPF area'}, ce('input', {value:bulkOspfArea, onChange:ev=>setBulkOspfArea(ev.target.value), placeholder:'0.0.0.0'})),
           ce(Field, {label:'OSPF process ID'}, ce('input', {value:bulkOspfPid, onChange:ev=>setBulkOspfPid(ev.target.value), placeholder:'1'})),
+          ce(Field, {label:'OSPF auth key', hint:'Applied to every link created'}, ce('input', {type:'password', value:bulkOspfAuthKey, onChange:ev=>setBulkOspfAuthKey(ev.target.value)})),
           ce(Field, {label:'Description pattern'}, ce('input', {value:bulkDesc, onChange:ev=>setBulkDesc(ev.target.value), placeholder:'P2P to spine %n'}))),
         ce('div', {style:{marginTop:10, display:'flex', gap:8, alignItems:'center'}},
           ce('button', {className:'save-btn', onClick:bulkGenerate, disabled:!bulkStart||!bulkIp||!parseInt(bulkCount)}, 'Generate ' + (parseInt(bulkCount)||0) + ' interfaces'),
@@ -1016,7 +1022,8 @@ function App() {
               ce(PooledIPField, {label:'IP address', fieldKey:'lag_'+i, value:l.ip_address||'', onChange:v=>updateItem(setLags,i,'ip_address',v), prefix:l.ip_prefix||'', onPrefixChange:v=>updateItem(setLags,i,'ip_prefix',v), allowedPoolTypes:['point_to_point','unique'], hostname:SELECTED_HOST, ipPoolMap:(ipPoolMap[SELECTED_HOST]||{}), setIpPoolMap:(u)=>setIpPoolMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), freeTextMap:(freeTextMap[SELECTED_HOST]||{}), setFreeTextMap:(u)=>setFreeTextMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), subnetSearchMap:(subnetSearchMap[SELECTED_HOST]||{}), setSubnetSearchMap:(u)=>setSubnetSearchMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}}))}),
               ce(Field, {label:'VRF'}, ce('input', {value:l.vrf||'', onChange:ev=>updateItem(setLags,i,'vrf',ev.target.value)})),
               ce(Field, {label:'OSPF area', hint:'Leave empty to omit OSPF'}, ce('input', {value:l.ospf_area||'', onChange:ev=>updateItem(setLags,i,'ospf_area',ev.target.value), placeholder:'0.0.0.0'})),
-              ce(Field, {label:'OSPF process ID'}, ce('input', {value:l.ospf_process_id||'1', onChange:ev=>updateItem(setLags,i,'ospf_process_id',ev.target.value)})))
+              ce(Field, {label:'OSPF process ID'}, ce('input', {value:l.ospf_process_id||'1', onChange:ev=>updateItem(setLags,i,'ospf_process_id',ev.target.value)})),
+              ce(Field, {label:'OSPF auth key', hint:'MD5 key — leave empty for no authentication'}, ce('input', {type:'password', value:l.ospf_auth_key||'', onChange:ev=>updateItem(setLags,i,'ospf_auth_key',ev.target.value)})))
           : ce('div', {className:'grid3', style:{marginTop:8}},
               ce(Field, {label:'Trunk allowed VLANs'}, ce('input', {value:l.trunk_allowed||'all', onChange:ev=>updateItem(setLags,i,'trunk_allowed',ev.target.value)})),
               ce(Field, {label:'Native VLAN'}, ce('input', {value:l.trunk_native||'1', onChange:ev=>updateItem(setLags,i,'trunk_native',ev.target.value)}))),
@@ -1085,6 +1092,7 @@ function App() {
             ),
             ce(Field, {label:'OSPF area'}, ce('input', {value:v.ospf_area||'', onChange:ev=>updateItem(setVlanIfs,i,'ospf_area',ev.target.value), placeholder:'0.0.0.0'})),
             ce(Field, {label:'OSPF process ID'}, ce('input', {value:v.ospf_process_id||'', onChange:ev=>updateItem(setVlanIfs,i,'ospf_process_id',ev.target.value), placeholder:'1'})),
+            ce(Field, {label:'OSPF auth key', hint:'MD5 key — leave empty for no authentication'}, ce('input', {type:'password', value:v.ospf_auth_key||'', onChange:ev=>updateItem(setVlanIfs,i,'ospf_auth_key',ev.target.value)})),
             // Active GW IP — same subnet picker
             ce(Field, {label:'Active GW IP'},
               sviSubnet && sviSubnet !== '__free'
