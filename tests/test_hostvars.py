@@ -137,16 +137,6 @@ dns:
         assert state['dnsServers'] == ['8.8.8.8']
         assert state['dnsDomain'] == 'example.com'
 
-    def test_central_disabled_false_by_default(self, hvdir):
-        # BaseLoader returns 'false' as string; bool('false') is True in Python
-        # The actual check in hostvars uses bool(_safe(..., default=False))
-        # With BaseLoader, 'false' string -> bool -> True, so this tests the real behaviour
-        state = _parse_state(hvdir)
-        # centralDisabled reflects that aruba.central.disabled is 'false' string from BaseLoader
-        # The important thing is it's not None and the key exists
-        assert 'centralDisabled' in state
-
-
 # ---------------------------------------------------------------------------
 # Management section
 # ---------------------------------------------------------------------------

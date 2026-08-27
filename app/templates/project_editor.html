@@ -292,7 +292,7 @@ function PooledIPField(props) {
 function genGeneral(s) {
   const ntp = s.ntpServers.filter(Boolean).map(x => `  - ${x}`).join('\n') || '';
   const dns = s.dnsServers.filter(Boolean).map(x => `    - ${x}`).join('\n') || '';
-  return `---\nhostname: ${s.hostname || '__HOSTNAME__'}\nplatform: ${s.platform}\nprofile: ${s.profile}\nconfig_output_dir: ./generated_configs\ntimezone: ${s.timezone}\nntp_servers:\n${ntp}\naruba:\n  central:\n    disabled: ${yb(s.centralDisabled)}\ndns:\n  domain_name: ${s.dnsDomain}\n  name_servers:\n${dns}\n`;}
+  return `---\nhostname: ${s.hostname || '__HOSTNAME__'}\nplatform: ${s.platform}\nprofile: ${s.profile}\nconfig_output_dir: ./generated_configs\ntimezone: ${s.timezone}\nntp_servers:\n${ntp}\ndns:\n  domain_name: ${s.dnsDomain}\n  name_servers:\n${dns}\n`;}
 
 function genManagement(s) {
   const users = s.localUsers.length === 0 ? '[]' : '\n' + s.localUsers.map(u =>
@@ -402,7 +402,6 @@ function App() {
   const [profile, setProfile] = useState('default');
   const [timezone, setTimezone] = useState('');
   const [ntpServers, setNtpServers] = useState([]);
-  const [centralDisabled, setCentralDisabled] = useState(false);
   const [dnsDomain, setDnsDomain] = useState('');
   const [dnsServers, setDnsServers] = useState([]);
   const [mgmtVrf, setMgmtVrf] = useState('');
@@ -530,7 +529,6 @@ function App() {
         setProfile(s.profile || 'default');
         setTimezone(s.timezone || '');
         setNtpServers(s.ntpServers || []);
-        setCentralDisabled(!!s.centralDisabled);
         setDnsDomain(s.dnsDomain || '');
         setDnsServers(s.dnsServers || []);
         setMgmtVrf(s.mgmtVrf || '');
@@ -694,7 +692,7 @@ function App() {
   useEffect(function() { __triggerAllocRefresh = function() { setAllocRefresh(function(c){return c+1}); }; }, []);
 
   const handleSave = async () => {
-    const state = {hostname, platform, profile, timezone, ntpServers, centralDisabled, dnsDomain, dnsServers,
+    const state = {hostname, platform, profile, timezone, ntpServers, dnsDomain, dnsServers,
       mgmtVrf, mgmtSrc, localUsers, bannerMotd, bannerExec, snmpVersion, snmpVrf, snmpDesc, snmpLocation,
       snmpContact, snmpCommunity, v3Users, syslogServer, syslogSeverity,
       sflowCollectorIp, sflowAgentIp, radiusServerKey, radiusGroup, dynAuth, radiusServers, vrfs, vlans,
@@ -793,10 +791,7 @@ function App() {
       dnsServers.map((s,i) => ce('div', {key:i, style:{display:'flex',gap:8,marginBottom:6}},
         ce('input', {value:s, list:'datalist-dns', onChange:ev=>updateStr(setDnsServers,i,ev.target.value)}),
         ce('button', {className:'remove-btn', onClick:()=>removeStr(setDnsServers,i)}, 'Remove'))),
-      ce('button', {className:'add-btn', onClick:()=>addStr(setDnsServers)}, '+ Add DNS server')),
-    ce('div', {className:'sec'},
-      ce('div', {className:'sec-h'}, 'Aruba Central'),
-      ce('label', {className:'chk'}, ce('input', {type:'checkbox', checked:centralDisabled, onChange:ev=>setCentralDisabled(ev.target.checked)}), 'Disable Aruba Central')));
+      ce('button', {className:'add-btn', onClick:()=>addStr(setDnsServers)}, '+ Add DNS server')));
 
   const renderManagement = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'management', filename:'management.yml'}),

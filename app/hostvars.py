@@ -140,7 +140,6 @@ def _parse_state(hvdir):
         'profile':         str(_safe(general, 'profile', default='default')),
         'timezone':        str(_safe(general, 'timezone')),
         'ntpServers':      [str(s) for s in (_safe(general, 'ntp_servers') or [])],
-        'centralDisabled': bool(_safe(general, 'aruba', 'central', 'disabled', default=False)),
         'dnsDomain':       str(_safe(general, 'dns', 'domain_name')),
         'dnsServers':      [str(s) for s in (_safe(general, 'dns', 'name_servers') or [])],
 
