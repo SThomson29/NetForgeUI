@@ -131,6 +131,68 @@ def remove_project_host(app, username, project_name, hostname):
             if fname.startswith(hostname + '_'):
                 os.remove(os.path.join(gcdir, fname))
 
+def reconcile_host_vars(app, username, project_name, dry_run=True):
+    """Add skeleton files that an existing project's hosts are missing.
+
+    Purely additive: a file is only ever created, never overwritten or
+    removed, so existing values and comments are untouched. Safe to re-run —
+    a second pass finds nothing to do.
+
+    This is how a project picks up features added to the skeleton after the
+    project was created (e.g. sflow.yml / syslog.yml). The skeleton is the
+    source of truth, so new features need no migration code of their own.
+
+    Returns {'hosts': {hostname: [filenames]}, 'total': int, 'applied': bool}
+    """
+    from .project import project_host_vars_dir as _hvdir
+
+    hosts    = read_project_hosts(app, username, project_name)
+    base     = _hvdir(app, username, project_name)
+    result   = {'hosts': {}, 'total': 0, 'applied': not dry_run}
+
+    for host in hosts:
+        hostname = host['hostname']
+        # read_project_hosts() returns the resolved inventory group directly;
+        # host['stacking'] is a display label ('VSX'), not a STACKING_TO_GROUP key.
+        group    = host.get('group') or STACKING_TO_GROUP.get(
+            str(host.get('stacking', '')).lower(), 'cx')
+        platform = PLATFORM_MAP.get(group, 'aoscx')
+        skeleton = os.path.join(app.config['SKELETON_DIR'], platform)
+        dest     = os.path.join(base, hostname)
+
+        if not os.path.isdir(skeleton) or not os.path.isdir(dest):
+            continue
+
+        missing = []
+        for fname in sorted(os.listdir(skeleton)):
+            if not fname.endswith('.yml'):
+                continue
+            # Respect stacking — a VSF host must not receive vsx.yml
+            if fname == 'vsx.yml' and group in SKIP_VSX:
+                continue
+            if fname == 'vsf.yml' and group in SKIP_VSF:
+                continue
+            if os.path.exists(os.path.join(dest, fname)):
+                continue
+            missing.append(fname)
+
+        if not missing:
+            continue
+
+        if not dry_run:
+            for fname in missing:
+                with open(os.path.join(skeleton, fname)) as f:
+                    content = f.read()
+                content = content.replace('__HOSTNAME__', hostname)
+                with open(os.path.join(dest, fname), 'w') as f:
+                    f.write(content)
+
+        result['hosts'][hostname] = missing
+        result['total'] += len(missing)
+
+    return result
+
+
 def _scaffold_host_vars_to(app, hostname, stacking, base_hvdir):
     """Scaffold host_vars for a hostname into an arbitrary host_vars directory."""
     group    = STACKING_TO_GROUP.get(stacking, 'cx')

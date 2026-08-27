@@ -66,4 +66,62 @@
   <div class="empty"><p>No switches added yet.</p></div>
   {% endif %}
 </div>
+<div class="card">
+  <div class="card-header">Sync to skeleton</div>
+  <div style="padding:0 4px 4px">
+    <p style="font-size:13px;color:#666;margin:0 0 10px">
+      Adds host_vars files that were introduced after this project was created.
+      Existing files are never modified or removed.
+    </p>
+    <button class="btn btn-sm" id="recon-preview-btn" onclick="reconcilePreview()">Check for missing files</button>
+    <button class="btn btn-sm btn-primary" id="recon-apply-btn" onclick="reconcileApply()" style="display:none">Add them</button>
+    <div id="recon-out" style="margin-top:10px;font-size:13px"></div>
+  </div>
+</div>
+
+<script>
+const RECON_URL = "{{ url_for('projects.reconcile_project', project_name=project_name) }}";
+
+async function reconcileCall(apply) {
+  const res  = await fetch(RECON_URL, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({apply: apply})
+  });
+  return res.json();
+}
+
+function renderRecon(data, applied) {
+  const out = document.getElementById('recon-out');
+  const applyBtn = document.getElementById('recon-apply-btn');
+  if (!data.ok) {
+    out.innerHTML = '<span style="color:#dc2626">Error: ' + (data.error || 'unknown') + '</span>';
+    applyBtn.style.display = 'none';
+    return;
+  }
+  if (data.total === 0) {
+    out.innerHTML = '<span style="color:#166534">Everything is up to date.</span>';
+    applyBtn.style.display = 'none';
+    return;
+  }
+  let html = '<div style="margin-bottom:6px">'
+    + (applied ? 'Added ' : 'Would add ') + data.total + ' file(s):</div><ul style="margin:0 0 0 18px">';
+  for (const host in data.hosts) {
+    html += '<li><strong>' + host + '</strong>: ' + data.hosts[host].join(', ') + '</li>';
+  }
+  html += '</ul>';
+  out.innerHTML = html;
+  applyBtn.style.display = applied ? 'none' : 'inline-flex';
+}
+
+async function reconcilePreview() {
+  document.getElementById('recon-out').textContent = 'Checking...';
+  renderRecon(await reconcileCall(false), false);
+}
+
+async function reconcileApply() {
+  document.getElementById('recon-out').textContent = 'Adding...';
+  renderRecon(await reconcileCall(true), true);
+}
+</script>
 {% endblock %}
