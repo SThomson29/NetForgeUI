@@ -21,6 +21,10 @@ from .project import (
     get_all_allocations,
     project_generated_configs_dir,
 )
+from .transfer import (
+    export_project, import_project, read_manifest, TransferError,
+)
+
 from .utils import (
     read_project_hosts, add_project_host, remove_project_host,
     list_project_generated_configs,
@@ -47,6 +51,55 @@ def projects_page():
     app = current_app._get_current_object()
     projects = list_projects(app, current_user.username)
     return render_template('projects.html', projects=projects)
+
+
+@projects_bp.route('/projects/<project_name>/export')
+@login_required
+def export_project_route(project_name):
+    """Download a project as a portable zip archive."""
+    app = current_app._get_current_object()
+    try:
+        data, manifest = export_project(app, current_user.username, project_name)
+    except TransferError as e:
+        flash(str(e), 'error')
+        return redirect(url_for('projects.projects_page'))
+
+    return send_file(
+        io.BytesIO(data),
+        as_attachment=True,
+        download_name='%s.netforge.zip' % project_name,
+        mimetype='application/zip',
+    )
+
+
+@projects_bp.route('/projects/import/preview', methods=['POST'])
+@login_required
+def import_preview():
+    """Read an uploaded archive's manifest without writing anything."""
+    upload = request.files.get('archive')
+    if not upload:
+        return jsonify(ok=False, error='No file uploaded'), 400
+    try:
+        manifest = read_manifest(upload.stream)
+    except TransferError as e:
+        return jsonify(ok=False, error=str(e)), 400
+    return jsonify(ok=True, manifest=manifest)
+
+
+@projects_bp.route('/projects/import', methods=['POST'])
+@login_required
+def import_project_route():
+    """Unpack an uploaded archive into a new project."""
+    app = current_app._get_current_object()
+    upload = request.files.get('archive')
+    target = (request.form.get('project_name') or '').strip()
+    if not upload:
+        return jsonify(ok=False, error='No file uploaded'), 400
+    try:
+        manifest = import_project(app, current_user.username, target, upload.stream)
+    except TransferError as e:
+        return jsonify(ok=False, error=str(e)), 400
+    return jsonify(ok=True, project_name=target, manifest=manifest)
 
 
 @projects_bp.route('/projects/new', methods=['POST'])
