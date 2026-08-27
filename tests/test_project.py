@@ -643,3 +643,81 @@ vlan_interfaces: []
         sync_allocations(app, USERNAME, 'proj', 'Core-01')
         allocs = get_all_allocations(app, USERNAME, 'proj')
         assert '10.255.0.5' not in allocs['unique'].get('pool_loopbacks', {})
+
+# ---------------------------------------------------------------------------
+# Skeleton reconciliation — adding new host_vars files to existing projects
+# ---------------------------------------------------------------------------
+
+class TestReconcileHostVars:
+
+    @pytest.fixture
+    def legacy(self, tmp_path, monkeypatch):
+        """A project whose hosts predate sflow.yml / syslog.yml."""
+        import app.utils as U
+        import app.project as P
+
+        skel = tmp_path / 'skeleton' / 'aoscx'
+        skel.mkdir(parents=True)
+        for f in ('general.yml', 'sflow.yml', 'syslog.yml', 'vsx.yml', 'vsf.yml'):
+            (skel / f).write_text('---\n# %s\nkey: ""\n' % f)
+
+        hvbase = tmp_path / 'host_vars'
+        for h in ('core-01', 'access-01', 'plain-01'):
+            (hvbase / h).mkdir(parents=True)
+            (hvbase / h / 'general.yml').write_text('---\nhostname: %s\nuser_value: KEEP\n' % h)
+
+        class FakeApp:
+            config = {'SKELETON_DIR': str(tmp_path / 'skeleton')}
+
+        monkeypatch.setattr(U, 'read_project_hosts', lambda a, u, p: [
+            {'hostname': 'core-01',   'group': 'cx_vsx', 'stacking': 'VSX'},
+            {'hostname': 'access-01', 'group': 'cx_vsf', 'stacking': 'VSF'},
+            {'hostname': 'plain-01',  'group': 'cx',     'stacking': 'None'},
+        ])
+        monkeypatch.setattr(P, 'project_host_vars_dir', lambda a, u, p: str(hvbase))
+        return FakeApp(), hvbase
+
+    def test_dry_run_reports_but_writes_nothing(self, legacy):
+        from app.utils import reconcile_host_vars
+        app, hvbase = legacy
+        r = reconcile_host_vars(app, 'sam', 'p', dry_run=True)
+        assert r['applied'] is False
+        assert 'sflow.yml' in r['hosts']['core-01']
+        assert 'syslog.yml' in r['hosts']['core-01']
+        assert sorted(os.listdir(hvbase / 'core-01')) == ['general.yml']
+
+    def test_apply_creates_missing_files(self, legacy):
+        from app.utils import reconcile_host_vars
+        app, hvbase = legacy
+        reconcile_host_vars(app, 'sam', 'p', dry_run=False)
+        for h in ('core-01', 'access-01', 'plain-01'):
+            files = os.listdir(hvbase / h)
+            assert 'sflow.yml' in files
+            assert 'syslog.yml' in files
+
+    def test_existing_files_are_never_modified(self, legacy):
+        from app.utils import reconcile_host_vars
+        app, hvbase = legacy
+        before = (hvbase / 'core-01' / 'general.yml').read_text()
+        reconcile_host_vars(app, 'sam', 'p', dry_run=False)
+        assert (hvbase / 'core-01' / 'general.yml').read_text() == before
+        assert 'KEEP' in (hvbase / 'core-01' / 'general.yml').read_text()
+
+    def test_respects_stacking_group(self, legacy):
+        from app.utils import reconcile_host_vars
+        app, hvbase = legacy
+        reconcile_host_vars(app, 'sam', 'p', dry_run=False)
+        assert 'vsx.yml' in os.listdir(hvbase / 'core-01')
+        assert 'vsf.yml' not in os.listdir(hvbase / 'core-01')
+        assert 'vsf.yml' in os.listdir(hvbase / 'access-01')
+        assert 'vsx.yml' not in os.listdir(hvbase / 'access-01')
+        assert 'vsx.yml' not in os.listdir(hvbase / 'plain-01')
+        assert 'vsf.yml' not in os.listdir(hvbase / 'plain-01')
+
+    def test_is_idempotent(self, legacy):
+        from app.utils import reconcile_host_vars
+        app, _ = legacy
+        reconcile_host_vars(app, 'sam', 'p', dry_run=False)
+        second = reconcile_host_vars(app, 'sam', 'p', dry_run=False)
+        assert second['total'] == 0
+        assert second['hosts'] == {}

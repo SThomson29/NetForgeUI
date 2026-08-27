@@ -301,7 +301,6 @@ class TestHostvarsAPI:
         state = json.loads(res.data)
         assert state['timezone'] == 'Europe/Paris'
         assert state['ntpServers'] == ['10.0.0.1', '10.0.0.2']
-        assert state['centralDisabled'] is True
         assert state['dnsDomain'] == 'mynet.local'
 
 

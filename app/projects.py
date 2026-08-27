@@ -25,6 +25,7 @@ from .utils import (
     read_project_hosts, add_project_host, remove_project_host,
     list_project_generated_configs,
     project_hosts_ini_path, project_host_vars_dir,
+    reconcile_host_vars,
     HOSTVARS_FILES,
 )
 
@@ -175,6 +176,26 @@ def get_state(project_name, hostname):
     if not os.path.isdir(hvdir):
         return jsonify({'error': 'Host not found'}), 404
     return jsonify(_parse_state(hvdir))
+
+
+@projects_bp.route('/projects/<project_name>/api/reconcile', methods=['POST'])
+@login_required
+def reconcile_project(project_name):
+    """Add skeleton files existing hosts are missing.
+
+    POST {"apply": false}  -> preview only (default)
+    POST {"apply": true}   -> write the files
+    """
+    app  = current_app._get_current_object()
+    body = request.json or {}
+    try:
+        result = reconcile_host_vars(
+            app, current_user.username, project_name,
+            dry_run=not body.get('apply', False),
+        )
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+    return jsonify({'ok': True, **result})
 
 
 @projects_bp.route('/projects/<project_name>/api/hostvars/<hostname>/save_all',

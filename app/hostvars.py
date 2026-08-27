@@ -37,6 +37,8 @@ def _parse_state(hvdir):
     vxlan      = _load_yaml(hvdir, 'vxlan.yml')
     vsx        = _load_yaml(hvdir, 'vsx.yml')
     vsf        = _load_yaml(hvdir, 'vsf.yml')
+    sflow      = _load_yaml(hvdir, 'sflow.yml')
+    syslog     = _load_yaml(hvdir, 'syslog.yml')
 
     stacking_type = 'none'
     if vsx:
@@ -85,7 +87,6 @@ def _parse_state(hvdir):
             'name':            str(_safe(lag, 'name')),
             'description':     str(_safe(lag, 'description')),
             'admin':           str(_safe(lag, 'admin', default='up')),
-            'mtu':             str(_safe(lag, 'mtu', default='9198')),
             'lacp_mode':       str(_safe(lag, 'lacp_mode', default='active')),
             'routed':          lag_routed,
             'port_type':       lag_port_type,
@@ -128,6 +129,8 @@ def _parse_state(hvdir):
     snmp_data  = _safe(snmp,  'snmp')  or {}
     vsx_data   = _safe(vsx,   'vsx')   or {}
     vsf_data   = _safe(vsf,   'vsf')   or {}
+    sflow_data = _safe(sflow, 'sflow')  or {}
+    syslog_data = _safe(syslog, 'syslog') or {}
     bgp_data   = _safe(routing, 'bgp') or {}
     vxlan_data = _safe(vxlan, 'vxlan') or {}
 
@@ -137,7 +140,6 @@ def _parse_state(hvdir):
         'profile':         str(_safe(general, 'profile', default='default')),
         'timezone':        str(_safe(general, 'timezone')),
         'ntpServers':      [str(s) for s in (_safe(general, 'ntp_servers') or [])],
-        'centralDisabled': bool(_safe(general, 'aruba', 'central', 'disabled', default=False)),
         'dnsDomain':       str(_safe(general, 'dns', 'domain_name')),
         'dnsServers':      [str(s) for s in (_safe(general, 'dns', 'name_servers') or [])],
 
@@ -161,6 +163,12 @@ def _parse_state(hvdir):
             {'username': str(_safe(u, 'username')), 'auth_password': str(_safe(u, 'auth_password')), 'priv_password': str(_safe(u, 'priv_password'))}
             for u in (_safe(snmp_data, 'v3_users') or [])
         ],
+
+        'syslogServer':    str(_safe(syslog_data, 'server')),
+        'syslogSeverity':  str(_safe(syslog_data, 'severity')),
+
+        'sflowCollectorIp': str(_safe(sflow_data, 'collector_ip')),
+        'sflowAgentIp':     str(_safe(sflow_data, 'agent_ip')),
 
         'radiusServerKey': str(_safe(aaa, 'radius_server_key')),
         'radiusGroup':     str(_safe(aaa, 'radius_group_name')),

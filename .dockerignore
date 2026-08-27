@@ -1,0 +1,36 @@
+# Runtime directories — these are named volumes at runtime and must NOT be
+# baked into the image. If they exist in the build context they get copied in,
+# and Docker then seeds the fresh named volume from the image content, which
+# breaks the bootstrap git clone ("destination path already exists").
+configgen/
+data/
+
+# VCS / local tooling
+.git/
+.github/
+.gitignore
+
+# Python artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Tests and dev-only files are not needed in the runtime image
+tests/
+requirements-dev.txt
+pytest.ini
+
+# Local editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+
+# Compose files and local secrets
+docker-compose*.yml
+deploy_mapping*.yml
+.env
