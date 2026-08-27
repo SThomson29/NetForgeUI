@@ -55,6 +55,7 @@ SECRET_FIELDS = {
     'key',
     'radius_server_key',
     'auth_key',
+    'ospf_auth_key',
     'secret',
 }
 

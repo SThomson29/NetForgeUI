@@ -138,6 +138,21 @@ class TestExport:
         names = zipfile.ZipFile(io.BytesIO(data)).namelist()
         assert not any('deploy_mapping' in n for n in names)
 
+    def test_ospf_auth_key_is_stripped(self, app):
+        """The flat name must be caught — 'auth_key' alone would not match."""
+        with app.app_context():
+            create_project(app, 'admin', 'ospf-proj')
+            hv = os.path.join(project_host_vars_dir(app, 'admin', 'ospf-proj'),
+                              'core-01')
+            os.makedirs(hv, exist_ok=True)
+            with open(os.path.join(hv, 'interfaces.yml'), 'w') as f:
+                f.write('physical_interfaces:\n  - name: "1/1/1"\n'
+                        '    ospf_area: "0.0.0.0"\n'
+                        '    ospf_auth_key: "OSPFSECRET"\n')
+            data, manifest = export_project(app, 'admin', 'ospf-proj')
+        assert b'OSPFSECRET' not in data
+        assert manifest['fields_redacted'] == 1
+
     def test_missing_project_raises(self, app):
         with app.app_context():
             with pytest.raises(TransferError):
@@ -242,6 +257,54 @@ class TestRoundTrip:
 
 
 class TestSecretFieldDrift:
+
+    # Editor password inputs -> the YAML key the writer emits for them.
+    # Adding a password field to the editor without adding it here fails the
+    # test below, which is the point: the new field has to be classified
+    # before it can ship.
+    EDITOR_SECRET_BINDINGS = {
+        'password':          'password',            # local user
+        'snmpCommunity':     'community',
+        'auth_password':     'auth_password',       # snmpv3
+        'priv_password':     'priv_password',       # snmpv3
+        'radiusServerKey':   'radius_server_key',
+        'key':               'key',                 # per-radius-server
+        'ospf_auth_key':     'ospf_auth_key',
+        'bulkOspfAuthKey':   'ospf_auth_key',   # bulk routed-link creation
+    }
+
+    def test_editor_password_fields_are_all_stripped(self):
+        """Every password input in the editor must map to a stripped field.
+
+        The skeleton scan below only runs when NetForge is checked out; this
+        one always runs, so it is the guard that actually protects CI. A new
+        password-type field whose YAML key is missing from SECRET_FIELDS
+        would otherwise be exported in plain text.
+        """
+        import re
+        editor = os.path.join(os.path.dirname(__file__), '..', 'app',
+                              'templates', 'project_editor.html')
+        with open(editor) as f:
+            src = f.read()
+
+        bound = set()
+        for m in re.finditer(r"type:'password',\s*value:([A-Za-z0-9_.]+)", src):
+            bound.add(m.group(1).split('.')[-1])
+
+        assert bound, 'No password fields found — has the editor changed shape?'
+
+        unmapped = bound - set(self.EDITOR_SECRET_BINDINGS)
+        assert not unmapped, (
+            'Editor password fields with no known YAML key: %s. Add them to '
+            'EDITOR_SECRET_BINDINGS and to SECRET_FIELDS.' % sorted(unmapped))
+
+        leaking = {
+            self.EDITOR_SECRET_BINDINGS[b] for b in bound
+            if self.EDITOR_SECRET_BINDINGS[b] not in SECRET_FIELDS
+        }
+        assert not leaking, (
+            'Editor password fields not covered by SECRET_FIELDS: %s'
+            % sorted(leaking))
 
     def test_skeleton_has_no_unlisted_secret_fields(self):
         """Guard SECRET_FIELDS against new secret-bearing skeleton fields.

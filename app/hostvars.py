@@ -68,6 +68,7 @@ def _parse_state(hvdir):
             'vrf':               str(_safe(iface, 'vrf')),
             'ospf_area':         str(_safe(iface, 'ospf_area')),
             'ospf_process_id':   str(_safe(iface, 'ospf_process_id', default='1')),
+            'ospf_auth_key':     str(_safe(iface, 'ospf_auth_key')),
             'access_vlan':       str(_safe(iface, 'access_vlan')),
             'trunk_allowed':     str(_safe(iface, 'trunk_allowed_vlans')),
             'trunk_native':      str(_safe(iface, 'trunk_native_vlan', default='1')),
@@ -95,6 +96,7 @@ def _parse_state(hvdir):
             'vrf':             str(_safe(lag, 'vrf')),
             'ospf_area':       str(_safe(lag, 'ospf_area')),
             'ospf_process_id': str(_safe(lag, 'ospf_process_id', default='1')),
+            'ospf_auth_key':   str(_safe(lag, 'ospf_auth_key')),
             'trunk_allowed':   str(_safe(lag, 'trunk_allowed_vlans', default='all')),
             'trunk_native':    str(_safe(lag, 'trunk_native_vlan', default='1')),
         }
@@ -119,6 +121,7 @@ def _parse_state(hvdir):
             'ip_prefix':         str(_safe(vi, 'ip_prefix', default='24')),
             'ospf_area':         str(_safe(vi, 'ospf_area')),
             'ospf_process_id':   str(_safe(vi, 'ospf_process_id', default='1')),
+            'ospf_auth_key':     str(_safe(vi, 'ospf_auth_key')),
             'ospf_passive':      bool(_safe(vi, 'ospf_passive', default=False)),
             'active_gw_ip':      str(_safe(vi, 'active_gateway_ip')),
             'active_gw_mac':     str(_safe(vi, 'active_gateway_mac')),
