@@ -693,7 +693,7 @@ class TestRunPlaybook:
             from app.deploy_routes import _run_playbook
 
             # Create a dummy playbook file
-            repo_dir = app.config.get('CONFIGGEN_DIR', 'configgen')
+            repo_dir = app.config['CONFIGGEN_REPO']
             os.makedirs(os.path.join(repo_dir, 'playbooks'), exist_ok=True)
             pb_path = os.path.join(repo_dir, 'playbooks', 'deploy_dryrun.yml')
             with open(pb_path, 'w') as f:
@@ -737,7 +737,7 @@ class TestRunPlaybook:
         with app.app_context():
             from app.deploy_routes import _run_playbook
 
-            repo_dir = app.config.get('CONFIGGEN_DIR', 'configgen')
+            repo_dir = app.config['CONFIGGEN_REPO']
             os.makedirs(os.path.join(repo_dir, 'playbooks'), exist_ok=True)
             with open(os.path.join(repo_dir, 'playbooks', 'deploy_dryrun.yml'), 'w') as f:
                 f.write('---\n')
@@ -765,7 +765,7 @@ class TestRunPlaybook:
         with app.app_context():
             from app.deploy_routes import _run_playbook
 
-            repo_dir = app.config.get('CONFIGGEN_DIR', 'configgen')
+            repo_dir = app.config['CONFIGGEN_REPO']
             os.makedirs(os.path.join(repo_dir, 'playbooks'), exist_ok=True)
             with open(os.path.join(repo_dir, 'playbooks', 'deploy_push.yml'), 'w') as f:
                 f.write('---\n')
@@ -783,7 +783,7 @@ class TestRunPlaybook:
         with app.app_context():
             from app.deploy_routes import _run_playbook
 
-            repo_dir = app.config.get('CONFIGGEN_DIR', 'configgen')
+            repo_dir = app.config['CONFIGGEN_REPO']
             os.makedirs(os.path.join(repo_dir, 'playbooks'), exist_ok=True)
             with open(os.path.join(repo_dir, 'playbooks', 'deploy_push.yml'), 'w') as f:
                 f.write('---\n')
@@ -825,7 +825,7 @@ class TestRunPlaybook:
         with app.app_context():
             from app.deploy_routes import _run_playbook
 
-            repo_dir = app.config.get('CONFIGGEN_DIR', 'configgen')
+            repo_dir = app.config['CONFIGGEN_REPO']
             os.makedirs(os.path.join(repo_dir, 'playbooks'), exist_ok=True)
             with open(os.path.join(repo_dir, 'playbooks', 'deploy_push.yml'), 'w') as f:
                 f.write('---\n')
@@ -940,3 +940,54 @@ class TestDeployConfigFileSelection:
             '/out/sw1_PARTIAL_syslog.ios'
         assert 'deploy_config_file' not in inv['all']['hosts']['sw2']
         assert 'deploy_config_file' not in inv['all']['vars']
+
+
+# ---------------------------------------------------------------------------
+# Playbook location
+# ---------------------------------------------------------------------------
+
+class TestPlaybookPath:
+
+    def test_uses_absolute_repo_path_from_config(self, app, tmp_path, monkeypatch):
+        """The playbook must be located via CONFIGGEN_REPO, not a relative guess.
+
+        A relative 'configgen' only resolves when the process happens to run
+        from /app/service, which it does not under gunicorn — the failure is a
+        confusing "playbook could not be found".
+        """
+        import app.deploy_routes as dr
+
+        repo = tmp_path / 'cfgrepo'
+        (repo / 'playbooks').mkdir(parents=True)
+        (repo / 'playbooks' / 'deploy_dryrun.yml').write_text('---\n')
+        app.config['CONFIGGEN_REPO'] = str(repo)
+
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen['cmd'] = cmd
+            seen['cwd'] = kwargs.get('cwd')
+            class R:
+                returncode = 0
+                stdout = '{}'
+                stderr = ''
+            return R()
+
+        monkeypatch.setattr(dr.subprocess, 'run', fake_run)
+
+        with app.test_request_context():
+            dr._run_playbook('deploy_dryrun.yml',
+                             {'all': {'hosts': {}}}, {'config_dir': '/x'})
+
+        # the playbook argument must be the absolute path under the repo
+        assert str(repo / 'playbooks' / 'deploy_dryrun.yml') in seen['cmd']
+        assert seen['cwd'] == str(repo)
+
+    def test_missing_playbook_reports_the_resolved_path(self, app, tmp_path):
+        import app.deploy_routes as dr
+        app.config['CONFIGGEN_REPO'] = str(tmp_path / 'nope')
+        with app.test_request_context():
+            ok, msg, _ = dr._run_playbook('deploy_dryrun.yml',
+                                          {'all': {'hosts': {}}}, {})
+        assert ok is False
+        assert str(tmp_path / 'nope') in msg
