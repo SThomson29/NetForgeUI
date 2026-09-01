@@ -104,8 +104,11 @@ def _run_playbook(playbook_name, inventory_dict, extra_vars, limit_hosts=None):
         with open(vars_path, 'w') as f:
             yaml.dump(extra_vars, f, default_flow_style=False)
 
-        # Locate playbook
-        repo_dir = current_app.config.get('CONFIGGEN_DIR', 'configgen')
+        # Locate playbook. The config key is CONFIGGEN_REPO — CONFIGGEN_DIR
+        # has never existed, so this silently fell back to the relative string
+        # 'configgen', which only resolves if the process happens to be running
+        # from /app/service. Under gunicorn it does not.
+        repo_dir = current_app.config['CONFIGGEN_REPO']
         playbook_path = os.path.join(repo_dir, 'playbooks', playbook_name)
 
         if not os.path.exists(playbook_path):
