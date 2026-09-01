@@ -30,7 +30,7 @@ import tempfile
 import threading
 import subprocess
 
-from flask import request, jsonify, current_app, abort
+from flask import render_template, request, jsonify, current_app, abort
 from flask_login import login_required, current_user
 
 from .project import project_dir as _project_dir_base
@@ -201,6 +201,18 @@ def _run_firmware_playbook(job_id, playbook_path, repo_dir, ansible_bin,
 
 
 # ── Routes ─────────────────────────────────────────────────
+
+@login_required
+def project_firmware(project_name):
+    """Render the firmware tab."""
+    app = current_app._get_current_object()
+    mapping = _load_mapping(app, current_user.username, project_name)
+    return render_template(
+        'project_firmware.html',
+        project_name=project_name,
+        hosts=mapping.get('hosts', []),
+    )
+
 
 @login_required
 def firmware_images(project_name):

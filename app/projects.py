@@ -580,9 +580,16 @@ projects_bp.add_url_rule(
 )
 
 from .firmware_routes import (
+    project_firmware,
     firmware_images,
     firmware_run,
     firmware_status,
+)
+
+projects_bp.add_url_rule(
+    '/projects/<project_name>/firmware',
+    'project_firmware',
+    project_firmware
 )
 
 projects_bp.add_url_rule(

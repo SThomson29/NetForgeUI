@@ -1,0 +1,371 @@
+{% extends "base_project.html" %}
+{% block title %}Firmware — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}Firmware{% endblock %}
+
+{% block project_extra_head %}
+<style>
+.fw-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+
+.fw-host-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 8px;
+}
+.fw-host-row.no-ip { opacity: .55; }
+.fw-host-name { font-weight: 600; }
+.fw-host-ip {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px; color: var(--text-secondary);
+}
+
+.fw-warning {
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.fw-log {
+  background: #1a1a1a;
+  color: #d4d4d4;
+  border-radius: var(--radius-md);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 420px;
+  overflow: auto;
+}
+.fw-log pre { margin: 0; padding: 16px; white-space: pre-wrap; word-break: break-word; }
+
+.fw-result {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.fw-result.ok   { border-left: 3px solid #16a34a; }
+.fw-result.bad  { border-left: 3px solid #dc2626; }
+
+.cred-modal-fields { display: grid; gap: 12px; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="card">
+  <div class="card-header">Firmware image</div>
+
+  <div id="fw-no-images" class="text-sm text-secondary" style="display:none">
+    No <code>.swi</code> files found in <code id="fw-dir"></code>.
+    Drop images into that directory on the host and reload.
+  </div>
+
+  <div class="fw-grid" id="fw-options" style="display:none">
+    <div class="form-group" style="margin-bottom:0">
+      <label class="form-label" for="fw-image">Image</label>
+      <select id="fw-image" class="form-input"></select>
+    </div>
+
+    <div class="form-group" style="margin-bottom:0">
+      <label class="form-label" for="fw-partition">Target partition</label>
+      <select id="fw-partition" class="form-input">
+        <option value="secondary" selected>secondary</option>
+        <option value="primary">primary</option>
+      </select>
+      <div class="hint">Upload to the partition the switch is not currently running.</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">Options</div>
+
+  <label class="chk" style="display:flex;align-items:center;gap:8px">
+    <input type="checkbox" id="fw-allow-unsafe" onchange="toggleUnsafe()">
+    Allow non-failsafe updates
+  </label>
+  <div class="hint" style="margin-top:4px">
+    Permits firmware updates to programmable subcomponents during the boot.
+    Some releases will not fully apply without it.
+  </div>
+
+  <div id="fw-unsafe-opts" style="display:none;margin-top:14px">
+    <div class="form-group" style="max-width:220px">
+      <label class="form-label" for="fw-window">Permit for (minutes)</label>
+      <input type="number" id="fw-window" class="form-input" value="30" min="1" max="120">
+    </div>
+    <div class="fw-warning">
+      The switch may reboot several times while these updates apply.
+      <strong>Do not interrupt power</strong> until it has fully returned —
+      doing so during a subcomponent update can leave the switch unusable.
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">Target switches</div>
+  <div id="fw-hosts">
+    <div class="text-sm text-secondary">Loading…</div>
+  </div>
+  <div class="hint" style="margin-top:8px">
+    Hosts and management IPs come from the Deploy tab mapping.
+  </div>
+</div>
+
+<div class="card">
+  <div class="flex items-center gap-2" style="justify-content:space-between">
+    <div>
+      <button class="btn btn-primary" id="fw-start" onclick="startFirmware()">
+        Start firmware upgrade
+      </button>
+      <span id="fw-status" class="text-sm text-secondary" style="margin-left:10px"></span>
+    </div>
+  </div>
+</div>
+
+<div class="card" id="fw-results-card" style="display:none">
+  <div class="card-header">Results</div>
+  <div id="fw-results"></div>
+</div>
+
+<div class="card" id="fw-log-card" style="display:none">
+  <div class="card-header">Output</div>
+  <div class="fw-log"><pre id="fw-log"></pre></div>
+</div>
+
+<!-- ─── Credential prompt modal ─── -->
+<div class="modal-overlay" id="credModal">
+  <div class="modal">
+    <div class="modal-header">Switch credentials</div>
+    <div class="modal-body">
+      <p class="text-sm text-secondary" style="margin-bottom:16px">
+        Enter credentials for the target switches. These are used for this operation only and are not stored.
+      </p>
+      <div class="cred-modal-fields">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label" for="cred-user">Username</label>
+          <input type="text" id="cred-user" class="form-input" placeholder="admin" autocomplete="off">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label" for="cred-pass">Password</label>
+          <input type="password" id="cred-pass" class="form-input" placeholder="Password" autocomplete="off">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="hideCredModal()">Cancel</button>
+      <button class="btn btn-primary" id="cred-submit">Continue</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const PROJECT = {{ project_name | tojson }};
+const HOSTS   = {{ hosts | tojson }};
+let sessionCreds = null;   // memory only, never persisted
+let pollTimer    = null;
+
+/* ── Setup ── */
+
+function toggleUnsafe() {
+  const on = document.getElementById('fw-allow-unsafe').checked;
+  document.getElementById('fw-unsafe-opts').style.display = on ? 'block' : 'none';
+}
+
+function renderHosts() {
+  const box = document.getElementById('fw-hosts');
+  if (!HOSTS.length) {
+    box.innerHTML = '<div class="text-sm text-secondary">'
+      + 'No switches mapped. Add management IPs on the Deploy tab first.</div>';
+    return;
+  }
+  box.innerHTML = HOSTS.map(h => `
+    <div class="fw-host-row ${h.mgmt_ip ? '' : 'no-ip'}">
+      <input type="checkbox" class="fw-host-cb" value="${h.hostname}"
+             ${h.mgmt_ip ? '' : 'disabled'} checked>
+      <span class="fw-host-name">${h.hostname}</span>
+      <span class="fw-host-ip">${h.mgmt_ip || 'no management IP'}</span>
+    </div>`).join('');
+}
+
+async function loadImages() {
+  const sel  = document.getElementById('fw-image');
+  const none = document.getElementById('fw-no-images');
+  const opts = document.getElementById('fw-options');
+  try {
+    const res  = await fetch(`/projects/${encodeURIComponent(PROJECT)}/firmware/images`);
+    const data = await res.json();
+    document.getElementById('fw-dir').textContent = data.firmware_dir || 'firmware/';
+    if (!data.images || !data.images.length) {
+      none.style.display = 'block';
+      document.getElementById('fw-start').disabled = true;
+      return;
+    }
+    sel.innerHTML = data.images.map(i => `<option value="${i}">${i}</option>`).join('');
+    opts.style.display = 'grid';
+  } catch (e) {
+    none.style.display = 'block';
+    document.getElementById('fw-start').disabled = true;
+  }
+}
+
+/* ── Credential modal ── */
+
+function promptCredentials() {
+  return new Promise((resolve) => {
+    if (sessionCreds) { resolve(sessionCreds); return; }
+    const modal = document.getElementById('credModal');
+    modal.classList.add('visible');
+    document.getElementById('cred-user').focus();
+
+    const submit = document.getElementById('cred-submit');
+    const handler = () => {
+      const user = document.getElementById('cred-user').value.trim();
+      const pass = document.getElementById('cred-pass').value;
+      if (!user || !pass) { return; }
+      sessionCreds = { username: user, password: pass };
+      modal.classList.remove('visible');
+      submit.removeEventListener('click', handler);
+      resolve(sessionCreds);
+    };
+    submit.addEventListener('click', handler);
+  });
+}
+
+function hideCredModal() {
+  document.getElementById('credModal').classList.remove('visible');
+}
+
+/* ── Run ── */
+
+function setStatus(text, cls) {
+  const el = document.getElementById('fw-status');
+  el.textContent = text || '';
+  el.className = 'text-sm ' + (cls || 'text-secondary');
+}
+
+async function startFirmware() {
+  const chosen = Array.from(document.querySelectorAll('.fw-host-cb:checked'))
+                      .map(cb => cb.value);
+  if (!chosen.length) { setStatus('Select at least one switch.', 'text-danger'); return; }
+
+  const allow = document.getElementById('fw-allow-unsafe').checked;
+  if (allow) {
+    const ok = confirm(
+      'Non-failsafe updates are enabled.\n\n' +
+      'The switch may reboot several times. Do not interrupt power until it ' +
+      'has fully returned.\n\nContinue?');
+    if (!ok) return;
+  }
+
+  const creds = await promptCredentials();
+  if (!creds) return;
+
+  const body = {
+    image:            document.getElementById('fw-image').value,
+    partition:        document.getElementById('fw-partition').value,
+    hosts:            chosen,
+    switch_username:  creds.username,
+    switch_password:  creds.password,
+    allow_unsafe:     allow,
+    unsafe_window_mins: parseInt(document.getElementById('fw-window').value, 10) || 30,
+  };
+
+  document.getElementById('fw-start').disabled = true;
+  setStatus('Starting…');
+  document.getElementById('fw-log-card').style.display = 'block';
+  document.getElementById('fw-log').textContent = '';
+  document.getElementById('fw-results-card').style.display = 'none';
+
+  try {
+    const res  = await fetch(`/projects/${encodeURIComponent(PROJECT)}/firmware/run`,
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const data = await res.json();
+    if (!data.ok) {
+      setStatus(data.error, 'text-danger');
+      document.getElementById('fw-start').disabled = false;
+      return;
+    }
+    pollJob(data.job_id);
+  } catch (e) {
+    setStatus('Could not start: ' + e, 'text-danger');
+    document.getElementById('fw-start').disabled = false;
+  }
+}
+
+function pollJob(jobId) {
+  const log = document.getElementById('fw-log');
+  const tick = async () => {
+    try {
+      const res  = await fetch(
+        `/projects/${encodeURIComponent(PROJECT)}/firmware/status/${jobId}`);
+      const job = await res.json();
+
+      if (job.output !== undefined) {
+        const atBottom = log.parentElement.scrollTop + log.parentElement.clientHeight
+                         >= log.parentElement.scrollHeight - 20;
+        log.textContent = job.output;
+        if (atBottom) log.parentElement.scrollTop = log.parentElement.scrollHeight;
+      }
+
+      if (job.status === 'running' || job.status === 'starting') {
+        setStatus('Running — this can take 15–20 minutes.');
+        pollTimer = setTimeout(tick, 3000);
+        return;
+      }
+
+      clearTimeout(pollTimer);
+      document.getElementById('fw-start').disabled = false;
+      setStatus(job.status === 'done' ? 'Finished.' : 'Failed.',
+                job.status === 'done' ? 'text-success' : 'text-danger');
+      renderResults(job.results || []);
+    } catch (e) {
+      clearTimeout(pollTimer);
+      document.getElementById('fw-start').disabled = false;
+      setStatus('Lost contact with the job: ' + e, 'text-danger');
+    }
+  };
+  tick();
+}
+
+function renderResults(results) {
+  if (!results.length) return;
+  const card = document.getElementById('fw-results-card');
+  const box  = document.getElementById('fw-results');
+  box.innerHTML = results.map(r => {
+    const good = r.reachable_after_boot;
+    return `
+      <div class="fw-result ${good ? 'ok' : 'bad'}">
+        <div><strong>${r.hostname}</strong> <span class="fw-host-ip">${r.mgmt_ip || ''}</span></div>
+        <div class="text-secondary">
+          ${r.image || ''} → ${r.partition || ''} partition
+          ${r.previous_version ? ' · was ' + r.previous_version : ''}
+        </div>
+        <div class="text-secondary">
+          uploaded: ${r.uploaded ? 'yes' : 'no'} ·
+          booted: ${r.booted ? 'yes' : 'no'} ·
+          back online: ${good ? 'yes' : 'NO'}
+          ${r.unsafe_updates_allowed
+            ? ' · non-failsafe updates permitted (' + (r.unsafe_command || '') + ')'
+            : ''}
+        </div>
+      </div>`;
+  }).join('');
+  card.style.display = 'block';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  renderHosts();
+  loadImages();
+});
+</script>
+{% endblock %}

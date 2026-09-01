@@ -164,3 +164,65 @@ exit 0
                                {'all': {'hosts': {}}}, {})
         assert _fw_jobs['t3']['status'] == 'failed'
         assert 'ansible-core' in _fw_jobs['t3']['output']
+
+
+# ---------------------------------------------------------------------------
+# Page rendering
+# ---------------------------------------------------------------------------
+
+class TestFirmwarePage:
+
+    def test_page_renders_with_hosts(self, app, auth_client, tmp_path, monkeypatch):
+        fw = tmp_path / 'fw'; fw.mkdir()
+        (fw / 'img.swi').write_text('x')
+        app.config['FIRMWARE_DIR'] = str(fw)
+
+        import app.firmware_routes as fr
+        monkeypatch.setattr(fr, '_load_mapping', lambda a, u, p: {
+            'hosts': [{'hostname': 'core-01', 'mgmt_ip': '10.0.0.1'},
+                      {'hostname': 'core-02', 'mgmt_ip': ''}]})
+
+        res = auth_client.get('/projects/proj/firmware')
+        assert res.status_code == 200
+        body = res.data.decode()
+        assert 'core-01' in body
+        assert 'Allow non-failsafe updates' in body
+        assert 'Do not interrupt power' in body
+        # partition default must be secondary
+        assert 'value="secondary" selected' in body
+
+    def test_page_renders_with_no_mapping(self, app, auth_client, monkeypatch):
+        """An empty mapping must not blow up the template."""
+        import app.firmware_routes as fr
+        monkeypatch.setattr(fr, '_load_mapping', lambda a, u, p: {'hosts': []})
+        res = auth_client.get('/projects/proj/firmware')
+        assert res.status_code == 200
+
+    def test_page_requires_login(self, client):
+        assert client.get('/projects/proj/firmware').status_code == 401
+
+    def test_nav_includes_firmware(self, app, auth_client, monkeypatch):
+        import app.firmware_routes as fr
+        monkeypatch.setattr(fr, '_load_mapping', lambda a, u, p: {'hosts': []})
+        res = auth_client.get('/projects/proj/firmware')
+        assert b'/firmware"' in res.data
+
+
+class TestPageDataSerialisation:
+
+    def test_host_and_project_names_are_json_escaped(self, app, auth_client, monkeypatch):
+        """Names with quotes must not break out of the JS literals."""
+        import re, json
+        import app.firmware_routes as fr
+        monkeypatch.setattr(fr, '_load_mapping', lambda a, u, p: {
+            'hosts': [{'hostname': "quote'd\"host", 'mgmt_ip': '10.0.0.1'}]})
+
+        res = auth_client.get('/projects/proj/firmware')
+        body = res.data.decode()
+
+        hosts_literal = re.search(r'const HOSTS\s*=\s*(.*?);', body, re.S).group(1)
+        parsed = json.loads(hosts_literal)
+        assert parsed[0]['hostname'] == "quote'd\"host"
+
+        project_literal = re.search(r'const PROJECT\s*=\s*(.*?);', body).group(1)
+        assert json.loads(project_literal) == 'proj'
