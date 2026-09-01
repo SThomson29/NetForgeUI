@@ -191,6 +191,47 @@ def project_deploy(project_name):
 
 
 @login_required
+def deployment_ips(project_name):
+    """Manage the hostname to management IP mapping.
+
+    Kept separate from the Hosts page, which is scoped to config generation,
+    and from Deploy, which consumes this rather than owning it. Firmware reads
+    the same mapping.
+    """
+    app = current_app._get_current_object()
+    mapping = _load_mapping(app, current_user.username, project_name)
+    return render_template(
+        'project_deployment_ips.html',
+        project_name=project_name,
+        mappings=mapping.get('hosts', []),
+    )
+
+
+@login_required
+def deployment_ips_save(project_name):
+    """Persist the mapping, leaving other settings untouched."""
+    app = current_app._get_current_object()
+    username = current_user.username
+    body = request.json or {}
+
+    rows = body.get('mappings') or []
+    cleaned = []
+    seen = set()
+    for r in rows:
+        name = (r.get('hostname') or '').strip()
+        ip = (r.get('mgmt_ip') or '').strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        cleaned.append({'hostname': name, 'mgmt_ip': ip})
+
+    mapping = _load_mapping(app, username, project_name)
+    mapping['hosts'] = cleaned
+    _save_mapping(app, username, project_name, mapping)
+    return jsonify(ok=True, count=len(cleaned))
+
+
+@login_required
 def deploy_save_mapping(project_name):
     """Save the mapping table."""
     data = request.get_json()

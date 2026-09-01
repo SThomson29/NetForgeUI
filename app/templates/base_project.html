@@ -110,6 +110,16 @@
         Generate
       </a>
 
+      <a href="/projects/${encodeURIComponent(projectName)}/deployment-ips"
+         class="nav-item ${'{{ "active" if request.endpoint == "projects.deployment_ips" else "" }}'}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="6" width="20" height="12" rx="2"/>
+          <line x1="6" y1="12" x2="6" y2="12"/>
+          <line x1="10" y1="12" x2="18" y2="12"/>
+        </svg>
+        Deployment IPs
+      </a>
+
       <a href="/projects/${encodeURIComponent(projectName)}/deploy"
          class="nav-item ${'{{ "active" if request.endpoint == "projects.project_deploy" else "" }}'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

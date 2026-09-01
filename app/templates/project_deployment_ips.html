@@ -1,0 +1,184 @@
+{% extends "base_project.html" %}
+{% block title %}Deployment IPs — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}Deployment IPs{% endblock %}
+
+{% block project_extra_head %}
+<style>
+.ip-table { width: 100%; border-collapse: collapse; }
+.ip-table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.ip-table td { padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); }
+.ip-table input {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.ip-table input:focus {
+  border-color: var(--accent);
+  background: var(--bg-inset);
+  outline: none;
+}
+.ip-table input.map-ip { font-family: 'JetBrains Mono', monospace; }
+.ip-table input::placeholder { color: var(--text-tertiary); }
+.ip-row-bad input.map-ip { border-color: #dc2626; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="card mb-4">
+  <div class="card-body-compact">
+    <p class="text-sm text-secondary" style="margin-top:0">
+      Management addresses used by <strong>Deploy</strong> and <strong>Firmware</strong>.
+      These are how NetForgeUI reaches a switch — separate from any addressing
+      in the switch's own config, which is managed on the Hosts and Editor pages.
+    </p>
+
+    <div class="flex items-center justify-between" style="margin-bottom:12px">
+      <span class="form-label" style="margin-bottom:0">Host → Management IP</span>
+      <div class="flex items-center gap-2">
+        <button class="btn btn-ghost btn-sm" onclick="autoPopulate()">Add missing hosts</button>
+        <button class="btn btn-ghost btn-sm" onclick="addRow()">Add row</button>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="ip-table">
+        <thead>
+          <tr>
+            <th>Hostname</th>
+            <th style="width:220px">Management IP</th>
+            <th style="width:40px"></th>
+          </tr>
+        </thead>
+        <tbody id="ip-body">
+          {% for m in mappings %}
+          <tr>
+            <td><input type="text" class="map-hostname" value="{{ m.hostname }}" placeholder="hostname"></td>
+            <td><input type="text" class="map-ip" value="{{ m.mgmt_ip }}" placeholder="10.0.0.1"></td>
+            <td>
+              <button class="btn btn-ghost btn-icon btn-sm" onclick="this.closest('tr').remove()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div id="ip-empty" class="form-hint mt-2" style="display:none">
+      No hosts yet — use <strong>Add missing hosts</strong> to pull the switch
+      names from this project, then fill in their addresses.
+    </div>
+
+    <div class="flex items-center gap-2" style="margin-top:16px">
+      <button class="btn btn-primary btn-sm" onclick="saveIps()">Save</button>
+      <span id="ip-status" class="text-sm text-secondary"></span>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const PROJECT = {{ project_name | tojson }};
+
+function refreshEmptyState() {
+  const rows = document.querySelectorAll('#ip-body tr').length;
+  document.getElementById('ip-empty').style.display = rows ? 'none' : 'block';
+}
+
+function addRow(hostname, ip) {
+  const tr = document.createElement('tr');
+  tr.innerHTML =
+    '<td><input type="text" class="map-hostname" placeholder="hostname"></td>' +
+    '<td><input type="text" class="map-ip" placeholder="10.0.0.1"></td>' +
+    '<td><button class="btn btn-ghost btn-icon btn-sm" onclick="this.closest(\'tr\').remove();refreshEmptyState()">' +
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px">' +
+    '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></td>';
+  document.getElementById('ip-body').appendChild(tr);
+  if (hostname) tr.querySelector('.map-hostname').value = hostname;
+  if (ip) tr.querySelector('.map-ip').value = ip;
+  refreshEmptyState();
+  return tr;
+}
+
+/* Pull switch names from the project that aren't listed yet. Existing rows
+   are left alone so a populated address is never overwritten. */
+async function autoPopulate() {
+  setStatus('Checking project hosts…');
+  try {
+    const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/auto-populate`);
+    const data = await res.json();
+    if (!data.ok) { setStatus(data.error || 'Could not read project hosts', true); return; }
+    location.reload();
+  } catch (e) {
+    setStatus('Could not read project hosts: ' + e, true);
+  }
+}
+
+function setStatus(msg, bad) {
+  const el = document.getElementById('ip-status');
+  el.textContent = msg || '';
+  el.className = 'text-sm ' + (bad ? 'text-danger' : 'text-secondary');
+}
+
+/* Loose check only — enough to catch a typo, not to enforce a format.
+   Hostnames are allowed to resolve, so anything non-empty is accepted. */
+function looksLikeAddress(v) {
+  if (!v) return true;              // blank is allowed; it just isn't deployable
+  return /^[A-Za-z0-9.:_-]+$/.test(v);
+}
+
+async function saveIps() {
+  const rows = Array.from(document.querySelectorAll('#ip-body tr'));
+  const mappings = [];
+  let bad = false;
+  const seen = new Set();
+  let dupe = null;
+
+  rows.forEach(row => {
+    row.classList.remove('ip-row-bad');
+    const hostname = row.querySelector('.map-hostname').value.trim();
+    const ip = row.querySelector('.map-ip').value.trim();
+    if (!hostname) return;
+    if (!looksLikeAddress(ip)) { row.classList.add('ip-row-bad'); bad = true; return; }
+    if (seen.has(hostname)) { dupe = hostname; row.classList.add('ip-row-bad'); return; }
+    seen.add(hostname);
+    mappings.push({ hostname, mgmt_ip: ip });
+  });
+
+  if (bad)  { setStatus('Check the highlighted addresses.', true); return; }
+  if (dupe) { setStatus(`Duplicate hostname: ${dupe}`, true); return; }
+
+  setStatus('Saving…');
+  try {
+    const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deployment-ips/save`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mappings })
+    });
+    const data = await res.json();
+    setStatus(data.ok ? `Saved ${data.count} host(s).` : (data.error || 'Save failed'), !data.ok);
+  } catch (e) {
+    setStatus('Save failed: ' + e, true);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', refreshEmptyState);
+</script>
+{% endblock %}
