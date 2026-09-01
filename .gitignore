@@ -12,3 +12,9 @@ venv/
 .DS_Store
 .env
 
+
+# Firmware images are large and machine-local; the directory is tracked, its
+# contents are not.
+firmware/*
+!firmware/.gitkeep
+!firmware/README.md

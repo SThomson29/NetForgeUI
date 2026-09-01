@@ -23,6 +23,9 @@ services:
       - netforgeui_data:/app/service/data
       - netforgeui_repo:/app/service/configgen
       - /var/run/docker.sock:/var/run/docker.sock
+      # AOS-CX .swi images for the Firmware tab. Bind mount so images
+      # can be dropped in from the host without an upload.
+      - ./firmware:/app/service/firmware:ro
 
     restart: unless-stopped
 

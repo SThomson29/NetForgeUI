@@ -4,3 +4,22 @@ werkzeug>=3.0.0
 pyyaml>=6.0.1
 docker>=7.0.0
 gunicorn>=22.0.0
+
+# --- Ansible runtime -------------------------------------------------------
+# Used by the deploy and firmware features, which run ansible-playbook as a
+# subprocess in this container (generation uses the sandboxed ephemeral
+# runner instead). Pinned rather than floated: these talk to live switches,
+# so the image should be reproducible.
+#
+# ansible-core, not ansible — the latter bundles ~800 collections (~500 MB).
+# The one collection we need is installed via ansible-galaxy in the Dockerfile.
+ansible-core==2.21.3
+
+# REST API client used by the AOS-CX collection's non-CLI modules.
+pyaoscx==2.6.0
+
+# aoscx_upload_firmware falls back to pycurl on the 4100i and 6x00 families
+# (firmware version prefixes PL, RL, ML, FL) because those platforms have
+# known issues with requests. Ships manylinux aarch64 wheels with libcurl
+# bundled, so it needs no system packages and does not compile on arm64.
+pycurl==7.47.0
