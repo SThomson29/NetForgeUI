@@ -29,3 +29,8 @@ class Config:
 
     # Ansible binary — override with ANSIBLE_PLAYBOOK env var if using a venv
     ANSIBLE_BIN        = os.environ.get('ANSIBLE_PLAYBOOK', 'ansible-playbook')
+
+    # AOS-CX .swi images for the firmware feature. Mounted from the host
+    # rather than uploaded — images are large and machine-local.
+    FIRMWARE_DIR       = os.environ.get(
+        'FIRMWARE_DIR', os.path.join(BASE_DIR, 'firmware'))

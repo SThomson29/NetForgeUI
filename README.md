@@ -13,15 +13,18 @@ A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — 
 - **Skeleton sync** — existing projects can pick up host_vars files added to NetForge after the project was created
 - **Common infrastructure** — per-project DNS, NTP, DHCP, RADIUS, and syslog server lists that feed into editor field suggestions
 - **Deployment** — push generated configs to live switches over SSH, with a diff-first dry run and automatic on-box rollback if a push breaks connectivity
+- **Firmware** — upload an AOS-CX image to a chosen partition and boot to it, with optional permission for non-failsafe subcomponent updates
 - **Multi-user** — per-user data isolation with an admin panel for user management
 
 ---
 
-## How generation works
+## How Ansible runs
 
 Worth understanding before deploying, because it shapes the requirements.
 
-NetForgeUI does **not** run `ansible-playbook` inside its own container. When you click Generate, it uses the Docker SDK to start a short-lived `cytopia/ansible` container, mounts the repo and data volumes into it by name, runs the playbook, and removes the container afterwards.
+There are two execution paths.
+
+**Generation** does **not** run `ansible-playbook` inside its own container. When you click Generate, it uses the Docker SDK to start a short-lived `cytopia/ansible` container, mounts the repo and data volumes into it by name, runs the playbook, and removes the container afterwards.
 
 This means:
 
@@ -31,6 +34,17 @@ This means:
 
 Both NetForgeUI and `cytopia/ansible` are published for `linux/amd64` and `linux/arm64`, so this works on Apple Silicon as well as x86.
 
+**Deploy and firmware** run `ansible-playbook` directly inside the NetForgeUI
+container, which is why `ansible-core`, `pyaoscx` and the `arubanetworks.aoscx`
+collection are installed in the image. The sandbox exists to contain
+user-authored Jinja during generation; deploy and firmware render nothing and
+need network access to the switches, so the same isolation would only get in
+the way.
+
+Firmware runs as a background job rather than a synchronous request — an
+upload, boot and reconnect can take 15–20 minutes — so the page polls for
+progress and survives a refresh.
+
 ---
 
 ## Requirements
@@ -38,6 +52,7 @@ Both NetForgeUI and `cytopia/ansible` are published for `linux/amd64` and `linux
 - Docker and Docker Compose
 - Access to the Docker socket on the host
 - Network access to clone the NetForge repo
+- Network reachability to the switches, for deploy and firmware
 
 ---
 
@@ -131,6 +146,7 @@ services:
       - netforgeui_data:/app/service/data
       - netforgeui_repo:/app/service/configgen
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./firmware:/app/service/firmware:ro
     restart: unless-stopped
 
 volumes:
@@ -145,6 +161,7 @@ volumes:
 - `netforgeui_data` — persists all user and project data across restarts
 - `netforgeui_repo` — persists the cloned NetForge repo
 - `/var/run/docker.sock` — required so generation can start the Ansible container
+- `./firmware` — AOS-CX `.swi` images for the Firmware tab, read-only
 
 The explicit `name:` on each volume matters. Compose would otherwise prefix them
 with the project directory name, and the ephemeral Ansible container looks them
@@ -164,6 +181,7 @@ up by their bare names.
 | `REPO_VOLUME_NAME` | No | `netforgeui_repo` | Name of the repo volume to mount into the Ansible container |
 | `DATA_VOLUME_NAME` | No | `netforgeui_data` | Name of the data volume to mount into the Ansible container |
 | `SSH_KEY_PATH` | No | `/root/.ssh/id_rsa` | Deploy key used for git over SSH |
+| `FIRMWARE_DIR` | No | `<app>/firmware` | Where `.swi` images are read from |
 | `PORT` | No | `5000` | Port the Flask app listens on inside the container |
 | `FLASK_DEBUG` | No | `false` | Enable Flask debug mode — never use in production |
 | `FLASK_PROXY_FIX` | No | `false` | Set to `true` when running behind a reverse proxy |
@@ -232,6 +250,34 @@ either on AOS-CX.
 ### 6. Generate configs
 
 Go to **Generate**. Optionally filter by switch or by section. Section filters map to Ansible tags, so selecting **Syslog** generates only that part of the config. Click **Generate** — download the resulting `.ios` files individually or as a zip.
+
+---
+
+## Upgrading firmware
+
+A bench commissioning step, intended before a switch carries traffic.
+
+Drop AOS-CX `.swi` images into `./firmware` on the host — they are mounted
+read-only into the container, not uploaded through the browser. Then go to the
+project → **Firmware**:
+
+1. Pick an image and the target partition (default `secondary` — upload to the partition the switch is *not* running)
+2. Optionally tick **Allow non-failsafe updates** and set a window in minutes
+3. Select the switches — the list and management IPs come from the Deploy tab mapping
+4. Enter switch credentials, which are used for the run only and never stored
+
+Output streams live and the page can be left or refreshed; per-host results
+appear when it finishes.
+
+**Non-failsafe updates.** Some releases include firmware for programmable
+subcomponents that will not apply without explicit permission. Enabling it
+means the switch may reboot several times — **power must not be interrupted**
+until it has fully returned. The command has no REST equivalent, so it is
+issued over SSH, and it was renamed in 10.15.1010; the playbook detects the
+running release and uses the right one.
+
+Firmware needs both REST (`https-server`, for upload and boot) and SSH (for the
+non-failsafe command) reachable on the management IP.
 
 ---
 
