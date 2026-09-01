@@ -2,7 +2,7 @@
 {% block title %}Host Variables — NetForgeUI{% endblock %}
 {% block page_title %}{{ project_name }} / Editor{% endblock %}
 
-{% block extra_head %}
+{% block project_extra_head %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <style>
@@ -58,7 +58,7 @@
 {% if not hosts %}
 <div class="card">
   <div class="empty">
-    <p>No switches defined. <a href="{{ url_for('hosts.hosts_page') }}" style="color:#2563eb">Add a switch</a> first.</p>
+    <p>No switches defined. <a href="{{ url_for('projects.hosts_page', project_name=project_name) }}" style="color:#2563eb">Add a switch</a> first.</p>
   </div>
 </div>
 {% elif selected %}
