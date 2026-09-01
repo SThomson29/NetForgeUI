@@ -578,6 +578,29 @@ projects_bp.add_url_rule(
     'project_deploy',
     project_deploy
 )
+
+from .firmware_routes import (
+    firmware_images,
+    firmware_run,
+    firmware_status,
+)
+
+projects_bp.add_url_rule(
+    '/projects/<project_name>/firmware/images',
+    'firmware_images',
+    firmware_images
+)
+projects_bp.add_url_rule(
+    '/projects/<project_name>/firmware/run',
+    'firmware_run',
+    firmware_run,
+    methods=['POST']
+)
+projects_bp.add_url_rule(
+    '/projects/<project_name>/firmware/status/<job_id>',
+    'firmware_status',
+    firmware_status
+)
 projects_bp.add_url_rule(
     '/projects/<project_name>/deploy/save-mapping',
     'deploy_save_mapping',
