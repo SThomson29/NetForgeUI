@@ -5,7 +5,12 @@
 {% block project_extra_head %}
 <style>
 /* Deploy-specific styles */
-.mapping-table input {
+.mapping-table { table-layout: fixed; width: 100%; }
+
+/* Text inputs only — a bare `input` selector also caught the row checkboxes,
+   which then had to fight it with an inline width and still let the column
+   reflow as content changed. */
+.mapping-table input[type="text"] {
   border: none;
   background: transparent;
   font-family: 'JetBrains Mono', monospace;
@@ -15,7 +20,15 @@
   color: var(--text-primary);
   outline: none;
 }
-.mapping-table input:focus {
+.mapping-table input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  vertical-align: middle;
+}
+.mapping-table td { vertical-align: middle; }
+.mapping-table input[type="text"]:focus {
   background: var(--accent-subtle);
   border-radius: 3px;
   padding: 4px 6px;
@@ -143,7 +156,7 @@
           <thead>
             <tr>
               <th style="width:30px">
-                <input type="checkbox" id="select-all" onchange="toggleAllMapping(this)" style="width:14px;height:14px;accent-color:var(--accent)">
+                <input type="checkbox" id="select-all" onchange="toggleAllMapping(this)">
               </th>
               <th>Hostname</th>
               <th>Management IP</th>
@@ -154,12 +167,12 @@
           <tbody id="mapping-body">
             {% for m in mappings %}
             <tr data-hostname="{{ m.hostname }}">
-              <td><input type="checkbox" class="map-check" checked style="width:14px;height:14px;accent-color:var(--accent)"></td>
+              <td><input type="checkbox" class="map-check" checked></td>
               <td><input type="text" class="map-hostname" value="{{ m.hostname }}" readonly></td>
               <td><input type="text" class="map-ip" value="{{ m.mgmt_ip }}" placeholder="not set" readonly></td>
               <td>
                 {% if m.has_config %}
-                <span class="badge badge-green">{{ m.hostname }}.ios</span>
+                <span class="badge badge-green">{{ m.hostname }}_FULL.ios</span>
                 {% else %}
                 <span class="badge badge-yellow">Not generated</span>
                 {% endif %}
@@ -293,21 +306,6 @@ function getSelectedMappings() {
 
 function toggleAllMapping(el) {
   document.querySelectorAll('.map-check').forEach(c => c.checked = el.checked);
-}
-
-function addMappingRow() {
-  const tbody = document.getElementById('mapping-body');
-  const tr = document.createElement('tr');
-  tr.innerHTML = `
-    <td><input type="checkbox" class="map-check" checked style="width:14px;height:14px;accent-color:var(--accent)"></td>
-    <td><input type="text" class="map-hostname" placeholder="hostname"></td>
-    <td><input type="text" class="map-ip" placeholder="10.x.x.x"></td>
-    <td><span class="badge badge-neutral">—</span></td>
-    <td><button class="btn btn-ghost btn-icon btn-sm" onclick="this.closest('tr').remove()">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-    </button></td>`;
-  tbody.appendChild(tr);
-  tr.querySelector('.map-hostname').focus();
 }
 
 async function autoPopulate() {

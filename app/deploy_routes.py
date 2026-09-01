@@ -130,8 +130,12 @@ def _run_playbook(playbook_name, inventory_dict, extra_vars, limit_hosts=None):
 
         env = os.environ.copy()
         env['ANSIBLE_HOST_KEY_CHECKING'] = 'False'
-        env['ANSIBLE_STDOUT_CALLBACK'] = 'json'
         env['ANSIBLE_NOCOLOR'] = '1'
+        # Deliberately the default stdout callback. The 'json' callback lives
+        # in ansible.posix, not ansible-core, so requesting it fails to load;
+        # and nothing here parses stdout anyway — structured per-host data
+        # comes from the result files written by the playbook. The default
+        # callback also gives a readable log rather than a wall of JSON.
 
         try:
             proc = subprocess.run(
