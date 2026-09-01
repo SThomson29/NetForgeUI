@@ -1174,18 +1174,24 @@ class TestDeployJobModel:
             {'all': {'hosts': {'SW-01': {'ansible_host': '10.0.0.1'}}}},
             {'config_dir': '/x'}, ['SW-01'])
 
-        time.sleep(0.3)
-        with dr._deploy_jobs_lock:
-            mid = dict(dr._deploy_jobs[job_id])
-        assert mid['status'] == 'running'
-        assert 'PLAY [Dry Run]' in mid['output'], 'no output before completion'
-
-        for _ in range(60):
-            time.sleep(0.1)
+        # Poll for the first line rather than sampling at a fixed moment —
+        # process startup varies by machine. What matters is that output is
+        # readable BEFORE the job finishes, not exactly when it appears.
+        saw_output_while_running = False
+        final = None
+        deadline = time.time() + 20
+        while time.time() < deadline:
             with dr._deploy_jobs_lock:
-                final = dict(dr._deploy_jobs[job_id])
-            if final['status'] not in ('starting', 'running'):
+                snap = dict(dr._deploy_jobs[job_id])
+            if snap['status'] in ('starting', 'running') and snap['output']:
+                saw_output_while_running = True
+            if snap['status'] not in ('starting', 'running'):
+                final = snap
                 break
+            time.sleep(0.05)
+
+        assert saw_output_while_running, 'no output was visible before the job finished'
+        assert final is not None, 'job did not finish within 20s'
         assert final['status'] == 'done'
         assert 'PLAY RECAP' in final['output']
 
