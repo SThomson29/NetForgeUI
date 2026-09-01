@@ -991,3 +991,68 @@ class TestPlaybookPath:
                                           {'all': {'hosts': {}}}, {})
         assert ok is False
         assert str(tmp_path / 'nope') in msg
+
+
+class TestStdoutCallback:
+
+    def test_does_not_request_a_collection_only_callback(self, app, tmp_path, monkeypatch):
+        """Only callbacks bundled with ansible-core may be requested.
+
+        'json' ships in ansible.posix, not ansible-core, so asking for it
+        fails with "Could not load 'json' callback plugin". Nothing here
+        parses stdout — per-host data comes from the result files — so the
+        default callback is correct and gives a readable log.
+        """
+        import app.deploy_routes as dr
+
+        repo = tmp_path / 'repo'
+        (repo / 'playbooks').mkdir(parents=True)
+        (repo / 'playbooks' / 'deploy_dryrun.yml').write_text('---\n')
+        app.config['CONFIGGEN_REPO'] = str(repo)
+
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen['env'] = kwargs.get('env', {})
+            class R:
+                returncode = 0
+                stdout = ''
+                stderr = ''
+            return R()
+
+        monkeypatch.setattr(dr.subprocess, 'run', fake_run)
+        with app.test_request_context():
+            dr._run_playbook('deploy_dryrun.yml', {'all': {'hosts': {}}}, {})
+
+        CORE_CALLBACKS = {'default', 'junit', 'minimal', 'oneline', 'tree'}
+        requested = seen['env'].get('ANSIBLE_STDOUT_CALLBACK')
+        assert requested is None or requested in CORE_CALLBACKS, (
+            '%r is not bundled with ansible-core' % requested)
+
+
+class TestMappingTableMarkup:
+
+    def test_config_badge_uses_full_filename(self, app, auth_client):
+        """The badge must name the file has_config actually looks for."""
+        setup_deploy_project(app, auth_client)
+        write_mapping(app, 'deploy-test', {
+            'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
+            'settings': {'rollback_timeout': 5}})
+        res = auth_client.get('/projects/deploy-test/deploy')
+        body = res.data.decode()
+        assert 'CO-CORE-SW-01_FULL.ios' in body
+        assert 'CO-CORE-SW-01.ios<' not in body
+
+    def test_checkboxes_are_not_sized_inline(self, app, auth_client):
+        """Sizing belongs in CSS scoped to the input type, not per element."""
+        setup_deploy_project(app, auth_client)
+        write_mapping(app, 'deploy-test', {
+            'hosts': [{'hostname': 'SW-01', 'mgmt_ip': '10.0.0.1'}],
+            'settings': {}})
+        body = auth_client.get('/projects/deploy-test/deploy').data.decode()
+        # no checkbox should carry an inline width override
+        for chunk in body.split('type="checkbox"')[1:]:
+            tag = chunk.split('>')[0]
+            assert 'width:14px' not in tag, 'inline sizing on a checkbox'
+        assert 'input[type="checkbox"]' in body, 'checkbox CSS rule missing'
+        assert 'table-layout: fixed' in body
