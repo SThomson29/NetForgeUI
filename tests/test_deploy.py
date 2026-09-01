@@ -1056,3 +1056,34 @@ class TestMappingTableMarkup:
             assert 'width:14px' not in tag, 'inline sizing on a checkbox'
         assert 'input[type="checkbox"]' in body, 'checkbox CSS rule missing'
         assert 'table-layout: fixed' in body
+
+
+class TestSshTransportDependency:
+
+    def test_an_ssh_transport_is_pinned(self):
+        """network_cli needs pylibssh or paramiko; ansible-core pulls neither.
+
+        Without one, every deploy task fails with "Failed to import the
+        required Python library (paramiko)" the moment it tries to reach a
+        switch — which is not obvious from the playbook.
+        """
+        import os
+        req = os.path.join(os.path.dirname(__file__), '..', 'requirements.txt')
+        with open(req) as f:
+            body = f.read()
+        assert 'ansible-pylibssh' in body or 'paramiko' in body, (
+            'no SSH transport pinned for the network_cli connection')
+
+    def test_ssh_transport_is_importable_where_ansible_is(self):
+        """If the Ansible runtime is installed, a transport must be too.
+
+        Catches a wheel that failed to install for the build architecture.
+        Skipped in environments without the runtime, where the question does
+        not arise.
+        """
+        import importlib.util
+        if not importlib.util.find_spec('ansible'):
+            pytest.skip('ansible-core not installed in this environment')
+        assert (importlib.util.find_spec('pylibsshext')
+                or importlib.util.find_spec('paramiko')), (
+            'ansible-core is installed but neither pylibssh nor paramiko is')

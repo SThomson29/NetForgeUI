@@ -18,6 +18,17 @@ ansible-core==2.21.3
 # REST API client used by the AOS-CX collection's non-CLI modules.
 pyaoscx==2.6.0
 
+# SSH transport for the network_cli connection, used by the deploy playbooks
+# and by the firmware playbook's non-failsafe-updates play. ansible-core does
+# not depend on either of these, so without them network_cli fails with
+# "Failed to import the required Python library (paramiko)".
+#
+# pylibssh is the transport Ansible prefers; paramiko is the fallback it
+# reaches for automatically if pylibssh is unavailable. Both ship wheels for
+# x86_64 and aarch64, so neither compiles during the multi-arch build.
+ansible-pylibssh==1.4.0
+paramiko==5.0.0
+
 # aoscx_upload_firmware falls back to pycurl on the 4100i and 6x00 families
 # (firmware version prefixes PL, RL, ML, FL) because those platforms have
 # known issues with requests. Ships manylinux aarch64 wheels with libcurl
