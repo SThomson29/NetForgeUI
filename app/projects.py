@@ -567,6 +567,8 @@ def api_get_allocations(project_name):
 # ---------------------------------------------------------------------------
 from .deploy_routes import (
     project_deploy,
+    deployment_ips,
+    deployment_ips_save,
     deploy_save_mapping,
     deploy_auto_populate,
     deploy_dryrun,
@@ -577,6 +579,17 @@ projects_bp.add_url_rule(
     '/projects/<project_name>/deploy',
     'project_deploy',
     project_deploy
+)
+projects_bp.add_url_rule(
+    '/projects/<project_name>/deployment-ips',
+    'deployment_ips',
+    deployment_ips
+)
+projects_bp.add_url_rule(
+    '/projects/<project_name>/deployment-ips/save',
+    'deployment_ips_save',
+    deployment_ips_save,
+    methods=['POST']
 )
 
 from .firmware_routes import (

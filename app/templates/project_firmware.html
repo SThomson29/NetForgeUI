@@ -114,7 +114,8 @@
     <div class="text-sm text-secondary">Loading…</div>
   </div>
   <div class="hint" style="margin-top:8px">
-    Hosts and management IPs come from the Deploy tab mapping.
+    Hosts and management IPs come from the
+    <a href="{{ url_for('projects.deployment_ips', project_name=project_name) }}">Deployment IPs</a> page.
   </div>
 </div>
 
@@ -185,7 +186,7 @@ function renderHosts() {
   const box = document.getElementById('fw-hosts');
   if (!HOSTS.length) {
     box.innerHTML = '<div class="text-sm text-secondary">'
-      + 'No switches mapped. Add management IPs on the Deploy tab first.</div>';
+      + 'No switches mapped. Add management IPs on the Deployment IPs page first.</div>';
     return;
   }
   box.innerHTML = HOSTS.map(h => `

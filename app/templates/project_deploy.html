@@ -107,7 +107,7 @@
 {% block topbar_actions %}
 <button class="btn btn-secondary btn-sm" onclick="saveMappings()">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-  Save mapping
+  Save settings
 </button>
 {% endblock %}
 
@@ -131,11 +131,11 @@
   <div class="card mb-4">
     <div class="card-body-compact">
       <div class="flex items-center justify-between" style="margin-bottom:12px">
-        <span class="form-label" style="margin-bottom:0">Host → Management IP mapping</span>
-        <button class="btn btn-ghost btn-sm" onclick="addMappingRow()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Add row
-        </button>
+        <span class="form-label" style="margin-bottom:0">Select switches to deploy to</span>
+        <a class="btn btn-ghost btn-sm"
+           href="{{ url_for('projects.deployment_ips', project_name=project_name) }}">
+          Manage IPs
+        </a>
       </div>
 
       <div class="table-wrap">
@@ -155,8 +155,8 @@
             {% for m in mappings %}
             <tr data-hostname="{{ m.hostname }}">
               <td><input type="checkbox" class="map-check" checked style="width:14px;height:14px;accent-color:var(--accent)"></td>
-              <td><input type="text" class="map-hostname" value="{{ m.hostname }}" placeholder="hostname"></td>
-              <td><input type="text" class="map-ip" value="{{ m.mgmt_ip }}" placeholder="10.x.x.x"></td>
+              <td><input type="text" class="map-hostname" value="{{ m.hostname }}" readonly></td>
+              <td><input type="text" class="map-ip" value="{{ m.mgmt_ip }}" placeholder="not set" readonly></td>
               <td>
                 {% if m.has_config %}
                 <span class="badge badge-green">{{ m.hostname }}.ios</span>
@@ -179,9 +179,10 @@
 
       {% if not mappings %}
       <div class="form-hint mt-2" style="margin-top:8px">
-        No mappings yet — add rows manually or click <strong>Auto-populate</strong> to fill from project hosts.
+        No management addresses yet — set them on the
+        <a href="{{ url_for('projects.deployment_ips', project_name=project_name) }}">Deployment IPs</a>
+        page first.
       </div>
-      <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="autoPopulate()">Auto-populate from hosts</button>
       {% endif %}
     </div>
   </div>
@@ -319,6 +320,9 @@ async function autoPopulate() {
   }
 }
 
+/* The host list is owned by the Deployment IPs page. This only saves the
+   deploy settings, and passes the mapping back unchanged so the existing
+   endpoint keeps working. */
 async function saveMappings() {
   const rows = document.querySelectorAll('#mapping-body tr');
   const mappings = [];
@@ -336,7 +340,7 @@ async function saveMappings() {
     body: JSON.stringify({ mappings, rollback_timeout: timeout })
   });
   const data = await res.json();
-  if (data.ok) toast('Mapping saved');
+  if (data.ok) toast('Settings saved');
   else toast(data.error || 'Save failed');
 }
 
