@@ -309,6 +309,13 @@ function pollJob(jobId) {
     try {
       const res  = await fetch(
         `/projects/${encodeURIComponent(PROJECT)}/firmware/status/${jobId}`);
+      if (!res.ok) {
+        clearTimeout(pollTimer);
+        document.getElementById('fw-start').disabled = false;
+        setStatus(`Lost track of this job (status ${res.status}). It may still `
+          + `be running — reload to check.`, 'text-danger');
+        return;
+      }
       const job = await res.json();
 
       if (job.output !== undefined) {

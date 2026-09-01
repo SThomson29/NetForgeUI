@@ -133,13 +133,31 @@ async function pollStatus() {
   if (!currentJobId) return;
   try {
     const res  = await fetch('/projects/' + PROJECT_NAME + '/generate/status/' + currentJobId);
-    const data = await res.json();
     const output = document.getElementById('output-box');
     const status = document.getElementById('run-status');
     const btn    = document.getElementById('run-btn');
 
-    output.textContent = data.output || '';
-    output.scrollTop   = output.scrollHeight;
+    if (!res.ok) {
+      // The job is unknown to whichever process answered. Say so rather than
+      // blanking the log and stopping silently.
+      clearInterval(pollInterval);
+      pollInterval = null;
+      btn.disabled = false;
+      status.innerHTML = '<span class="status-badge status-failed">Lost job</span>';
+      output.textContent += '\n[NetForgeUI] Lost track of this job (status '
+        + res.status + '). The run may still be in progress — reload to see '
+        + 'any configs it produced.\n';
+      return;
+    }
+
+    const data = await res.json();
+
+    // Only overwrite when there is something to write; an empty field should
+    // never wipe output already on screen.
+    if (data.output) {
+      output.textContent = data.output;
+      output.scrollTop   = output.scrollHeight;
+    }
 
     if (data.status !== 'running') {
       clearInterval(pollInterval);

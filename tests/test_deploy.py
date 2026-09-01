@@ -73,6 +73,30 @@ def read_mapping(app, project_name):
 # Unit tests — inventory builder
 # ---------------------------------------------------------------------------
 
+def post_and_wait(client, url, payload, timeout=5.0):
+    """Start a deploy job and poll until it finishes, as the page does.
+
+    Deploy runs in a background thread now, so the POST returns only a job id
+    and the results arrive from the status endpoint.
+    """
+    import time
+    res = client.post(url, json=payload, content_type='application/json')
+    assert res.status_code == 200, res.data
+    started = json.loads(res.data)
+    if not started.get('ok'):
+        return started
+    job_id = started['job_id']
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        poll = client.get(url.rsplit('/', 1)[0] + '/status/' + job_id)
+        job = json.loads(poll.data)
+        if job['status'] not in ('starting', 'running'):
+            job['ok'] = job['status'] == 'done'
+            return job
+        time.sleep(0.02)
+    raise AssertionError('job did not finish within %ss' % timeout)
+
+
 class TestBuildInventory:
     """Test the _build_inventory helper function."""
 
@@ -244,7 +268,6 @@ class TestSaveMappingRoute:
             },
             content_type='application/json',
         )
-        assert res.status_code == 200
         data = json.loads(res.data)
         assert data['ok'] is True
 
@@ -260,7 +283,6 @@ class TestSaveMappingRoute:
             json={'mappings': [], 'rollback_timeout': 5},
             content_type='application/json',
         )
-        assert res.status_code == 200
         data = json.loads(res.data)
         assert data['ok'] is True
 
@@ -283,7 +305,6 @@ class TestAutoPopulate:
     def test_auto_populate_from_hosts(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.get('/projects/deploy-test/deploy/auto-populate')
-        assert res.status_code == 200
         data = json.loads(res.data)
         assert data['ok'] is True
 
@@ -340,33 +361,42 @@ class TestDryRun:
                     'commands': ['hostname CO-CORE-SW-01'],
                 },
             ]
-        return patch(
-            'app.deploy_routes._run_playbook',
-            return_value=(True, '', results)
-        )
+        import app.deploy_routes as dr
+
+        def _fake(job_id, playbook_name, repo_dir, ansible_bin,
+                  inventory, extra_vars, limit_hosts=None):
+            with dr._deploy_jobs_lock:
+                dr._deploy_jobs[job_id].update(
+                    status='done', returncode=0, results=results, output='')
+
+        return patch('app.deploy_routes._run_playbook_job', _fake)
 
     def _mock_playbook_failure(self, error_output='Connection refused'):
-        return patch(
-            'app.deploy_routes._run_playbook',
-            return_value=(False, error_output, [])
-        )
+        import app.deploy_routes as dr
+
+        def _fake(job_id, playbook_name, repo_dir, ansible_bin,
+                  inventory, extra_vars, limit_hosts=None):
+            with dr._deploy_jobs_lock:
+                dr._deploy_jobs[job_id].update(
+                    status='failed', returncode=2, results=[],
+                    output=error_output)
+
+        return patch('app.deploy_routes._run_playbook_job', _fake)
 
     def test_dryrun_returns_diffs(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         with self._mock_playbook_success():
-            res = auth_client.post(
+            data = post_and_wait(
+                auth_client,
                 '/projects/deploy-test/deploy/dryrun',
-                json={
+                {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
                     ],
                     'username': 'admin',
                     'password': 'testpass',
                 },
-                content_type='application/json',
             )
-        assert res.status_code == 200
-        data = json.loads(res.data)
         assert data['ok'] is True
         assert len(data['results']) == 1
         assert data['results'][0]['changed'] is True
@@ -382,32 +412,30 @@ class TestDryRun:
             'commands': [],
         }]
         with self._mock_playbook_success(results=no_change):
-            res = auth_client.post(
+            data = post_and_wait(
+                auth_client,
                 '/projects/deploy-test/deploy/dryrun',
-                json={
+                {
                     'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                     'username': 'admin',
                     'password': 'testpass',
                 },
-                content_type='application/json',
             )
-        data = json.loads(res.data)
         assert data['ok'] is True
         assert data['results'][0]['changed'] is False
 
     def test_dryrun_playbook_failure(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         with self._mock_playbook_failure('SSH timeout'):
-            res = auth_client.post(
+            data = post_and_wait(
+                auth_client,
                 '/projects/deploy-test/deploy/dryrun',
-                json={
+                {
                     'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                     'username': 'admin',
                     'password': 'testpass',
                 },
-                content_type='application/json',
             )
-        data = json.loads(res.data)
         assert data['ok'] is False
         assert 'SSH timeout' in data['output']
 
@@ -465,9 +493,10 @@ class TestDryRun:
             },
         ]
         with self._mock_playbook_success(results=multi_results):
-            res = auth_client.post(
+            data = post_and_wait(
+                auth_client,
                 '/projects/deploy-test/deploy/dryrun',
-                json={
+                {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
                         {'hostname': 'CO-ACC-SW-01', 'mgmt_ip': '10.1.100.2'},
@@ -475,9 +504,7 @@ class TestDryRun:
                     'username': 'admin',
                     'password': 'testpass',
                 },
-                content_type='application/json',
             )
-        data = json.loads(res.data)
         assert data['ok'] is True
         assert len(data['results']) == 2
         changed_hosts = [r['hostname'] for r in data['results'] if r['changed']]
@@ -507,10 +534,15 @@ class TestDeployPush:
                     'commands': [],
                 },
             ]
-        return patch(
-            'app.deploy_routes._run_playbook',
-            return_value=(True, '', results)
-        )
+        import app.deploy_routes as dr
+
+        def _fake(job_id, playbook_name, repo_dir, ansible_bin,
+                  inventory, extra_vars, limit_hosts=None):
+            with dr._deploy_jobs_lock:
+                dr._deploy_jobs[job_id].update(
+                    status='done', returncode=0, results=results, output='')
+
+        return patch('app.deploy_routes._run_playbook_job', _fake)
 
     def _mock_push_partial_failure(self):
         """One switch confirmed, one unreachable."""
@@ -540,17 +572,23 @@ class TestDeployPush:
                 'commands': [],
             },
         ]
-        return patch(
-            'app.deploy_routes._run_playbook',
-            return_value=(True, '', results)
-        )
+        import app.deploy_routes as dr
+
+        def _fake(job_id, playbook_name, repo_dir, ansible_bin,
+                  inventory, extra_vars, limit_hosts=None):
+            with dr._deploy_jobs_lock:
+                dr._deploy_jobs[job_id].update(
+                    status='done', returncode=0, results=results, output='')
+
+        return patch('app.deploy_routes._run_playbook_job', _fake)
 
     def test_push_success(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         with self._mock_push_success():
-            res = auth_client.post(
+            data = post_and_wait(
+                auth_client,
                 '/projects/deploy-test/deploy/push',
-                json={
+                {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
                     ],
@@ -558,10 +596,7 @@ class TestDeployPush:
                     'password': 'testpass',
                     'rollback_timeout': 5,
                 },
-                content_type='application/json',
             )
-        assert res.status_code == 200
-        data = json.loads(res.data)
         assert data['ok'] is True
         assert len(data['results']) == 1
         assert data['results'][0]['confirmed'] is True
@@ -570,9 +605,10 @@ class TestDeployPush:
     def test_push_partial_failure(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         with self._mock_push_partial_failure():
-            res = auth_client.post(
+            data = post_and_wait(
+                auth_client,
                 '/projects/deploy-test/deploy/push',
-                json={
+                {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
                         {'hostname': 'CO-ACC-SW-01', 'mgmt_ip': '10.1.100.2'},
@@ -581,9 +617,7 @@ class TestDeployPush:
                     'password': 'testpass',
                     'rollback_timeout': 5,
                 },
-                content_type='application/json',
             )
-        data = json.loads(res.data)
         assert data['ok'] is True
         confirmed = [r for r in data['results'] if r['confirmed']]
         rollback = [r for r in data['results'] if r['rollback_pending']]
@@ -595,9 +629,10 @@ class TestDeployPush:
     def test_push_includes_checkpoint_name(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         with self._mock_push_success():
-            res = auth_client.post(
+            data = post_and_wait(
+                auth_client,
                 '/projects/deploy-test/deploy/push',
-                json={
+                {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
                     ],
@@ -605,9 +640,7 @@ class TestDeployPush:
                     'password': 'testpass',
                     'rollback_timeout': 5,
                 },
-                content_type='application/json',
             )
-        data = json.loads(res.data)
         assert data['results'][0]['checkpoint'].startswith('netforge-pre-')
 
     def test_push_missing_credentials(self, app, auth_client):
@@ -630,9 +663,12 @@ class TestDeployPush:
 
         captured_extra_vars = {}
 
-        def mock_run(playbook, inventory, extra_vars, limit_hosts=None):
+        import app.deploy_routes as dr
+
+        def mock_run(job_id, playbook, repo_dir, ansible_bin,
+                     inventory, extra_vars, limit_hosts=None):
             captured_extra_vars.update(extra_vars)
-            return (True, '', [{
+            _results = [{
                 'hostname': 'CO-CORE-SW-01',
                 'mgmt_ip': '10.1.100.1',
                 'checkpoint': 'netforge-pre-test',
@@ -643,18 +679,23 @@ class TestDeployPush:
                 'rollback_timeout_mins': 10,
                 'diff': {},
                 'commands': [],
-            }])
+            }]
+            with dr._deploy_jobs_lock:
+                dr._deploy_jobs[job_id].update(
+                    status='done', returncode=0, results=_results, output='')
 
-        with patch('app.deploy_routes._run_playbook', side_effect=mock_run):
-            auth_client.post(
+        # Wait for the job rather than asserting straight after the POST —
+        # the worker runs in a thread, so a bare post is a race.
+        with patch('app.deploy_routes._run_playbook_job', side_effect=mock_run):
+            post_and_wait(
+                auth_client,
                 '/projects/deploy-test/deploy/push',
-                json={
+                {
                     'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                     'username': 'admin',
                     'password': 'testpass',
                     'rollback_timeout': 10,
                 },
-                content_type='application/json',
             )
 
         assert captured_extra_vars['rollback_timeout'] == 10
@@ -1087,3 +1128,134 @@ class TestSshTransportDependency:
         assert (importlib.util.find_spec('pylibsshext')
                 or importlib.util.find_spec('paramiko')), (
             'ansible-core is installed but neither pylibssh nor paramiko is')
+
+
+# ---------------------------------------------------------------------------
+# Job model — deploy runs in the background with streaming output
+# ---------------------------------------------------------------------------
+
+class TestDeployJobModel:
+
+    def _stub(self, tmp_path, script):
+        p = tmp_path / 'stub-ansible'
+        p.write_text(script)
+        p.chmod(0o755)
+        return str(p)
+
+    def _repo(self, tmp_path, app):
+        repo = tmp_path / 'repo'
+        (repo / 'playbooks').mkdir(parents=True)
+        for pb in ('deploy_dryrun.yml', 'deploy_push.yml'):
+            (repo / 'playbooks' / pb).write_text('---\n')
+        app.config['CONFIGGEN_REPO'] = str(repo)
+        return str(repo)
+
+    def test_output_streams_while_running(self, app, tmp_path):
+        """The point of the job model: progress is visible mid-run.
+
+        A synchronous request showed only a spinner, so a slow SSH connect
+        was indistinguishable from a hung page.
+        """
+        import time
+        import app.deploy_routes as dr
+
+        self._repo(tmp_path, app)
+        app.config['ANSIBLE_BIN'] = self._stub(tmp_path, (
+            '#!/bin/sh\n'
+            'echo "PLAY [Dry Run] ***"\n'
+            'sleep 0.5\n'
+            'echo "TASK [Grab current running config] ***"\n'
+            'sleep 0.5\n'
+            'echo "PLAY RECAP ***"\n'
+        ))
+
+        job_id = dr._start_deploy_job(
+            app, 'deploy_dryrun.yml',
+            {'all': {'hosts': {'SW-01': {'ansible_host': '10.0.0.1'}}}},
+            {'config_dir': '/x'}, ['SW-01'])
+
+        # Poll for the first line rather than sampling at a fixed moment —
+        # process startup varies by machine. What matters is that output is
+        # readable BEFORE the job finishes, not exactly when it appears.
+        saw_output_while_running = False
+        final = None
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            with dr._deploy_jobs_lock:
+                snap = dict(dr._deploy_jobs[job_id])
+            if snap['status'] in ('starting', 'running') and snap['output']:
+                saw_output_while_running = True
+            if snap['status'] not in ('starting', 'running'):
+                final = snap
+                break
+            time.sleep(0.05)
+
+        assert saw_output_while_running, 'no output was visible before the job finished'
+        assert final is not None, 'job did not finish within 20s'
+        assert final['status'] == 'done'
+        assert 'PLAY RECAP' in final['output']
+
+    def test_failure_keeps_output_for_diagnosis(self, app, tmp_path):
+        import time
+        import app.deploy_routes as dr
+
+        self._repo(tmp_path, app)
+        app.config['ANSIBLE_BIN'] = self._stub(tmp_path, (
+            '#!/bin/sh\n'
+            'echo "fatal: [SW-01]: ssh connect failed: Connection refused"\n'
+            'exit 2\n'
+        ))
+
+        job_id = dr._start_deploy_job(
+            app, 'deploy_dryrun.yml', {'all': {'hosts': {}}}, {}, None)
+        for _ in range(60):
+            time.sleep(0.05)
+            with dr._deploy_jobs_lock:
+                job = dict(dr._deploy_jobs[job_id])
+            if job['status'] not in ('starting', 'running'):
+                break
+        assert job['status'] == 'failed'
+        assert job['returncode'] == 2
+        assert 'Connection refused' in job['output']
+
+    def test_missing_playbook_is_reported(self, app, tmp_path):
+        import time
+        import app.deploy_routes as dr
+        app.config['CONFIGGEN_REPO'] = str(tmp_path / 'absent')
+        job_id = dr._start_deploy_job(
+            app, 'deploy_dryrun.yml', {'all': {'hosts': {}}}, {}, None)
+        for _ in range(40):
+            time.sleep(0.05)
+            with dr._deploy_jobs_lock:
+                job = dict(dr._deploy_jobs[job_id])
+            if job['status'] not in ('starting', 'running'):
+                break
+        assert job['status'] == 'failed'
+        assert 'Playbook not found' in job['output']
+
+    def test_status_requires_login(self, client):
+        assert client.get('/projects/p/deploy/status/abc').status_code == 401
+
+    def test_unknown_job_is_404(self, auth_client, app):
+        setup_deploy_project(app, auth_client)
+        assert auth_client.get(
+            '/projects/deploy-test/deploy/status/nope').status_code == 404
+
+
+class TestSingleWorkerRequirement:
+
+    def test_dockerfile_runs_one_worker(self):
+        """In-process job stores break with more than one gunicorn worker.
+
+        The POST that starts a job and the GETs that poll it would land on
+        different processes, so polling 404s and live output stops — the
+        symptom being intermittent, depending which worker answers.
+        """
+        import os
+        dockerfile = os.path.join(os.path.dirname(__file__), '..', 'Dockerfile')
+        with open(dockerfile) as f:
+            body = f.read()
+        cmd = [l for l in body.splitlines() if l.startswith('CMD')]
+        assert cmd, 'no CMD line found'
+        assert '--workers 1' in cmd[0], (
+            'gunicorn must run a single worker until job state is shared')

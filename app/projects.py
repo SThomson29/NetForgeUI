@@ -567,6 +567,7 @@ def api_get_allocations(project_name):
 # ---------------------------------------------------------------------------
 from .deploy_routes import (
     project_deploy,
+    deploy_status,
     deployment_ips,
     deployment_ips_save,
     deploy_save_mapping,
@@ -643,4 +644,9 @@ projects_bp.add_url_rule(
     'deploy_push',
     deploy_push,
     methods=['POST']
+)
+projects_bp.add_url_rule(
+    '/projects/<project_name>/deploy/status/<job_id>',
+    'deploy_status',
+    deploy_status
 )
