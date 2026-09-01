@@ -9,6 +9,8 @@ Handles:
 
 import json
 import os
+import uuid
+import threading
 import subprocess
 import tempfile
 import glob
@@ -82,6 +84,129 @@ def _build_inventory(hosts, username, password):
             hostvars['deploy_config_file'] = h['config_file']
         inventory['all']['hosts'][h['hostname']] = hostvars
     return inventory
+
+
+# ── Job store ──────────────────────────────────────────────
+#
+# Deploy runs can take minutes — an SSH connect to an unreachable switch
+# blocks until it times out. Running synchronously gave the page nothing to
+# show but a spinner, with no way to tell a slow connection from a wedged
+# one. These run in a thread with output streamed line by line, the same way
+# firmware does.
+
+_deploy_jobs = {}
+_deploy_jobs_lock = threading.Lock()
+
+DEPLOY_TIMEOUT_SECS = 30 * 60
+
+
+def _run_playbook_job(job_id, playbook_name, repo_dir, ansible_bin,
+                      inventory_dict, extra_vars, limit_hosts=None):
+    """Run a deploy playbook, streaming output into the job store.
+
+    Runs in a worker thread, so every config value it needs is passed in —
+    there is no application context here.
+    """
+    def _set(**kw):
+        with _deploy_jobs_lock:
+            _deploy_jobs[job_id].update(kw)
+
+    def _append(line):
+        with _deploy_jobs_lock:
+            _deploy_jobs[job_id]['output'] += line
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        inv_path = os.path.join(tmpdir, 'inventory.yml')
+        with open(inv_path, 'w') as f:
+            yaml.dump(inventory_dict, f, default_flow_style=False)
+
+        results_dir = os.path.join(tmpdir, 'results')
+        os.makedirs(results_dir, exist_ok=True)
+        extra_vars = dict(extra_vars)
+        extra_vars['results_file'] = results_dir
+
+        vars_path = os.path.join(tmpdir, 'extra_vars.yml')
+        with open(vars_path, 'w') as f:
+            yaml.dump(extra_vars, f, default_flow_style=False)
+
+        playbook_path = os.path.join(repo_dir, 'playbooks', playbook_name)
+        if not os.path.isfile(playbook_path):
+            _set(status='failed', returncode=-1,
+                 output='Playbook not found: %s' % playbook_path)
+            return
+
+        cmd = [ansible_bin, playbook_path, '-i', inv_path, '-e', '@' + vars_path]
+        if limit_hosts:
+            cmd.extend(['--limit', ','.join(limit_hosts)])
+        if 'dryrun' in playbook_name:
+            cmd.extend(['--check', '--diff'])
+
+        env = os.environ.copy()
+        env['ANSIBLE_HOST_KEY_CHECKING'] = 'False'
+        env['ANSIBLE_NOCOLOR'] = '1'
+        env['PYTHONUNBUFFERED'] = '1'
+
+        _set(status='running')
+
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=repo_dir, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+        except FileNotFoundError:
+            _set(status='failed', returncode=-1,
+                 output='ansible-playbook not found. Is ansible-core '
+                        'installed in this image?')
+            return
+
+        timer = threading.Timer(DEPLOY_TIMEOUT_SECS, proc.kill)
+        timer.start()
+        try:
+            for line in proc.stdout:
+                _append(line)
+            proc.wait()
+        finally:
+            timer.cancel()
+
+        results = []
+        for rf in sorted(glob.glob(os.path.join(results_dir, '*.json'))):
+            try:
+                with open(rf) as f:
+                    results.append(json.load(f))
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        rc = proc.returncode
+        _set(status='done' if rc == 0 else 'failed',
+             returncode=rc, results=results)
+
+
+def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts):
+    """Kick off a playbook in the background. Returns the job id."""
+    job_id = str(uuid.uuid4())
+    with _deploy_jobs_lock:
+        _deploy_jobs[job_id] = {
+            'status': 'starting', 'output': '',
+            'returncode': None, 'results': [],
+            'playbook': playbook_name,
+        }
+
+    repo_dir = app.config['CONFIGGEN_REPO']
+    ansible_bin = app.config.get('ANSIBLE_BIN', 'ansible-playbook')
+
+    def _worker():
+        try:
+            _run_playbook_job(job_id, playbook_name, repo_dir, ansible_bin,
+                              inventory, extra_vars, limit_hosts)
+        except Exception as ex:                     # noqa: BLE001
+            with _deploy_jobs_lock:
+                _deploy_jobs[job_id]['status'] = 'failed'
+                _deploy_jobs[job_id]['returncode'] = -1
+                _deploy_jobs[job_id]['output'] += '\n%s\n' % ex
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return job_id
 
 
 def _run_playbook(playbook_name, inventory_dict, extra_vars, limit_hosts=None):
@@ -311,18 +436,22 @@ def deploy_dryrun(project_name):
         'deploy_password': password,
     }
 
-    success, output, results = _run_playbook(
-        'deploy_dryrun.yml',
-        inventory,
-        extra_vars,
+    job_id = _start_deploy_job(
+        app, 'deploy_dryrun.yml', inventory, extra_vars,
         limit_hosts=[h['hostname'] for h in hosts]
     )
+    return jsonify(ok=True, job_id=job_id)
 
-    return jsonify(
-        ok=success,
-        output=output if not success else '',
-        results=results
-    )
+
+@login_required
+def deploy_status(project_name, job_id):
+    """Poll a running or finished deploy job."""
+    with _deploy_jobs_lock:
+        job = _deploy_jobs.get(job_id)
+        snapshot = dict(job) if job else None
+    if not snapshot:
+        abort(404)
+    return jsonify(snapshot)
 
 
 @login_required
@@ -353,15 +482,8 @@ def deploy_push(project_name):
         'rollback_timeout': rollback_timeout,
     }
 
-    success, output, results = _run_playbook(
-        'deploy_push.yml',
-        inventory,
-        extra_vars,
+    job_id = _start_deploy_job(
+        app, 'deploy_push.yml', inventory, extra_vars,
         limit_hosts=[h['hostname'] for h in hosts]
     )
-
-    return jsonify(
-        ok=success,
-        output=output if not success else '',
-        results=results
-    )
+    return jsonify(ok=True, job_id=job_id)

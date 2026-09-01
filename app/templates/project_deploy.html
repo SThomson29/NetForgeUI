@@ -397,8 +397,9 @@ async function startDryRun() {
 
   goToStep(2);
   const container = document.getElementById('dryrun-results');
-  container.innerHTML = '<div class="flex items-center gap-2" style="padding:24px;justify-content:center"><span class="text-secondary">Running dry run…</span></div>';
+  container.innerHTML = liveLogMarkup('Running dry run — connecting to switches…');
 
+  let start;
   try {
     const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/dryrun`, {
       method: 'POST',
@@ -409,22 +410,41 @@ async function startDryRun() {
         password: creds.password
       })
     });
-    const data = await res.json();
-
-    if (!data.ok) {
-      container.innerHTML = `
-        <div class="alert alert-danger">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-          <span>${data.error || 'Dry run failed'}</span>
-        </div>
-        <pre class="code-block">${data.output || ''}</pre>`;
-      return;
-    }
-
-    renderDryRunResults(data.results);
+    start = await res.json();
   } catch (err) {
     container.innerHTML = `<div class="alert alert-danger"><span>${err.message}</span></div>`;
+    return;
   }
+
+  if (!start.ok) {
+    container.innerHTML = `
+      <div class="alert alert-danger">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        <span>${start.error || 'Dry run failed to start'}</span>
+      </div>`;
+    return;
+  }
+
+  pollDeployJob(start.job_id, container, (job) => {
+    /* Results come from the per-host files, so they can exist even when the
+       playbook exits non-zero — show them if we have them, and always keep
+       the log available so a failure can be read. */
+    if (job.results && job.results.length) {
+      renderDryRunResults(job.results);
+      if (job.status !== 'done') {
+        container.insertAdjacentHTML('beforeend',
+          `<details style="margin-top:12px"><summary class="text-sm text-secondary">Playbook output</summary>
+           <pre class="code-block" style="white-space:pre-wrap">${job.output || ''}</pre></details>`);
+      }
+      return;
+    }
+    container.innerHTML = `
+      <div class="alert alert-danger">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        <span>Dry run failed — no results returned.</span>
+      </div>
+      <pre class="code-block" style="white-space:pre-wrap">${job.output || ''}</pre>`;
+  });
 }
 
 function renderDryRunResults(results) {
@@ -502,6 +522,55 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 
+/* ── Job polling ──
+   Both dry run and push now start a background job and stream the playbook
+   output, so a slow SSH connect looks like progress rather than a hung page. */
+
+function liveLogMarkup(label) {
+  return `
+    <div class="flex items-center gap-2" style="margin-bottom:10px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           style="animation:spin 1s linear infinite;width:14px;height:14px"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+      <span class="text-secondary" id="job-label">${label}</span>
+    </div>
+    <pre class="code-block" id="job-log" style="max-height:340px;overflow:auto;white-space:pre-wrap"></pre>`;
+}
+
+/* Polls until the job finishes, then hands the finished job to onDone. */
+function pollDeployJob(jobId, container, onDone) {
+  const tick = async () => {
+    let job;
+    try {
+      const res = await fetch(
+        `/projects/${encodeURIComponent(PROJECT)}/deploy/status/${jobId}`);
+      if (!res.ok) {
+        container.innerHTML =
+          `<div class="alert alert-danger"><span>Lost track of this job (status ${res.status}).`
+          + ` It may still be running — reload the page to check.</span></div>`;
+        return;
+      }
+      job = await res.json();
+    } catch (e) {
+      container.innerHTML = `<div class="alert alert-danger"><span>Lost contact with the job: ${e}</span></div>`;
+      return;
+    }
+
+    const log = document.getElementById('job-log');
+    if (log && job.output !== undefined) {
+      const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+      log.textContent = job.output;
+      if (atBottom) log.scrollTop = log.scrollHeight;
+    }
+
+    if (job.status === 'running' || job.status === 'starting') {
+      setTimeout(tick, 2000);
+      return;
+    }
+    onDone(job);
+  };
+  tick();
+}
+
 /* ── Deploy ── */
 
 async function confirmDeploy() {
@@ -516,10 +585,18 @@ async function confirmDeploy() {
 
   goToStep(3);
   const container = document.getElementById('deploy-results');
-  container.innerHTML = '<div class="flex items-center gap-2" style="padding:24px;justify-content:center"><span class="text-secondary">Deploying to switches…</span></div>';
+  container.innerHTML = liveLogMarkup('Deploying to switches…');
 
   const timeout = parseInt(document.getElementById('rollback-timeout').value) || 5;
 
+  const resetBtn = () => {
+    btn.disabled = false;
+    btn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+      Confirm & Deploy`;
+  };
+
+  let start;
   try {
     const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/push`, {
       method: 'POST',
@@ -531,16 +608,34 @@ async function confirmDeploy() {
         rollback_timeout: timeout
       })
     });
-    const data = await res.json();
-    renderDeployResults(data.results || [], data);
+    start = await res.json();
   } catch (err) {
     container.innerHTML = `<div class="alert alert-danger"><span>${err.message}</span></div>`;
+    resetBtn();
+    return;
   }
 
-  btn.disabled = false;
-  btn.innerHTML = `
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-    Confirm & Deploy`;
+  if (!start.ok) {
+    container.innerHTML = `<div class="alert alert-danger"><span>${start.error || 'Deploy failed to start'}</span></div>`;
+    resetBtn();
+    return;
+  }
+
+  pollDeployJob(start.job_id, container, (job) => {
+    if (job.results && job.results.length) {
+      renderDeployResults(job.results, job);
+      if (job.status !== 'done') {
+        container.insertAdjacentHTML('beforeend',
+          `<details style="margin-top:12px"><summary class="text-sm text-secondary">Playbook output</summary>
+           <pre class="code-block" style="white-space:pre-wrap">${job.output || ''}</pre></details>`);
+      }
+    } else {
+      container.innerHTML = `
+        <div class="alert alert-danger"><span>Deploy failed — no results returned.</span></div>
+        <pre class="code-block" style="white-space:pre-wrap">${job.output || ''}</pre>`;
+    }
+    resetBtn();
+  });
 }
 
 function renderDeployResults(results, data) {

@@ -40,4 +40,18 @@ ENV PORT=5000
 ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
 
 # Run bootstrap tasks (admin user, repo sync, orphan cleanup) then start Gunicorn
-CMD ["sh", "-c", "python run.py --bootstrap && gunicorn --bind 0.0.0.0:${PORT} --workers 2 --threads 4 --timeout 120 'app:create_app()'"]
+# --workers 1 is deliberate and must stay at 1.
+#
+# Generate, deploy and firmware all run as background jobs whose state lives in
+# a process-local dict (_jobs in projects.py, _deploy_jobs in deploy_routes.py,
+# _fw_jobs in firmware_routes.py). With more than one worker, the POST that
+# starts a job and the GETs that poll it land on different processes, so
+# polling 404s and the live output stops — intermittently, depending on which
+# worker answers.
+#
+# One worker costs nothing here: the workload is I/O-bound (subprocesses,
+# Docker, SSH), gthread handles concurrent requests within the process, and
+# jobs run in their own threads. If genuine concurrency ever demands more
+# workers, the prerequisite is shared job state (Redis or SQLite), not simply
+# raising this number.
+CMD ["sh", "-c", "python run.py --bootstrap && gunicorn --bind 0.0.0.0:${PORT} --workers 1 --threads 8 --timeout 120 'app:create_app()'"]
