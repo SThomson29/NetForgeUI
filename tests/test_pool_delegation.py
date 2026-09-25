@@ -360,3 +360,17 @@ class TestPoolTypeLabels:
         with app.app_context():
             pools = get_project_config(app, 'admin', proj)['pools']
         assert pools[0]['type'] == 'vlan_supernet'
+
+
+class TestPoolFormInitialisation:
+
+    def test_form_is_configured_on_load(self, app, auth_client, proj):
+        """updatePoolForm only ran from onchange handlers.
+
+        The default selection is "Unique", so its type-specific fields — the
+        delegation source selector among them — stayed unset until the type
+        dropdown was changed and changed back.
+        """
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        assert "addEventListener('DOMContentLoaded', updatePoolForm)" in body, \
+            'pool form is never initialised on page load'
