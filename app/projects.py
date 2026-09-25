@@ -12,10 +12,11 @@ from .project import (
     sync_allocations as _sync_allocations,
     list_projects, create_project, delete_project,
     get_project_config, save_project_config,
-    add_pool, remove_pool,
+    add_pool, remove_pool, PoolOverlapError,
     get_available_ips, allocate_unique, release_unique,
     get_available_ptp_pairs, allocate_ptp, release_ptp,
     get_carved_subnets, assign_vlan_subnet, release_vlan_subnet,
+    sort_by_address,
     get_common, save_common,
     get_conventions, save_conventions,
     get_all_allocations,
@@ -415,8 +416,24 @@ def api_add_pool(project_name):
     try:
         add_pool(app, current_user.username, project_name, data)
         return jsonify({'ok': True, 'id': data['id']})
+    except PoolOverlapError as e:
+        return jsonify({'ok': False, 'error': str(e), 'overlap': True}), 400
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 400
+
+
+@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>/carved')
+@login_required
+def api_carved_subnets(project_name, pool_id):
+    """Carved subnets of a supernet, for the delegation picker.
+
+    Only unassigned, undelegated subnets can be taken.
+    """
+    app = current_app._get_current_object()
+    carved = get_carved_subnets(app, current_user.username, project_name, pool_id)
+    free = [s for s, v in sort_by_address(carved)
+            if v.get('status') == 'carved']
+    return jsonify({'ok': True, 'subnets': free})
 
 
 @projects_bp.route('/projects/<project_name>/api/pools/<pool_id>', methods=['DELETE'])
@@ -495,7 +512,8 @@ def api_assign_vlan(project_name):
         assign_vlan_subnet(app, current_user.username, project_name,
                            data['pool_id'], data['subnet'],
                            data['vlan_id'], data['vlan_name'],
-                           data['hostname'], data.get('peer_hostname'))
+                           data.get('hostname') or None,
+                           data.get('peer_hostname') or None)
         return jsonify({'ok': True})
     except ValueError as e:
         return jsonify({'ok': False, 'error': str(e)}), 400

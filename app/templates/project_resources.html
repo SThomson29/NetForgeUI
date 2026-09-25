@@ -1,4 +1,6 @@
 {% extends "base_project.html" %}
+{% set POOL_LABELS = {'unique': 'Unique', 'point_to_point': 'Point-to-point',
+                     'vlan_supernet': 'Supernet'} %}
 {% block title %}Resources — {{ project_name }} — NetForgeUI{% endblock %}
 {% block page_title %}{{ project_name }} / Resources{% endblock %}
 
@@ -45,7 +47,7 @@
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-weight:600;font-size:14px">{{ pool.name }}</span>
-        <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ pool.type.replace('_',' ') }}</span>
+        <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ POOL_LABELS.get(pool.type, pool.type.replace('_',' ')) }}</span>
       </div>
       <button class="btn btn-sm btn-danger" onclick="removePool('{{ pool.id }}', '{{ pool.name }}')">Remove</button>
     </div>
@@ -53,6 +55,10 @@
       {{ pool.subnet }}
       {% if pool.type == 'vlan_supernet' %} → /{{ pool.carve_prefix }} subnets{% endif %}
       {% if pool.type in ['unique'] %} /{{ pool.prefix }}{% endif %}
+      {% if pool.parent_pool_id %}
+        {% set parent = (config.get('pools', []) | selectattr('id','equalto',pool.parent_pool_id) | first) %}
+        <span style="font-family:inherit;color:#92400e"> · delegated from {{ parent.name if parent else pool.parent_pool_id }}</span>
+      {% endif %}
     </div>
   </div>
   {% endfor %}
@@ -72,14 +78,34 @@
         <select class="form-select" id="pool-type" onchange="updatePoolForm()">
           <option value="unique">Unique</option>
           <option value="point_to_point">Point-to-point (/31)</option>
-          <option value="vlan_supernet">VLAN supernet</option>
+          <option value="vlan_supernet">Supernet</option>
         </select>
       </div>
-      <div class="fld">
+      <div class="fld" id="field-subnet">
         <label class="lbl">Subnet</label>
         <input class="form-input" type="text" id="pool-subnet" placeholder="10.255.0.0/24">
       </div>
     </div>
+
+    <div class="grid3" id="pool-source-fields" style="display:none">
+      <div class="fld">
+        <label class="lbl">Address source</label>
+        <select class="form-select" id="pool-source" onchange="updatePoolForm()">
+          <option value="own">Its own range</option>
+          <option value="delegate">Take a subnet from a supernet</option>
+        </select>
+      </div>
+      <div class="fld" id="field-parent" style="display:none">
+        <label class="lbl">Supernet</label>
+        <select class="form-select" id="pool-parent" onchange="loadCarvedSubnets()"></select>
+      </div>
+      <div class="fld" id="field-parent-subnet" style="display:none">
+        <label class="lbl">Subnet to take</label>
+        <select class="form-select" id="pool-parent-subnet"></select>
+        <div class="form-hint" id="parent-subnet-hint"></div>
+      </div>
+    </div>
+
     <div class="grid3" id="pool-extra-fields">
       <div class="fld" id="field-prefix">
         <label class="lbl">Prefix length</label>
@@ -101,7 +127,7 @@
   <div class="card">
     <div class="card-header">SVI conventions</div>
     <p class="hint" style="margin-bottom:16px">
-      These offsets define where gateway and active gateway IPs sit within each /24 carved from a VLAN supernet pool.
+      These offsets define where gateway and active gateway IPs sit within each /24 carved from a supernet pool.
       Offset 1 = first host address (.1), offset 254 = last host in a /24 (.254).
     </p>
     <div class="grid3">
@@ -173,7 +199,7 @@
   <div class="card">
     <div class="card-header" style="display:flex;align-items:center;gap:10px">
       {{ pool.name }}
-      <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ pool.type.replace('_',' ') }}</span>
+      <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ POOL_LABELS.get(pool.type, pool.type.replace('_',' ')) }}</span>
     </div>
 
     {% if pool.type == 'unique' %}
@@ -259,6 +285,11 @@
           <td>
             {% if entry.status == 'assigned' %}
             <span class="assigned-badge">Assigned</span>
+            {% elif entry.status == 'delegated' %}
+            {% set child = (config.get('pools', []) | selectattr('id','equalto',entry.get('delegated_to')) | first) %}
+            <span class="pool-type-badge" style="background:#fef3c7;color:#92400e">
+              Delegated{% if child %} → {{ child.name }}{% endif %}
+            </span>
             {% else %}
             <span class="carved-badge">Available</span>
             {% endif %}
@@ -267,6 +298,9 @@
             {% if entry.status == 'assigned' %}
             <button class="btn btn-sm btn-danger"
               onclick="releaseVlan('{{ pool.id }}', '{{ subnet }}')">Release</button>
+            {% elif entry.status != 'delegated' %}
+            <button class="btn btn-sm"
+              onclick="openVlanAssign('{{ pool.id }}', '{{ subnet }}')">Assign VLAN</button>
             {% endif %}
           </td>
         </tr>
@@ -295,10 +329,58 @@ function switchTab(name) {
   event.target.classList.add('active');
 }
 
+/* Supernets available to delegate from, injected server-side. */
+const SUPERNETS = {{ (config.get('pools', []) | selectattr('type','equalto','vlan_supernet') | list) | tojson }};
+
 function updatePoolForm() {
-  const type = document.getElementById('pool-type').value;
-  document.getElementById('field-prefix').style.display  = type === 'unique' ? '' : 'none';
-  document.getElementById('field-carve').style.display   = type === 'vlan_supernet' ? '' : 'none';
+  const type   = document.getElementById('pool-type').value;
+  const canDelegate = (type === 'unique' || type === 'point_to_point') && SUPERNETS.length > 0;
+  const source = canDelegate ? document.getElementById('pool-source').value : 'own';
+
+  document.getElementById('field-prefix').style.display = type === 'unique' ? '' : 'none';
+  document.getElementById('field-carve').style.display  = type === 'vlan_supernet' ? '' : 'none';
+
+  // The source selector only appears when there is a supernet to take from.
+  document.getElementById('pool-source-fields').style.display = canDelegate ? '' : 'none';
+
+  const delegating = canDelegate && source === 'delegate';
+  document.getElementById('field-parent').style.display        = delegating ? '' : 'none';
+  document.getElementById('field-parent-subnet').style.display  = delegating ? '' : 'none';
+  // The range comes from the picked subnet when delegating, so hide the free field.
+  document.getElementById('field-subnet').style.display        = delegating ? 'none' : '';
+
+  if (delegating) {
+    const sel = document.getElementById('pool-parent');
+    if (!sel.options.length) {
+      sel.innerHTML = SUPERNETS.map(p =>
+        `<option value="${p.id}">${p.name} (${p.subnet} → /${p.carve_prefix})</option>`).join('');
+    }
+    loadCarvedSubnets();
+  }
+}
+
+async function loadCarvedSubnets() {
+  const parentId = document.getElementById('pool-parent').value;
+  const sel  = document.getElementById('pool-parent-subnet');
+  const hint = document.getElementById('parent-subnet-hint');
+  if (!parentId) return;
+  sel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    const res  = await fetch('/projects/' + PROJECT + '/api/pools/' + parentId + '/carved');
+    const data = await res.json();
+    const free = data.subnets || [];
+    if (!free.length) {
+      sel.innerHTML = '<option value="">No free subnets</option>';
+      hint.textContent = 'Every subnet in this supernet is already assigned or delegated.';
+      return;
+    }
+    sel.innerHTML = free.map(sn => `<option value="${sn}">${sn}</option>`).join('');
+    hint.textContent = free.length + ' free subnet(s). The one you pick stops being '
+                     + 'available to VLANs while this pool exists.';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Could not load subnets</option>';
+    hint.textContent = String(e);
+  }
 }
 
 async function addPool() {
@@ -308,11 +390,25 @@ async function addPool() {
   const prefix = parseInt(document.getElementById('pool-prefix').value) || 32;
   const carve  = parseInt(document.getElementById('pool-carve').value)  || 24;
 
-  if (!name || !subnet) { alert('Name and subnet are required.'); return; }
+  const delegating = (type === 'unique' || type === 'point_to_point')
+    && SUPERNETS.length > 0
+    && document.getElementById('pool-source').value === 'delegate';
+  if (!name) { alert('Name is required.'); return; }
+  if (!delegating && !subnet) { alert('Subnet is required.'); return; }
 
   const payload = { name, type, subnet };
   if (type === 'unique')        payload.prefix = prefix;
   if (type === 'vlan_supernet') payload.carve_prefix = carve;
+
+  // Delegated pools take their range from the chosen carved subnet.
+  const canDelegate = (type === 'unique' || type === 'point_to_point') && SUPERNETS.length > 0;
+  if (canDelegate && document.getElementById('pool-source').value === 'delegate') {
+    const parentId = document.getElementById('pool-parent').value;
+    const picked   = document.getElementById('pool-parent-subnet').value;
+    if (!parentId || !picked) { alert('Choose a supernet and a subnet to take.'); return; }
+    payload.subnet = picked;
+    payload.parent_pool_id = parentId;
+  }
 
   const res  = await fetch('/projects/' + PROJECT + '/api/pools', {
     method: 'POST',
@@ -411,6 +507,74 @@ async function releasePtp(poolId, ip) {
   location.reload();
 }
 
+/* Switches in this project, for the optional SVI owner picker. */
+const PROJECT_HOSTS = {{ (hosts or []) | map(attribute='hostname') | list | tojson }};
+
+function openVlanAssign(poolId, subnet) {
+  document.getElementById('vlan-subnet').value = subnet;
+  document.getElementById('vlan-id').value = '';
+  document.getElementById('vlan-name').value = '';
+  document.getElementById('vlan-error').style.display = 'none';
+
+  const blank = '<option value="">— none —</option>';
+  const opts  = PROJECT_HOSTS.map(h => `<option value="${h}">${h}</option>`).join('');
+  document.getElementById('vlan-host').innerHTML = blank + opts;
+  document.getElementById('vlan-peer').innerHTML = blank + opts;
+
+  const modal = document.getElementById('vlan-modal');
+  modal.dataset.poolId = poolId;
+  modal.dataset.subnet = subnet;
+  modal.style.display = 'flex';
+  document.getElementById('vlan-id').focus();
+}
+
+function closeVlanAssign() {
+  document.getElementById('vlan-modal').style.display = 'none';
+}
+
+function vlanError(msg) {
+  const el = document.getElementById('vlan-error');
+  el.textContent = msg || '';
+  el.style.display = msg ? 'block' : 'none';
+}
+
+async function submitVlanAssign() {
+  const modal = document.getElementById('vlan-modal');
+  const vlanId = document.getElementById('vlan-id').value.trim();
+  const name   = document.getElementById('vlan-name').value.trim();
+  const host   = document.getElementById('vlan-host').value;
+  const peer   = document.getElementById('vlan-peer').value;
+
+  if (!vlanId || !name) { vlanError('VLAN ID and name are required.'); return; }
+  const idNum = parseInt(vlanId, 10);
+  if (isNaN(idNum) || idNum < 1 || idNum > 4094) {
+    vlanError('VLAN ID must be between 1 and 4094.'); return;
+  }
+  if (peer && peer === host) {
+    vlanError('Peer must be a different switch.'); return;
+  }
+  // An active gateway is shared between a pair, so a peer without an owner
+  // has nothing to derive from.
+  if (peer && !host) { vlanError('Choose a switch before setting a peer.'); return; }
+
+  vlanError('');
+  const res = await fetch('/projects/' + PROJECT + '/api/allocations/vlan', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      pool_id: modal.dataset.poolId,
+      subnet:  modal.dataset.subnet,
+      vlan_id: String(idNum),
+      vlan_name: name,
+      hostname: host || null,
+      peer_hostname: peer || null,
+    })
+  });
+  const data = await res.json();
+  if (data.ok) location.reload();
+  else vlanError(data.error || 'Assignment failed');
+}
+
 async function releaseVlan(poolId, subnet) {
   if (!confirm('Release ' + subnet + '? This will also remove the derived SVI allocations.')) return;
   await fetch('/projects/' + PROJECT + '/api/allocations/vlan/release', {
@@ -421,4 +585,45 @@ async function releaseVlan(poolId, subnet) {
   location.reload();
 }
 </script>
+
+<!-- ─── Assign VLAN to a carved subnet ─── -->
+<div id="vlan-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:100;align-items:center;justify-content:center">
+  <div class="card" style="width:420px;margin:0">
+    <div class="card-header">Assign VLAN</div>
+    <div class="fld">
+      <label class="lbl">Subnet</label>
+      <input class="form-input" type="text" id="vlan-subnet" readonly>
+    </div>
+    <div class="grid2">
+      <div class="fld">
+        <label class="lbl">VLAN ID</label>
+        <input class="form-input" type="number" id="vlan-id" min="1" max="4094" placeholder="100">
+      </div>
+      <div class="fld">
+        <label class="lbl">Name</label>
+        <input class="form-input" type="text" id="vlan-name" placeholder="Users">
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="fld">
+        <label class="lbl">Switch <span style="font-weight:400;color:#888">(optional)</span></label>
+        <select class="form-select" id="vlan-host"></select>
+      </div>
+      <div class="fld">
+        <label class="lbl">Peer <span style="font-weight:400;color:#888">(optional)</span></label>
+        <select class="form-select" id="vlan-peer"></select>
+      </div>
+    </div>
+    <div class="form-hint">
+      Naming the VLAN reserves the subnet. Gateway addresses are only derived
+      once a switch is chosen — leave it blank to assign that later.
+    </div>
+    <div id="vlan-error" style="display:none;color:#dc2626;font-size:13px;margin-top:8px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn" onclick="closeVlanAssign()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitVlanAssign()">Assign</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}

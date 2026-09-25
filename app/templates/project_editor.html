@@ -106,6 +106,26 @@ function intToIP(i) {
   return [(i>>>24)&255,(i>>>16)&255,(i>>>8)&255,i&255].join('.');
 }
 
+/* Numeric ordering for CIDR strings — plain sort() is lexicographic, which
+   puts 10.100.10.0/24 before 10.100.2.0/24. */
+function ipSortKey(cidr) {
+  try {
+    const [base, pfx] = String(cidr).split('/');
+    const parts = base.split('.').map(Number);
+    if (parts.length !== 4 || parts.some(isNaN)) return [1, 0, 0];
+    const asInt = ((parts[0]<<24)>>>0) + (parts[1]<<16) + (parts[2]<<8) + parts[3];
+    return [0, asInt, parseInt(pfx) || 32];
+  } catch (e) { return [1, 0, 0]; }
+}
+
+function sortCidrs(list, keyFn) {
+  const k = keyFn || (x => x);
+  return list.slice().sort((a, b) => {
+    const ka = ipSortKey(k(a)), kb = ipSortKey(k(b));
+    return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
+  });
+}
+
 function generateSubnetIPs(subnet, allocPrefix) {
   try {
     const [base, subnetPrefixStr] = subnet.split('/');
@@ -1050,7 +1070,7 @@ function App() {
         const sviSubnetAllVlanPools = PROJECT_POOLS.filter(p => p.type === 'vlan_supernet');
         const sviSubnetOptions = sviSubnetAllVlanPools.flatMap(vp => {
           const subnets = (PROJECT_ALLOCS.vlan_supernet || {})[vp.id] || {};
-          return Object.entries(subnets).map(([s, e]) =>
+          return sortCidrs(Object.entries(subnets), ([s]) => s).map(([s, e]) =>
             ce('option', {key:s, value:s},
               '[' + vp.name + '] ' + s + (e.vlan_id ? ' VLAN ' + e.vlan_id : '') + (e.vlan_name ? ' ' + e.vlan_name : ''))
           );
