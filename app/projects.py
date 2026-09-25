@@ -16,6 +16,7 @@ from .project import (
     get_available_ips, allocate_unique, release_unique,
     get_available_ptp_pairs, allocate_ptp, release_ptp,
     get_carved_subnets, assign_vlan_subnet, release_vlan_subnet,
+    sort_by_address,
     get_common, save_common,
     get_conventions, save_conventions,
     get_all_allocations,
@@ -430,7 +431,7 @@ def api_carved_subnets(project_name, pool_id):
     """
     app = current_app._get_current_object()
     carved = get_carved_subnets(app, current_user.username, project_name, pool_id)
-    free = [s for s, v in sorted(carved.items())
+    free = [s for s, v in sort_by_address(carved)
             if v.get('status') == 'carved']
     return jsonify({'ok': True, 'subnets': free})
 
@@ -511,7 +512,8 @@ def api_assign_vlan(project_name):
         assign_vlan_subnet(app, current_user.username, project_name,
                            data['pool_id'], data['subnet'],
                            data['vlan_id'], data['vlan_name'],
-                           data['hostname'], data.get('peer_hostname'))
+                           data.get('hostname') or None,
+                           data.get('peer_hostname') or None)
         return jsonify({'ok': True})
     except ValueError as e:
         return jsonify({'ok': False, 'error': str(e)}), 400

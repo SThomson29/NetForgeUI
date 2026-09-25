@@ -241,3 +241,122 @@ class TestResourcesPageRendering:
         assert body['ok'] is False
         assert body.get('overlap') is True
         assert 'Delegate' in body['error']
+
+
+class TestAddressOrdering:
+    """CIDR and IP lists must order numerically, not lexicographically.
+
+    Plain string sorting puts 10.100.10.0/24 before 10.100.2.0/24, which
+    reads as random in a picker.
+    """
+
+    def test_helper_orders_cidrs_numerically(self):
+        from app.project import sort_by_address
+        out = sort_by_address(['10.100.100.0/24', '10.100.2.0/24',
+                               '10.100.11.0/24', '10.100.9.0/24'])
+        assert out == ['10.100.2.0/24', '10.100.9.0/24',
+                       '10.100.11.0/24', '10.100.100.0/24']
+
+    def test_helper_orders_bare_ips(self):
+        from app.project import sort_by_address
+        out = sort_by_address(['10.0.0.10', '10.0.0.2', '10.0.0.1'])
+        assert out == ['10.0.0.1', '10.0.0.2', '10.0.0.10']
+
+    def test_helper_tolerates_junk(self):
+        """A malformed key must sort last, not raise and blank the page."""
+        from app.project import sort_by_address
+        out = sort_by_address(['10.0.0.2', 'not-an-ip', '10.0.0.1'])
+        assert out[:2] == ['10.0.0.1', '10.0.0.2']
+        assert out[-1] == 'not-an-ip'
+
+    def test_helper_accepts_a_dict(self):
+        from app.project import sort_by_address
+        out = sort_by_address({'10.0.0.10': {}, '10.0.0.2': {}})
+        assert [k for k, _ in out] == ['10.0.0.2', '10.0.0.10']
+
+    def test_carved_endpoint_is_in_address_order(self, app, auth_client, proj):
+        """The delegation picker — a /16 carved to /24 gives 256 entries."""
+        data = auth_client.get(
+            '/projects/%s/api/pools/sn1/carved' % proj).get_json()
+        subnets = data['subnets']
+        assert subnets[0] == '10.100.0.0/24'
+        assert subnets[1] == '10.100.1.0/24'
+        assert subnets[2] == '10.100.2.0/24'
+        assert subnets[10] == '10.100.10.0/24'
+        assert subnets[-1] == '10.100.255.0/24'
+
+    def test_resources_table_is_in_address_order(self, app, auth_client, proj):
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        i2 = body.index('10.100.2.0/24')
+        i10 = body.index('10.100.10.0/24')
+        i100 = body.index('10.100.100.0/24')
+        assert i2 < i10 < i100, 'carved table is not in address order'
+
+
+class TestVlanAssignment:
+    """Assigning a carved subnet to a VLAN from the Resources page."""
+
+    def test_assign_without_a_hostname(self, app, auth_client, proj):
+        """A VLAN can be named before its switch is known."""
+        res = auth_client.post('/projects/%s/api/allocations/vlan' % proj, json={
+            'pool_id': 'sn1', 'subnet': '10.100.7.0/24',
+            'vlan_id': '700', 'vlan_name': 'Voice'})
+        assert res.get_json()['ok'] is True
+
+        with app.app_context():
+            carved = get_carved_subnets(app, 'admin', proj, 'sn1')
+            allocs = get_all_allocations(app, 'admin', proj)
+        entry = carved['10.100.7.0/24']
+        assert entry['status'] == 'assigned'
+        assert entry['vlan_id'] == '700'
+        assert entry['vlan_name'] == 'Voice'
+        # No switch, so no gateway addresses should have been derived.
+        assert allocs['svi'].get('sn1', {}) == {}
+
+    def test_assign_with_hostname_derives_gateway(self, app, auth_client, proj):
+        res = auth_client.post('/projects/%s/api/allocations/vlan' % proj, json={
+            'pool_id': 'sn1', 'subnet': '10.100.8.0/24',
+            'vlan_id': '800', 'vlan_name': 'Users', 'hostname': 'sw1'})
+        assert res.get_json()['ok'] is True
+        with app.app_context():
+            allocs = get_all_allocations(app, 'admin', proj)
+        svi = allocs['svi']['sn1']
+        assert '10.100.8.1' in svi
+        assert svi['10.100.8.1']['interface'] == 'vlan800'
+        assert svi['10.100.8.1']['role'] == 'gateway'
+
+    def test_cannot_assign_a_delegated_subnet(self, app, auth_client, proj):
+        with app.app_context():
+            add_pool(app, 'admin', proj, {
+                'id': 'ptp1', 'type': 'point_to_point', 'name': 'P2P',
+                'subnet': '10.100.5.0/24', 'parent_pool_id': 'sn1'})
+        res = auth_client.post('/projects/%s/api/allocations/vlan' % proj, json={
+            'pool_id': 'sn1', 'subnet': '10.100.5.0/24',
+            'vlan_id': '500', 'vlan_name': 'Nope'})
+        assert res.status_code == 400
+        assert 'delegated' in res.get_json()['error']
+
+    def test_assign_button_shown_only_for_available_subnets(
+            self, app, auth_client, proj):
+        with app.app_context():
+            add_pool(app, 'admin', proj, {
+                'id': 'ptp1', 'type': 'point_to_point', 'name': 'P2P',
+                'subnet': '10.100.5.0/24', 'parent_pool_id': 'sn1'})
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        assert "openVlanAssign('sn1', '10.100.6.0/24')" in body
+        assert "openVlanAssign('sn1', '10.100.5.0/24')" not in body, \
+            'delegated subnet must not offer VLAN assignment'
+
+
+class TestPoolTypeLabels:
+
+    def test_supernet_is_not_called_vlan_supernet(self, app, auth_client, proj):
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        assert 'VLAN supernet' not in body
+        assert '>Supernet<' in body
+
+    def test_stored_type_key_is_unchanged(self, app, proj):
+        """Renaming the key would mean migrating every existing project."""
+        with app.app_context():
+            pools = get_project_config(app, 'admin', proj)['pools']
+        assert pools[0]['type'] == 'vlan_supernet'

@@ -1,4 +1,6 @@
 {% extends "base_project.html" %}
+{% set POOL_LABELS = {'unique': 'Unique', 'point_to_point': 'Point-to-point',
+                     'vlan_supernet': 'Supernet'} %}
 {% block title %}Resources — {{ project_name }} — NetForgeUI{% endblock %}
 {% block page_title %}{{ project_name }} / Resources{% endblock %}
 
@@ -45,7 +47,7 @@
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-weight:600;font-size:14px">{{ pool.name }}</span>
-        <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ pool.type.replace('_',' ') }}</span>
+        <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ POOL_LABELS.get(pool.type, pool.type.replace('_',' ')) }}</span>
       </div>
       <button class="btn btn-sm btn-danger" onclick="removePool('{{ pool.id }}', '{{ pool.name }}')">Remove</button>
     </div>
@@ -76,7 +78,7 @@
         <select class="form-select" id="pool-type" onchange="updatePoolForm()">
           <option value="unique">Unique</option>
           <option value="point_to_point">Point-to-point (/31)</option>
-          <option value="vlan_supernet">VLAN supernet</option>
+          <option value="vlan_supernet">Supernet</option>
         </select>
       </div>
       <div class="fld" id="field-subnet">
@@ -125,7 +127,7 @@
   <div class="card">
     <div class="card-header">SVI conventions</div>
     <p class="hint" style="margin-bottom:16px">
-      These offsets define where gateway and active gateway IPs sit within each /24 carved from a VLAN supernet pool.
+      These offsets define where gateway and active gateway IPs sit within each /24 carved from a supernet pool.
       Offset 1 = first host address (.1), offset 254 = last host in a /24 (.254).
     </p>
     <div class="grid3">
@@ -197,7 +199,7 @@
   <div class="card">
     <div class="card-header" style="display:flex;align-items:center;gap:10px">
       {{ pool.name }}
-      <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ pool.type.replace('_',' ') }}</span>
+      <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ POOL_LABELS.get(pool.type, pool.type.replace('_',' ')) }}</span>
     </div>
 
     {% if pool.type == 'unique' %}
@@ -296,6 +298,9 @@
             {% if entry.status == 'assigned' %}
             <button class="btn btn-sm btn-danger"
               onclick="releaseVlan('{{ pool.id }}', '{{ subnet }}')">Release</button>
+            {% elif entry.status != 'delegated' %}
+            <button class="btn btn-sm"
+              onclick="openVlanAssign('{{ pool.id }}', '{{ subnet }}')">Assign VLAN</button>
             {% endif %}
           </td>
         </tr>
@@ -502,6 +507,74 @@ async function releasePtp(poolId, ip) {
   location.reload();
 }
 
+/* Switches in this project, for the optional SVI owner picker. */
+const PROJECT_HOSTS = {{ (hosts or []) | map(attribute='hostname') | list | tojson }};
+
+function openVlanAssign(poolId, subnet) {
+  document.getElementById('vlan-subnet').value = subnet;
+  document.getElementById('vlan-id').value = '';
+  document.getElementById('vlan-name').value = '';
+  document.getElementById('vlan-error').style.display = 'none';
+
+  const blank = '<option value="">— none —</option>';
+  const opts  = PROJECT_HOSTS.map(h => `<option value="${h}">${h}</option>`).join('');
+  document.getElementById('vlan-host').innerHTML = blank + opts;
+  document.getElementById('vlan-peer').innerHTML = blank + opts;
+
+  const modal = document.getElementById('vlan-modal');
+  modal.dataset.poolId = poolId;
+  modal.dataset.subnet = subnet;
+  modal.style.display = 'flex';
+  document.getElementById('vlan-id').focus();
+}
+
+function closeVlanAssign() {
+  document.getElementById('vlan-modal').style.display = 'none';
+}
+
+function vlanError(msg) {
+  const el = document.getElementById('vlan-error');
+  el.textContent = msg || '';
+  el.style.display = msg ? 'block' : 'none';
+}
+
+async function submitVlanAssign() {
+  const modal = document.getElementById('vlan-modal');
+  const vlanId = document.getElementById('vlan-id').value.trim();
+  const name   = document.getElementById('vlan-name').value.trim();
+  const host   = document.getElementById('vlan-host').value;
+  const peer   = document.getElementById('vlan-peer').value;
+
+  if (!vlanId || !name) { vlanError('VLAN ID and name are required.'); return; }
+  const idNum = parseInt(vlanId, 10);
+  if (isNaN(idNum) || idNum < 1 || idNum > 4094) {
+    vlanError('VLAN ID must be between 1 and 4094.'); return;
+  }
+  if (peer && peer === host) {
+    vlanError('Peer must be a different switch.'); return;
+  }
+  // An active gateway is shared between a pair, so a peer without an owner
+  // has nothing to derive from.
+  if (peer && !host) { vlanError('Choose a switch before setting a peer.'); return; }
+
+  vlanError('');
+  const res = await fetch('/projects/' + PROJECT + '/api/allocations/vlan', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      pool_id: modal.dataset.poolId,
+      subnet:  modal.dataset.subnet,
+      vlan_id: String(idNum),
+      vlan_name: name,
+      hostname: host || null,
+      peer_hostname: peer || null,
+    })
+  });
+  const data = await res.json();
+  if (data.ok) location.reload();
+  else vlanError(data.error || 'Assignment failed');
+}
+
 async function releaseVlan(poolId, subnet) {
   if (!confirm('Release ' + subnet + '? This will also remove the derived SVI allocations.')) return;
   await fetch('/projects/' + PROJECT + '/api/allocations/vlan/release', {
@@ -512,4 +585,45 @@ async function releaseVlan(poolId, subnet) {
   location.reload();
 }
 </script>
+
+<!-- ─── Assign VLAN to a carved subnet ─── -->
+<div id="vlan-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:100;align-items:center;justify-content:center">
+  <div class="card" style="width:420px;margin:0">
+    <div class="card-header">Assign VLAN</div>
+    <div class="fld">
+      <label class="lbl">Subnet</label>
+      <input class="form-input" type="text" id="vlan-subnet" readonly>
+    </div>
+    <div class="grid2">
+      <div class="fld">
+        <label class="lbl">VLAN ID</label>
+        <input class="form-input" type="number" id="vlan-id" min="1" max="4094" placeholder="100">
+      </div>
+      <div class="fld">
+        <label class="lbl">Name</label>
+        <input class="form-input" type="text" id="vlan-name" placeholder="Users">
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="fld">
+        <label class="lbl">Switch <span style="font-weight:400;color:#888">(optional)</span></label>
+        <select class="form-select" id="vlan-host"></select>
+      </div>
+      <div class="fld">
+        <label class="lbl">Peer <span style="font-weight:400;color:#888">(optional)</span></label>
+        <select class="form-select" id="vlan-peer"></select>
+      </div>
+    </div>
+    <div class="form-hint">
+      Naming the VLAN reserves the subnet. Gateway addresses are only derived
+      once a switch is chosen — leave it blank to assign that later.
+    </div>
+    <div id="vlan-error" style="display:none;color:#dc2626;font-size:13px;margin-top:8px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn" onclick="closeVlanAssign()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitVlanAssign()">Assign</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}

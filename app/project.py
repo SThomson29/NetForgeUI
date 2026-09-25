@@ -127,6 +127,30 @@ def save_project_config(app, username, project_name, config):
 # Pool management
 # ---------------------------------------------------------------------------
 
+def sort_by_address(items):
+    """Sort CIDR or bare-IP keys numerically rather than lexicographically.
+
+    Plain string ordering puts 10.100.10.0/24 before 10.100.2.0/24, which
+    reads as random in a picker. Accepts a dict (returns sorted items) or an
+    iterable of strings.
+    """
+    def key(value):
+        text = value[0] if isinstance(value, tuple) else value
+        try:
+            if '/' in str(text):
+                net = ipaddress.ip_network(str(text), strict=False)
+                return (0, int(net.network_address), net.prefixlen)
+            return (0, int(ipaddress.ip_address(str(text))), 0)
+        except ValueError:
+            # Anything unparseable sorts last, in string order, rather than
+            # blowing up the page.
+            return (1, 0, 0)
+
+    if isinstance(items, dict):
+        return sorted(items.items(), key=key)
+    return sorted(items, key=key)
+
+
 class PoolOverlapError(ValueError):
     """Raised when a new pool would overlap an existing one."""
 
@@ -476,8 +500,14 @@ def get_carved_subnets(app, username, project_name, pool_id):
     return allocs['vlan_supernet'].get(pool_id, {})
 
 
-def assign_vlan_subnet(app, username, project_name, pool_id, subnet, vlan_id, vlan_name, hostname, peer_hostname=None):
-    """Assign a carved subnet to a VLAN."""
+def assign_vlan_subnet(app, username, project_name, pool_id, subnet, vlan_id,
+                       vlan_name, hostname=None, peer_hostname=None):
+    """Assign a carved subnet to a VLAN.
+
+    hostname is optional: a VLAN can be named and reserved at the supernet
+    level before it is known which switch carries it. SVI gateway addresses
+    are only derived once a hostname is given, since they are per-switch.
+    """
     allocs = _load_allocations(app, username, project_name)
     pool_allocs = allocs['vlan_supernet'].get(pool_id, {})
     if subnet not in pool_allocs:
@@ -497,7 +527,11 @@ def assign_vlan_subnet(app, username, project_name, pool_id, subnet, vlan_id, vl
     }
     _save_allocations(app, username, project_name, allocs)
 
-    # Auto-derive SVI IPs from conventions
+    # Auto-derive SVI IPs from conventions — only meaningful once we know
+    # which switch owns the SVI.
+    if not hostname:
+        return
+
     cfg = _load_config(app, username, project_name)
     conv = cfg.get('conventions', {}).get('svi', {})
     gw_offset  = int(conv.get('gateway_offset', 1))
@@ -584,7 +618,20 @@ def save_conventions(app, username, project_name, conventions):
 # ---------------------------------------------------------------------------
 
 def get_all_allocations(app, username, project_name):
-    return _load_allocations(app, username, project_name)
+    """All allocations, with each pool's entries in address order.
+
+    Sorted here rather than in a template filter so every consumer — the
+    Resources tables, the editor payload, the API — gets the same ordering
+    without depending on how the Flask app was built.
+    """
+    allocs = _load_allocations(app, username, project_name)
+    for pool_type, pools in allocs.items():
+        if not isinstance(pools, dict):
+            continue
+        for pool_id, entries in pools.items():
+            if isinstance(entries, dict):
+                pools[pool_id] = dict(sort_by_address(entries))
+    return allocs
 
 
 # ---------------------------------------------------------------------------
