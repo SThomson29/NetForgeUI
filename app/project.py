@@ -127,25 +127,150 @@ def save_project_config(app, username, project_name, config):
 # Pool management
 # ---------------------------------------------------------------------------
 
+class PoolOverlapError(ValueError):
+    """Raised when a new pool would overlap an existing one."""
+
+
+def _overlapping_pool(cfg, subnet, ignore_id=None):
+    """Return the first existing pool whose range overlaps `subnet`, if any."""
+    try:
+        net = ipaddress.ip_network(subnet, strict=False)
+    except ValueError:
+        return None
+    for existing in cfg.get('pools', []):
+        if ignore_id and existing['id'] == ignore_id:
+            continue
+        try:
+            other = ipaddress.ip_network(existing['subnet'], strict=False)
+        except (ValueError, KeyError):
+            continue
+        if net.overlaps(other):
+            return existing
+    return None
+
+
 def add_pool(app, username, project_name, pool):
-    """Add a pool to the project config and pre-carve if vlan_supernet."""
+    """Add a pool to the project config and pre-carve if vlan_supernet.
+
+    Overlapping ranges are rejected. Two pools covering the same addresses
+    have no defined owner — allocations attribute to whichever pool happens
+    to be listed first, so the same address can be handed out twice.
+
+    The one legitimate overlap is delegation: a unique or point-to-point pool
+    whose range is one carved subnet of an existing supernet. That subnet is
+    then marked delegated so the VLAN picker stops offering it. Pass
+    `parent_pool_id` to take that path.
+    """
     cfg = _load_config(app, username, project_name)
+
+    parent_id = pool.get('parent_pool_id')
+    if parent_id:
+        _validate_delegation(cfg, pool, parent_id)
+    else:
+        clash = _overlapping_pool(cfg, pool.get('subnet', ''))
+        if clash:
+            raise PoolOverlapError(
+                '%s overlaps the existing pool "%s" (%s). Delegate it from '
+                'that pool instead of defining it separately.'
+                % (pool.get('subnet', '?'), clash.get('name', clash['id']),
+                   clash['subnet']))
+
     cfg['pools'].append(pool)
     _save_config(app, username, project_name, cfg)
 
     if pool['type'] == 'vlan_supernet':
         _precarve_supernet(app, username, project_name, pool)
+    elif parent_id:
+        _mark_subnet_delegated(app, username, project_name,
+                               parent_id, pool['subnet'], pool['id'])
+
+
+def _validate_delegation(cfg, pool, parent_id):
+    """Check a delegated pool really is one carved subnet of its parent."""
+    parent = _find_pool(cfg, parent_id)
+    if not parent:
+        raise PoolOverlapError('Parent pool %s no longer exists.' % parent_id)
+    if parent['type'] != 'vlan_supernet':
+        raise PoolOverlapError(
+            'Only a VLAN supernet can be delegated from; "%s" is a %s pool.'
+            % (parent.get('name', parent_id), parent['type']))
+    if pool['type'] not in ('unique', 'point_to_point'):
+        raise PoolOverlapError(
+            'Only unique and point-to-point pools can be delegated.')
+
+    try:
+        child = ipaddress.ip_network(pool['subnet'], strict=False)
+        supernet = ipaddress.ip_network(parent['subnet'], strict=False)
+    except ValueError as e:
+        raise PoolOverlapError('Invalid subnet: %s' % e)
+
+    if not child.subnet_of(supernet):
+        raise PoolOverlapError(
+            '%s is not inside %s.' % (child, supernet))
+    if child.prefixlen != int(parent['carve_prefix']):
+        raise PoolOverlapError(
+            'Delegated range must be exactly one /%s subnet of the supernet '
+            '(got /%s).' % (parent['carve_prefix'], child.prefixlen))
+
+    # Must not collide with another pool other than the parent itself.
+    clash = _overlapping_pool(cfg, pool['subnet'], ignore_id=parent_id)
+    if clash:
+        raise PoolOverlapError(
+            '%s overlaps the existing pool "%s" (%s).'
+            % (pool['subnet'], clash.get('name', clash['id']), clash['subnet']))
+
+
+def _mark_subnet_delegated(app, username, project_name,
+                           parent_id, subnet, child_pool_id):
+    """Flag a carved subnet as delegated so the VLAN picker skips it."""
+    allocs = _load_allocations(app, username, project_name)
+    carved = allocs.get('vlan_supernet', {}).get(parent_id, {})
+    entry = carved.get(subnet)
+    if entry is None:
+        return
+    entry['status'] = 'delegated'
+    entry['delegated_to'] = child_pool_id
+    _save_allocations(app, username, project_name, allocs)
+
+
+def _release_delegated_subnet(app, username, project_name, pool):
+    """Return a delegated subnet to the parent supernet as carved."""
+    parent_id = pool.get('parent_pool_id')
+    if not parent_id:
+        return
+    allocs = _load_allocations(app, username, project_name)
+    carved = allocs.get('vlan_supernet', {}).get(parent_id, {})
+    entry = carved.get(pool.get('subnet'))
+    if entry is None:
+        return
+    entry['status'] = 'carved'
+    entry.pop('delegated_to', None)
+    _save_allocations(app, username, project_name, allocs)
 
 
 def remove_pool(app, username, project_name, pool_id):
-    """Remove a pool and its allocations."""
+    """Remove a pool and its allocations.
+
+    A supernet takes its delegated children with it — leaving them behind
+    would orphan pools pointing at a parent that no longer exists.
+    """
     cfg = _load_config(app, username, project_name)
-    cfg['pools'] = [p for p in cfg['pools'] if p['id'] != pool_id]
+    pool = _find_pool(cfg, pool_id)
+
+    doomed = [pool_id]
+    if pool and pool.get('type') == 'vlan_supernet':
+        doomed += [p['id'] for p in cfg.get('pools', [])
+                   if p.get('parent_pool_id') == pool_id]
+    elif pool:
+        _release_delegated_subnet(app, username, project_name, pool)
+
+    cfg['pools'] = [p for p in cfg['pools'] if p['id'] not in doomed]
     _save_config(app, username, project_name, cfg)
 
     allocs = _load_allocations(app, username, project_name)
     for pool_type in allocs:
-        allocs[pool_type].pop(pool_id, None)
+        for pid in doomed:
+            allocs[pool_type].pop(pid, None)
     _save_allocations(app, username, project_name, allocs)
 
 
@@ -357,6 +482,12 @@ def assign_vlan_subnet(app, username, project_name, pool_id, subnet, vlan_id, vl
     pool_allocs = allocs['vlan_supernet'].get(pool_id, {})
     if subnet not in pool_allocs:
         raise ValueError(f'{subnet} not found in pool {pool_id}')
+    # A delegated subnet belongs to a child pool now; assigning it to a VLAN
+    # would double-book the same addresses.
+    if pool_allocs[subnet].get('status') == 'delegated':
+        raise ValueError(
+            f'{subnet} is delegated to another pool and cannot be assigned '
+            f'to a VLAN.')
     pool_allocs[subnet] = {
         'status':       'assigned',
         'vlan_id':      vlan_id,
@@ -485,16 +616,26 @@ def sync_allocations(app, username, project_name, hostname):
             return False
  
     def find_pool(ip):
+        """Most specific match wins.
+
+        A delegated pool sits inside its parent supernet, so matching in
+        config order would attribute its addresses to whichever pool was
+        added first. Longest prefix is the only stable answer.
+        """
         if not ip or not str(ip).strip():
             return None
         try:
             ipaddress.ip_address(str(ip).strip())
         except ValueError:
             return None
-        for pool in pools:
-            if pool['type'] in ('unique', 'point_to_point') and ip_in_pool(ip, pool):
-                return pool
-        return None
+        matches = [p for p in pools
+                   if p['type'] in ('unique', 'point_to_point')
+                   and ip_in_pool(ip, p)]
+        if not matches:
+            return None
+        return max(matches,
+                   key=lambda p: ipaddress.ip_network(
+                       p['subnet'], strict=False).prefixlen)
  
     def load_hv(filename):
         hvdir = os.path.join(project_host_vars_dir(app, username, project_name), hostname)

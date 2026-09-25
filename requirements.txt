@@ -26,7 +26,7 @@ pyaoscx==2.6.0
 # pylibssh is the transport Ansible prefers; paramiko is the fallback it
 # reaches for automatically if pylibssh is unavailable. Both ship wheels for
 # x86_64 and aarch64, so neither compiles during the multi-arch build.
-ansible-pylibssh==1.4.0
+ansible-pylibssh==1.4.0 ; sys_platform == "linux"
 paramiko==5.0.0
 
 # aoscx_upload_firmware falls back to pycurl on the 4100i and 6x00 families
