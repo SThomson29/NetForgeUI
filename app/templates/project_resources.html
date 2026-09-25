@@ -584,6 +584,11 @@ async function releaseVlan(poolId, subnet) {
   });
   location.reload();
 }
+
+/* The form is only reconfigured by the type and source onchange handlers, so
+   without this the default selection ("Unique") renders with its
+   type-specific fields unset until the dropdown is changed and changed back. */
+document.addEventListener('DOMContentLoaded', updatePoolForm);
 </script>
 
 <!-- ─── Assign VLAN to a carved subnet ─── -->
