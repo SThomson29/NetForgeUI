@@ -359,8 +359,11 @@
               onclick="openVlanAssign('{{ pool.id }}', '{{ subnet }}')">
               {% if entry.vlan_id %}Edit VLAN{% else %}Assign VLAN{% endif %}
             </button>
+            {# Only a mixed-size supernet has a block editor to subdivide into. #}
+            {% if not pool.carve_prefix %}
             <button class="btn btn-sm"
               onclick="carveInto('{{ pool.id }}', '{{ subnet }}')">Subdivide</button>
+            {% endif %}
             {% endif %}
             {% if not pool.carve_prefix and entry.status not in ['delegated', 'container'] %}
             <button class="btn btn-sm btn-danger"
@@ -666,15 +669,36 @@ function blockError(poolId, msg) {
 const carveScope = {};
 
 function carveInto(poolId, subnet) {
+  const field = document.getElementById('blk-subnet-' + poolId);
+  if (!field) {
+    // No block editor on this pool — the button should not have rendered.
+    alert('This supernet uses fixed-size blocks, so it cannot be subdivided.');
+    return;
+  }
+
   carveScope[poolId] = subnet;
+
   const hint = document.getElementById('blk-scope-' + poolId);
   if (hint) {
     hint.textContent = 'Adding inside ' + subnet;
     hint.style.display = '';
   }
-  document.getElementById('blk-subnet-' + poolId).value = '';
-  document.getElementById('blk-subnet-' + poolId).focus();
+
+  // Suggest a sensible size so the field is not just blank: one step
+  // narrower than the parent.
+  const parentPrefix = parseInt(subnet.split('/')[1], 10);
+  const want = document.getElementById('blk-want-' + poolId);
+  if (want && !isNaN(parentPrefix)) {
+    want.value = Math.min(parentPrefix + 2, 32);
+  }
+
+  field.value = '';
   blockError(poolId, '');
+
+  // Scroll the editor into view — otherwise the click looks like nothing
+  // happened, because the editor sits above a long block list.
+  field.scrollIntoView({behavior: 'smooth', block: 'center'});
+  field.focus();
 }
 
 function clearCarveScope(poolId) {

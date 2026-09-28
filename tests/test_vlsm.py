@@ -421,3 +421,30 @@ class TestNestedBlocks:
         assert 'padding-left:32px' in body, 'child block is not indented'
         assert 'Container' in body
         assert "carveInto('sn', '10.50.0.0/18')" in body
+
+
+class TestSubdivideButton:
+
+    def test_offered_on_a_mixed_size_supernet(self, app, auth_client, proj):
+        with app.app_context():
+            carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/18')
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        assert "carveInto('sn', '10.50.0.0/18')" in body
+
+    def test_not_offered_on_a_fixed_supernet(self, app, auth_client, proj):
+        """There is no block editor there, so the button would do nothing."""
+        with app.app_context():
+            add_pool(app, 'admin', proj, dict(FIXED))
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        assert "carveInto('fx'" not in body
+
+    def test_click_target_exists_for_every_button(self, app, auth_client, proj):
+        """Each carveInto call must have a matching input to focus."""
+        import re
+        with app.app_context():
+            carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/18')
+            add_pool(app, 'admin', proj, dict(FIXED))
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        for pool_id in set(re.findall(r"carveInto\('([^']+)'", body)):
+            assert 'id="blk-subnet-%s"' % pool_id in body, (
+                'carveInto offered for %s with no block editor' % pool_id)
