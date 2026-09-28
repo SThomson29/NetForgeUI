@@ -52,6 +52,10 @@
       {% if pool.type != 'vlan_supernet' %}
       <button class="btn btn-sm"
               onclick="editPool('{{ pool.id }}', '{{ pool.name }}', '{{ pool.subnet }}')">Edit</button>
+      {% elif pool.carve_prefix %}
+      <button class="btn btn-sm"
+              onclick="convertSupernet('{{ pool.id }}', '{{ pool.name }}', '{{ pool.carve_prefix }}')"
+              title="Allow blocks of different sizes in this supernet">Use mixed sizes</button>
       {% endif %}
       <button class="btn btn-sm btn-danger" onclick="removePool('{{ pool.id }}', '{{ pool.name }}')">Remove</button>
     </div>
@@ -658,6 +662,21 @@ async function submitVlanAssign() {
   const data = await res.json();
   if (data.ok) location.reload();
   else vlanError(data.error || 'Assignment failed');
+}
+
+async function convertSupernet(poolId, name, carvePrefix) {
+  const ok = confirm(
+    name + ' currently pre-carves into equal /' + carvePrefix + ' blocks.\n\n' +
+    'Switching to mixed sizes keeps every block in use — assigned to a VLAN ' +
+    'or delegated to a pool — and discards the unused pre-carved ones so the ' +
+    'space can be carved at other sizes.\n\nContinue?');
+  if (!ok) return;
+
+  const res = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId + '/convert',
+                          {method: 'POST'});
+  const data = await res.json();
+  if (data.ok) location.reload();
+  else alert(data.error || 'Could not convert this supernet.');
 }
 
 function editPool(poolId, name, subnet) {

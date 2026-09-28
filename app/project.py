@@ -318,6 +318,52 @@ def _release_delegated_subnet(app, username, project_name, pool):
     _save_allocations(app, username, project_name, allocs)
 
 
+def convert_supernet_to_mixed(app, username, project_name, pool_id):
+    """Turn a fixed-carve supernet into a mixed-size one.
+
+    A fixed supernet pre-carves its whole range into equal blocks, so it
+    cannot hold a /24 and a /18 side by side, and none of the carve,
+    subdivide or remove-block controls apply to it.
+
+    Converting keeps every block that is actually in use — assigned to a
+    VLAN, or delegated to a pool — and discards the untouched pre-carved
+    placeholders, which hold nothing and would otherwise occupy the whole
+    range and block any new carving.
+
+    Returns (kept, dropped).
+    """
+    cfg = _load_config(app, username, project_name)
+    pool = _find_pool(cfg, pool_id)
+    if not pool:
+        raise ValueError('Pool %s does not exist.' % pool_id)
+    if pool['type'] != 'vlan_supernet':
+        raise ValueError('Only a supernet can be converted.')
+    if is_manual_supernet(pool):
+        raise ValueError('%s already uses mixed sizes.' % pool.get('name'))
+
+    allocs = _load_allocations(app, username, project_name)
+    blocks = allocs['vlan_supernet'].get(pool_id, {})
+
+    kept, dropped = {}, []
+    for subnet, entry in blocks.items():
+        in_use = (entry.get('status') in ('assigned', 'delegated')
+                  or entry.get('vlan_id')
+                  or entry.get('hostname'))
+        if in_use:
+            kept[subnet] = entry
+        else:
+            dropped.append(subnet)
+
+    allocs['vlan_supernet'][pool_id] = kept
+    _repair_block_statuses(kept)
+    _save_allocations(app, username, project_name, allocs)
+
+    pool.pop('carve_prefix', None)
+    _save_config(app, username, project_name, cfg)
+
+    return sorted(kept), sorted(dropped)
+
+
 def update_pool(app, username, project_name, pool_id, name=None, subnet=None,
                 prefix=None):
     """Change a pool's name or address range, keeping its allocations.
