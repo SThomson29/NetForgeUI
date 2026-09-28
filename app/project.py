@@ -301,6 +301,17 @@ def _release_delegated_subnet(app, username, project_name, pool):
         # Nothing was carved here before the delegation, so remove the block
         # rather than leaving it occupying space as an empty entry.
         carved.pop(pool.get('subnet'), None)
+
+        # If it was nested, its parent may now hold nothing. A container with
+        # no children is not a container — and it offers no Remove button, so
+        # leaving it marked that way strands the block permanently.
+        net = _safe_network(pool.get('subnet'))
+        if net is not None:
+            grandparent = _enclosing_block(net, carved)
+            if (grandparent is not None
+                    and not _direct_children(grandparent, carved)
+                    and carved[str(grandparent)].get('status') == 'container'):
+                carved[str(grandparent)]['status'] = 'carved'
     else:
         entry['status'] = 'carved'
         entry.pop('delegated_to', None)
@@ -906,10 +917,39 @@ def release_ptp(app, username, project_name, pool_id, ip):
 # Allocation helpers — vlan supernet pools
 # ---------------------------------------------------------------------------
 
+def _repair_block_statuses(blocks):
+    """Correct container flags that no longer match the tree.
+
+    A block marked container with nothing inside it offers no Remove button
+    and cannot be subdivided further, so it is stranded. That state was
+    reachable by removing a delegated pool nested inside one. Recomputing
+    from the tree is cheap and idempotent, so it runs on read rather than
+    needing a migration.
+    """
+    changed = False
+    for key, entry in blocks.items():
+        net = _safe_network(key)
+        if net is None:
+            continue
+        has_children = bool(_direct_children(net, blocks))
+        status = entry.get('status')
+
+        if status == 'container' and not has_children:
+            entry['status'] = 'assigned' if entry.get('vlan_id') else 'carved'
+            changed = True
+        elif has_children and status in ('carved', None):
+            entry['status'] = 'container'
+            changed = True
+    return changed
+
+
 def get_carved_subnets(app, username, project_name, pool_id):
     """Return all carved subnets for a supernet pool."""
     allocs = _load_allocations(app, username, project_name)
-    return allocs['vlan_supernet'].get(pool_id, {})
+    blocks = allocs['vlan_supernet'].get(pool_id, {})
+    if _repair_block_statuses(blocks):
+        _save_allocations(app, username, project_name, allocs)
+    return blocks
 
 
 def assign_vlan_subnet(app, username, project_name, pool_id, subnet, vlan_id,
