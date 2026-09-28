@@ -357,6 +357,11 @@
           </td>
           <td style="text-align:right">
             {% if entry.status == 'assigned' %}
+            {# Editing matters most here: a block carved with a VLAN has no
+               switch yet, and releasing to add one would drop its derived
+               SVI addresses. #}
+            <button class="btn btn-sm"
+              onclick="openVlanAssign('{{ pool.id }}', '{{ subnet }}')">Edit VLAN</button>
             <button class="btn btn-sm btn-danger"
               onclick="releaseVlan('{{ pool.id }}', '{{ subnet }}')">Release</button>
             {% elif entry.status == 'container' %}
@@ -599,16 +604,23 @@ async function releasePtp(poolId, ip) {
 /* Switches in this project, for the optional SVI owner picker. */
 const PROJECT_HOSTS = {{ (hosts or []) | map(attribute='hostname') | list | tojson }};
 
+/* What is already assigned, so editing prefills rather than blanking. */
+const VLAN_ENTRIES = {{ (allocations.get('vlan_supernet', {})) | tojson }};
+
 function openVlanAssign(poolId, subnet) {
+  const existing = (VLAN_ENTRIES[poolId] || {})[subnet] || {};
+
   document.getElementById('vlan-subnet').value = subnet;
-  document.getElementById('vlan-id').value = '';
-  document.getElementById('vlan-name').value = '';
+  document.getElementById('vlan-id').value   = existing.vlan_id || '';
+  document.getElementById('vlan-name').value = existing.vlan_name || '';
   document.getElementById('vlan-error').style.display = 'none';
 
   const blank = '<option value="">— none —</option>';
   const opts  = PROJECT_HOSTS.map(h => `<option value="${h}">${h}</option>`).join('');
   document.getElementById('vlan-host').innerHTML = blank + opts;
   document.getElementById('vlan-peer').innerHTML = blank + opts;
+  document.getElementById('vlan-host').value = existing.hostname || '';
+  document.getElementById('vlan-peer').value = existing.peer_hostname || '';
 
   const modal = document.getElementById('vlan-modal');
   modal.dataset.poolId = poolId;
