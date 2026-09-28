@@ -663,12 +663,14 @@ def assign_vlan_subnet(app, username, project_name, pool_id, subnet, vlan_id,
     pool_allocs = allocs['vlan_supernet'].get(pool_id, {})
     if subnet not in pool_allocs:
         raise ValueError(f'{subnet} not found in pool {pool_id}')
-    # A delegated subnet belongs to a child pool now; assigning it to a VLAN
-    # would double-book the same addresses.
-    if pool_allocs[subnet].get('status') == 'delegated':
-        raise ValueError(
-            f'{subnet} is delegated to another pool and cannot be assigned '
-            f'to a VLAN.')
+    # A delegated block may still carry a VLAN: the tag says what the subnet
+    # is for, the delegation says who hands out addresses inside it. Both are
+    # true at once — a wireless range is VLAN 20 *and* a pool allocated from.
+    # What must not happen is deriving SVI gateway addresses inside it, since
+    # the child pool owns addressing there; that is skipped below.
+    was_delegated = pool_allocs[subnet].get('status') == 'delegated'
+    delegated_to = pool_allocs[subnet].get('delegated_to')
+
     pool_allocs[subnet] = {
         'status':       'assigned',
         'vlan_id':      vlan_id,
@@ -676,11 +678,16 @@ def assign_vlan_subnet(app, username, project_name, pool_id, subnet, vlan_id,
         'hostname':     hostname,
         'peer_hostname': peer_hostname,
     }
+    if was_delegated:
+        pool_allocs[subnet]['status'] = 'delegated'
+        pool_allocs[subnet]['delegated_to'] = delegated_to
+
     _save_allocations(app, username, project_name, allocs)
 
     # Auto-derive SVI IPs from conventions — only meaningful once we know
-    # which switch owns the SVI.
-    if not hostname:
+    # which switch owns the SVI, and never inside a delegated block where
+    # the child pool is handing out those same addresses.
+    if not hostname or was_delegated:
         return
 
     cfg = _load_config(app, username, project_name)

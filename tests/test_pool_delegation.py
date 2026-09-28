@@ -89,14 +89,27 @@ class TestDelegation:
         assert carved['10.100.5.0/24']['delegated_to'] == 'ptp1'
         assert carved['10.100.6.0/24']['status'] == 'carved', 'only one taken'
 
-    def test_delegated_subnet_cannot_go_to_a_vlan(self, app, proj):
-        """Otherwise the same addresses are handed out twice."""
+    def test_delegated_subnet_can_carry_a_vlan(self, app, proj):
+        """A block can be both delegated and VLAN-tagged.
+
+        The tag says what the subnet is for; the delegation says who hands
+        out addresses inside it. A wireless range is VLAN 20 *and* a pool
+        allocated from — refusing the tag was wrong.
+        """
         with app.app_context():
             self._delegate(app, proj)
-            with pytest.raises(ValueError) as e:
-                assign_vlan_subnet(app, 'admin', proj, 'sn1',
-                                   '10.100.5.0/24', '100', 'Users', 'sw1')
-        assert 'delegated' in str(e.value)
+            assign_vlan_subnet(app, 'admin', proj, 'sn1',
+                               '10.100.5.0/24', '100', 'Users', 'sw1')
+            entry = get_carved_subnets(app, 'admin', proj, 'sn1')['10.100.5.0/24']
+            allocs = get_all_allocations(app, 'admin', proj)
+
+        assert entry['vlan_id'] == '100'
+        assert entry['vlan_name'] == 'Users'
+        # ownership must survive the tagging
+        assert entry['status'] == 'delegated'
+        assert entry['delegated_to'] == 'ptp1'
+        # but no gateway addresses inside a block the child pool owns
+        assert allocs['svi'].get('sn1', {}) == {}
 
     def test_same_subnet_cannot_be_delegated_twice(self, app, proj):
         with app.app_context():
@@ -325,18 +338,21 @@ class TestVlanAssignment:
         assert svi['10.100.8.1']['interface'] == 'vlan800'
         assert svi['10.100.8.1']['role'] == 'gateway'
 
-    def test_cannot_assign_a_delegated_subnet(self, app, auth_client, proj):
+    def test_can_assign_a_vlan_to_a_delegated_subnet(self, app, auth_client, proj):
         with app.app_context():
             add_pool(app, 'admin', proj, {
                 'id': 'ptp1', 'type': 'point_to_point', 'name': 'P2P',
                 'subnet': '10.100.5.0/24', 'parent_pool_id': 'sn1'})
         res = auth_client.post('/projects/%s/api/allocations/vlan' % proj, json={
             'pool_id': 'sn1', 'subnet': '10.100.5.0/24',
-            'vlan_id': '500', 'vlan_name': 'Nope'})
-        assert res.status_code == 400
-        assert 'delegated' in res.get_json()['error']
+            'vlan_id': '500', 'vlan_name': 'Links'})
+        assert res.get_json()['ok'] is True
+        with app.app_context():
+            entry = get_carved_subnets(app, 'admin', proj, 'sn1')['10.100.5.0/24']
+        assert entry['vlan_id'] == '500'
+        assert entry['status'] == 'delegated'
 
-    def test_assign_button_shown_only_for_available_subnets(
+    def test_assign_button_shown_for_free_and_delegated_subnets(
             self, app, auth_client, proj):
         with app.app_context():
             add_pool(app, 'admin', proj, {
@@ -344,8 +360,7 @@ class TestVlanAssignment:
                 'subnet': '10.100.5.0/24', 'parent_pool_id': 'sn1'})
         body = auth_client.get('/projects/%s/resources' % proj).data.decode()
         assert "openVlanAssign('sn1', '10.100.6.0/24')" in body
-        assert "openVlanAssign('sn1', '10.100.5.0/24')" not in body, \
-            'delegated subnet must not offer VLAN assignment'
+        assert "openVlanAssign('sn1', '10.100.5.0/24')" in body
 
 
 class TestPoolTypeLabels:

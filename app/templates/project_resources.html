@@ -331,6 +331,9 @@
             <span class="pool-type-badge" style="background:#fef3c7;color:#92400e">
               Delegated{% if child %} → {{ child.name }}{% endif %}
             </span>
+            {% if entry.vlan_id %}
+            <span class="assigned-badge">VLAN {{ entry.vlan_id }}</span>
+            {% endif %}
             {% else %}
             <span class="carved-badge">Available</span>
             {% endif %}
@@ -339,9 +342,11 @@
             {% if entry.status == 'assigned' %}
             <button class="btn btn-sm btn-danger"
               onclick="releaseVlan('{{ pool.id }}', '{{ subnet }}')">Release</button>
-            {% elif entry.status != 'delegated' %}
+            {% else %}
             <button class="btn btn-sm"
-              onclick="openVlanAssign('{{ pool.id }}', '{{ subnet }}')">Assign VLAN</button>
+              onclick="openVlanAssign('{{ pool.id }}', '{{ subnet }}')">
+              {% if entry.vlan_id %}Edit VLAN{% else %}Assign VLAN{% endif %}
+            </button>
             {% endif %}
             {% if not pool.carve_prefix and entry.status != 'delegated' %}
             <button class="btn btn-sm btn-danger"
