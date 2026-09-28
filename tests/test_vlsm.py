@@ -102,11 +102,11 @@ class TestGuardrails:
         carve_supernet_block(app, 'admin', proj, 'sn', cidr)
 
     @pytest.mark.parametrize('bad,fragment', [
-        ('10.50.64.0/20', 'overlaps'),      # inside an existing block
-        ('10.50.0.0/16',  'overlaps'),      # swallows everything
-        ('10.99.0.0/24',  'not inside'),    # outside the supernet
+        ('10.50.0.0/16',  'would contain the existing block'),
+        ('10.99.0.0/24',  'not inside'),
         ('10.50.65.0/18', 'not a valid network'),
         ('10.50.1.0',     'must include a prefix'),
+        ('10.50.64.0/18', 'already carved'),
     ])
     def test_bad_blocks_are_refused(self, app, proj, bad, fragment):
         with app.app_context():
@@ -114,6 +114,19 @@ class TestGuardrails:
             with pytest.raises(ValueError) as e:
                 self._carve(app, proj, bad)
         assert fragment in str(e.value)
+
+    def test_a_smaller_block_inside_an_unused_one_is_nesting(self, app, proj):
+        """With CIDR, two blocks either nest or are disjoint.
+
+        Since an unused block may be subdivided, containment is nesting
+        rather than an overlap — there is no such thing as two overlapping
+        siblings.
+        """
+        with app.app_context():
+            self._carve(app, proj, '10.50.64.0/18')
+            self._carve(app, proj, '10.50.64.0/20')
+            blocks = get_carved_subnets(app, 'admin', proj, 'sn')
+        assert blocks['10.50.64.0/18']['status'] == 'container'
 
     def test_adjacent_blocks_are_allowed(self, app, proj):
         """Touching is fine; only overlapping is not."""
@@ -196,7 +209,16 @@ class TestDelegationFromManualSupernet:
                 'subnet': '10.50.0.0/24', 'parent_pool_id': 'sn'})
             with pytest.raises(ValueError) as e:
                 carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/24')
-        assert 'overlaps' in str(e.value)
+        assert 'already carved' in str(e.value)
+
+    def test_cannot_nest_inside_delegated_space(self, app, proj):
+        with app.app_context():
+            add_pool(app, 'admin', proj, {
+                'id': 'lb', 'type': 'unique', 'name': 'LB', 'prefix': '32',
+                'subnet': '10.50.0.0/24', 'parent_pool_id': 'sn'})
+            with pytest.raises(ValueError) as e:
+                carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/28')
+        assert 'delegated' in str(e.value)
 
     def test_removing_the_child_frees_the_space(self, app, proj):
         with app.app_context():
@@ -216,13 +238,13 @@ class TestRoutes:
                                      'vlan_id': '20', 'vlan_name': 'Trusted'})
         assert res.get_json() == {'ok': True, 'subnet': '10.50.64.0/18'}
 
-    def test_overlap_via_api(self, app, auth_client, proj):
+    def test_outside_in_rule_via_api(self, app, auth_client, proj):
         auth_client.post('/projects/%s/api/pools/sn/blocks' % proj,
-                         json={'subnet': '10.50.64.0/18'})
+                         json={'subnet': '10.50.64.0/20'})
         res = auth_client.post('/projects/%s/api/pools/sn/blocks' % proj,
-                               json={'subnet': '10.50.64.0/20'})
+                               json={'subnet': '10.50.64.0/18'})
         assert res.status_code == 400
-        assert 'overlaps' in res.get_json()['error']
+        assert 'would contain' in res.get_json()['error']
 
     def test_suggest_via_api(self, app, auth_client, proj):
         auth_client.post('/projects/%s/api/pools/sn/blocks' % proj,
@@ -292,3 +314,110 @@ class TestVlanOnDelegatedBlock:
                 'parent_pool_id': 'sn'})
         body = auth_client.get('/projects/%s/resources' % proj).data.decode()
         assert "openVlanAssign('sn', '10.50.10.0/24')" in body
+
+
+class TestNestedBlocks:
+    """Carving inside a block — a /16 into /18s, then /24s inside one.
+
+    The hierarchy is derived from the addresses rather than stored, so there
+    are no parent pointers and existing flat data needs no migration.
+    """
+
+    def _carve(self, app, proj, cidr, vlan=None, name=None):
+        carve_supernet_block(app, 'admin', proj, 'sn', cidr, vlan, name)
+
+    def test_tree_is_derived_from_containment(self):
+        from app.project import build_block_tree
+        tree = build_block_tree(['10.50.0.0/18', '10.50.0.0/24',
+                                 '10.50.1.0/24', '10.50.64.0/18'])
+        assert [str(n) for n, _ in tree] == ['10.50.0.0/18', '10.50.64.0/18']
+        kids = [str(n) for n, _ in tree[0][1]]
+        assert kids == ['10.50.0.0/24', '10.50.1.0/24']
+
+    def test_carve_inside_an_unused_block(self, app, proj):
+        with app.app_context():
+            self._carve(app, proj, '10.50.0.0/18')
+            self._carve(app, proj, '10.50.0.0/24', '110', 'MGMT')
+            blocks = get_carved_subnets(app, 'admin', proj, 'sn')
+        assert blocks['10.50.0.0/18']['status'] == 'container'
+        assert blocks['10.50.0.0/24']['vlan_name'] == 'MGMT'
+
+    def test_cannot_subdivide_an_assigned_block(self, app, proj):
+        """It is in use as a leaf; subdividing it would be ambiguous."""
+        with app.app_context():
+            self._carve(app, proj, '10.50.64.0/18', '20', 'Trusted')
+            with pytest.raises(ValueError) as e:
+                self._carve(app, proj, '10.50.64.0/24')
+        assert 'Release it before subdividing' in str(e.value)
+
+    def test_cannot_subdivide_a_delegated_block(self, app, proj):
+        with app.app_context():
+            add_pool(app, 'admin', proj, {
+                'id': 'lb', 'type': 'unique', 'name': 'LB', 'prefix': '32',
+                'subnet': '10.50.200.0/24', 'parent_pool_id': 'sn'})
+            with pytest.raises(ValueError) as e:
+                self._carve(app, proj, '10.50.200.0/28')
+        assert 'delegated' in str(e.value)
+
+    def test_carving_must_go_outside_in(self, app, proj):
+        """Wrapping a block around existing ones would silently reparent."""
+        with app.app_context():
+            self._carve(app, proj, '10.50.0.0/24')
+            with pytest.raises(ValueError) as e:
+                self._carve(app, proj, '10.50.0.0/18')
+        assert 'would contain the existing block' in str(e.value)
+
+    def test_depth_is_capped(self, app):
+        from app.project import create_project, MAX_BLOCK_DEPTH
+        with app.app_context():
+            create_project(app, 'admin', 'deep')
+            add_pool(app, 'admin', 'deep', {
+                'id': 'sn', 'type': 'vlan_supernet', 'name': 'C',
+                'subnet': '10.0.0.0/8'})
+            for cidr in ('10.0.0.0/16', '10.0.0.0/20', '10.0.0.0/24'):
+                carve_supernet_block(app, 'admin', 'deep', 'sn', cidr)
+            with pytest.raises(ValueError) as e:
+                carve_supernet_block(app, 'admin', 'deep', 'sn', '10.0.0.0/28')
+        assert 'limited to %s levels' % MAX_BLOCK_DEPTH in str(e.value)
+
+    def test_suggestions_are_per_level(self, app, proj):
+        with app.app_context():
+            self._carve(app, proj, '10.50.0.0/18')
+            self._carve(app, proj, '10.50.0.0/24')
+            top = suggest_free_block(app, 'admin', proj, 'sn', 24)
+            inside = suggest_free_block(app, 'admin', proj, 'sn', 24,
+                                        within='10.50.0.0/18')
+        assert top == '10.50.64.0/24', 'top level must skip the container'
+        assert inside == '10.50.1.0/24', 'inside must continue after the child'
+
+    def test_container_with_children_cannot_be_removed(self, app, proj):
+        with app.app_context():
+            self._carve(app, proj, '10.50.0.0/18')
+            self._carve(app, proj, '10.50.0.0/24')
+            with pytest.raises(ValueError) as e:
+                remove_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/18')
+        assert 'contains 1 block' in str(e.value)
+
+    def test_emptying_a_container_makes_it_usable_again(self, app, proj):
+        with app.app_context():
+            self._carve(app, proj, '10.50.0.0/18')
+            self._carve(app, proj, '10.50.0.0/24')
+            remove_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/24')
+            blocks = get_carved_subnets(app, 'admin', proj, 'sn')
+        assert blocks['10.50.0.0/18']['status'] == 'carved'
+
+    def test_duplicate_block_is_refused(self, app, proj):
+        with app.app_context():
+            self._carve(app, proj, '10.50.0.0/24')
+            with pytest.raises(ValueError) as e:
+                self._carve(app, proj, '10.50.0.0/24')
+        assert 'already carved' in str(e.value)
+
+    def test_page_indents_nested_blocks(self, app, auth_client, proj):
+        with app.app_context():
+            self._carve(app, proj, '10.50.0.0/18')
+            self._carve(app, proj, '10.50.0.0/24', '110', 'MGMT')
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        assert 'padding-left:32px' in body, 'child block is not indented'
+        assert 'Container' in body
+        assert "carveInto('sn', '10.50.0.0/18')" in body

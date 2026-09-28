@@ -18,7 +18,7 @@ from .project import (
     get_carved_subnets, assign_vlan_subnet, release_vlan_subnet,
     sort_by_address,
     carve_supernet_block, remove_supernet_block, suggest_free_block,
-    is_manual_supernet,
+    is_manual_supernet, _block_depth, _safe_network,
     get_common, save_common,
     get_conventions, save_conventions,
     get_all_allocations,
@@ -401,10 +401,22 @@ def resources_page(project_name):
     cfg  = get_project_config(app, current_user.username, project_name)
     allocs = get_all_allocations(app, current_user.username, project_name)
     hosts  = read_project_hosts(app, current_user.username, project_name)
+    # Depth per block, so the template can indent without rebuilding the
+    # tree in Jinja. Derived from the addresses, not stored.
+    depths = {}
+    for pool in cfg.get('pools', []):
+        if pool.get('type') != 'vlan_supernet' or pool.get('carve_prefix'):
+            continue
+        blocks = allocs['vlan_supernet'].get(pool['id'], {})
+        for key in blocks:
+            net = _safe_network(key)
+            depths[key] = _block_depth(net, blocks) - 1 if net else 0
+
     return render_template('project_resources.html',
                            project_name=project_name,
                            config=cfg,
                            allocations=allocs,
+                           block_depths=depths,
                            hosts=hosts)
 
 
@@ -483,7 +495,8 @@ def api_suggest_block(project_name, pool_id):
     if not 1 <= want <= 32:
         return jsonify({'ok': False, 'error': 'Prefix must be 1-32'}), 400
     subnet = suggest_free_block(app, current_user.username, project_name,
-                                pool_id, want)
+                                pool_id, want,
+                                within=request.args.get('within') or None)
     if not subnet:
         return jsonify({'ok': False,
                         'error': 'No free /%s block available.' % want}), 404
