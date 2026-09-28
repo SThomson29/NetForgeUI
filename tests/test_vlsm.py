@@ -589,3 +589,45 @@ class TestConvertToMixedSizes:
 
     def test_convert_requires_login(self, client):
         assert client.post('/projects/f/api/pools/sn/convert').status_code == 401
+
+
+class TestEditingAnAssignedBlock:
+    """The block editor takes a VLAN ID and name but no switch, so a carved
+    block starts without one. Editing has to be possible afterwards —
+    releasing to add a switch would drop the derived SVI addresses.
+    """
+
+    def test_switch_can_be_added_after_carving(self, app, proj):
+        from app.project import assign_vlan_subnet, get_all_allocations
+        with app.app_context():
+            carve_supernet_block(app, 'admin', proj, 'sn',
+                                 '10.50.10.0/24', '110', 'MGMT')
+            assert get_all_allocations(app, 'admin', proj)['svi'].get('sn', {}) == {}
+
+            assign_vlan_subnet(app, 'admin', proj, 'sn', '10.50.10.0/24',
+                               '110', 'MGMT', 'sw1')
+            entry = get_carved_subnets(app, 'admin', proj, 'sn')['10.50.10.0/24']
+            svi = get_all_allocations(app, 'admin', proj)['svi']['sn']
+
+        assert entry['hostname'] == 'sw1'
+        assert entry['vlan_name'] == 'MGMT', 'existing detail must survive'
+        assert '10.50.10.1' in svi
+
+    def test_assigned_block_offers_an_edit_button(self, app, auth_client, proj):
+        with app.app_context():
+            carve_supernet_block(app, 'admin', proj, 'sn',
+                                 '10.50.10.0/24', '110', 'MGMT')
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        assert "openVlanAssign('sn', '10.50.10.0/24')" in body, \
+            'an assigned block could only be released, not edited'
+
+    def test_modal_prefills_from_the_existing_entry(self, app, auth_client, proj):
+        """Opening blank would silently clear the VLAN on save."""
+        import json, re
+        with app.app_context():
+            carve_supernet_block(app, 'admin', proj, 'sn',
+                                 '10.50.10.0/24', '110', 'MGMT')
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        entries = json.loads(
+            re.search(r'const VLAN_ENTRIES = (.*?);', body, re.S).group(1))
+        assert entries['sn']['10.50.10.0/24']['vlan_name'] == 'MGMT'
