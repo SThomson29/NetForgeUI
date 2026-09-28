@@ -126,15 +126,37 @@ function sortCidrs(list, keyFn) {
   });
 }
 
+/* Largest number of addresses this will enumerate. A picker with more
+   entries than this is unusable anyway, and the cap is what stops a bad
+   subnet locking up the tab. A /16 is 65,536; anything beyond that is
+   almost certainly a mistake. */
+const MAX_ENUMERATED_IPS = 65536;
+
 function generateSubnetIPs(subnet, allocPrefix) {
   try {
     const [base, subnetPrefixStr] = subnet.split('/');
-    const subnetPrefix = parseInt(subnetPrefixStr);
+
+    /* A pool stored without a mask ("10.50.64.0" rather than
+       "10.50.64.0/18") used to yield NaN here, which collapsed the mask to
+       zero and made the loop below try to enumerate the whole IPv4 space —
+       hanging the browser rather than throwing. Refuse it instead. */
+    const subnetPrefix = parseInt(subnetPrefixStr, 10);
+    if (isNaN(subnetPrefix) || subnetPrefix < 0 || subnetPrefix > 32) return [];
+
     const parts = base.split('.').map(Number);
-    const baseInt = (parts[0]<<24)|(parts[1]<<16)|(parts[2]<<8)|parts[3];
+    if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return [];
+
+    const baseInt = ((parts[0]<<24)>>>0) + (parts[1]<<16) + (parts[2]<<8) + parts[3];
     const subnetMask = subnetPrefix >= 32 ? 0xFFFFFFFF : (~(0xFFFFFFFF >>> subnetPrefix)) >>> 0;
     const network    = (baseInt & subnetMask) >>> 0;
     const broadcast  = (network | (~subnetMask >>> 0)) >>> 0;
+
+    if (broadcast - network + 1 > MAX_ENUMERATED_IPS) {
+      console.warn('generateSubnetIPs: ' + subnet + ' is too large to enumerate ('
+                   + (broadcast - network + 1) + ' addresses); skipping.');
+      return [];
+    }
+
     const ips = [];
     for (let i = network; i <= broadcast; i++) ips.push(intToIP(i));
     return ips;

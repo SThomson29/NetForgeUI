@@ -83,7 +83,7 @@
       </div>
       <div class="fld" id="field-subnet">
         <label class="lbl">Subnet</label>
-        <input class="form-input" type="text" id="pool-subnet" placeholder="10.255.0.0/24">
+        <input class="form-input" type="text" id="pool-subnet" placeholder="10.255.0.0/24" pattern="\d{1,3}(\.\d{1,3}){3}/\d{1,2}">
       </div>
     </div>
 
@@ -112,8 +112,16 @@
         <input class="form-input" type="number" id="pool-prefix" value="32" min="1" max="32">
       </div>
       <div class="fld" id="field-carve" style="display:none">
+        <label class="lbl">Block sizes</label>
+        <select class="form-select" id="pool-carve-mode" onchange="updatePoolForm()">
+          <option value="fixed">Fixed size — pre-carve the whole range</option>
+          <option value="manual">Mixed sizes — carve blocks as needed</option>
+        </select>
+      </div>
+      <div class="fld" id="field-carve-prefix" style="display:none">
         <label class="lbl">Carve size (prefix)</label>
         <input class="form-input" type="number" id="pool-carve" value="24" min="1" max="32">
+        <div class="form-hint">Every block will be this size.</div>
       </div>
     </div>
     <button class="btn btn-primary" onclick="addPool()" style="margin-top:4px">Add pool</button>
@@ -270,6 +278,39 @@
 
     {% elif pool.type == 'vlan_supernet' %}
     {% set pool_allocs = allocations.vlan_supernet.get(pool.id, {}) %}
+
+    {% if not pool.carve_prefix %}
+    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px">
+      <div class="fld" style="margin-bottom:0;min-width:170px">
+        <label class="lbl">Block</label>
+        <input class="form-input" type="text" id="blk-subnet-{{ pool.id }}"
+               placeholder="10.50.64.0/18">
+      </div>
+      <div class="fld" style="margin-bottom:0;width:90px">
+        <label class="lbl">VLAN ID</label>
+        <input class="form-input" type="number" id="blk-vlan-{{ pool.id }}"
+               min="1" max="4094" placeholder="100">
+      </div>
+      <div class="fld" style="margin-bottom:0;min-width:130px">
+        <label class="lbl">Name</label>
+        <input class="form-input" type="text" id="blk-name-{{ pool.id }}"
+               placeholder="Trusted">
+      </div>
+      <div class="fld" style="margin-bottom:0;width:80px">
+        <label class="lbl">Suggest /</label>
+        <input class="form-input" type="number" id="blk-want-{{ pool.id }}"
+               min="1" max="32" value="24">
+      </div>
+      <button class="btn btn-sm" onclick="suggestBlock('{{ pool.id }}')">Find free</button>
+      <button class="btn btn-sm btn-primary" onclick="carveBlock('{{ pool.id }}')">Add block</button>
+    </div>
+    <div id="blk-error-{{ pool.id }}" style="display:none;color:#dc2626;font-size:13px;margin-bottom:10px"></div>
+    <div class="form-hint" style="margin-bottom:12px">
+      Mixed-size supernet — enter any block inside {{ pool.subnet }}. Overlaps
+      are refused; removing a block returns its space.
+    </div>
+    {% endif %}
+
     {% if pool_allocs %}
     <div class="table-wrap">
 <table class="alloc-table">
@@ -301,6 +342,10 @@
             {% elif entry.status != 'delegated' %}
             <button class="btn btn-sm"
               onclick="openVlanAssign('{{ pool.id }}', '{{ subnet }}')">Assign VLAN</button>
+            {% endif %}
+            {% if not pool.carve_prefix and entry.status != 'delegated' %}
+            <button class="btn btn-sm btn-danger"
+              onclick="removeBlock('{{ pool.id }}', '{{ subnet }}')">Remove</button>
             {% endif %}
           </td>
         </tr>
@@ -339,6 +384,9 @@ function updatePoolForm() {
 
   document.getElementById('field-prefix').style.display = type === 'unique' ? '' : 'none';
   document.getElementById('field-carve').style.display  = type === 'vlan_supernet' ? '' : 'none';
+  const fixedCarve = type === 'vlan_supernet'
+    && document.getElementById('pool-carve-mode').value === 'fixed';
+  document.getElementById('field-carve-prefix').style.display = fixedCarve ? '' : 'none';
 
   // The source selector only appears when there is a supernet to take from.
   document.getElementById('pool-source-fields').style.display = canDelegate ? '' : 'none';
@@ -394,11 +442,22 @@ async function addPool() {
     && SUPERNETS.length > 0
     && document.getElementById('pool-source').value === 'delegate';
   if (!name) { alert('Name is required.'); return; }
-  if (!delegating && !subnet) { alert('Subnet is required.'); return; }
+  if (!delegating) {
+    if (!subnet) { alert('Subnet is required.'); return; }
+    /* A subnet without a mask is stored as-is and later read as a /32,
+       which makes address pickers behave badly. Require CIDR. */
+    if (!/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(subnet)) {
+      alert('Subnet must include a prefix, e.g. 10.50.64.0/18');
+      return;
+    }
+  }
 
   const payload = { name, type, subnet };
   if (type === 'unique')        payload.prefix = prefix;
-  if (type === 'vlan_supernet') payload.carve_prefix = carve;
+  if (type === 'vlan_supernet'
+      && document.getElementById('pool-carve-mode').value === 'fixed') {
+    payload.carve_prefix = carve;   // absent means mixed-size, carved on demand
+  }
 
   // Delegated pools take their range from the chosen carved subnet.
   const canDelegate = (type === 'unique' || type === 'point_to_point') && SUPERNETS.length > 0;
@@ -573,6 +632,58 @@ async function submitVlanAssign() {
   const data = await res.json();
   if (data.ok) location.reload();
   else vlanError(data.error || 'Assignment failed');
+}
+
+/* ── Mixed-size supernets ── */
+
+function blockError(poolId, msg) {
+  const el = document.getElementById('blk-error-' + poolId);
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.display = msg ? 'block' : 'none';
+}
+
+async function suggestBlock(poolId) {
+  const want = document.getElementById('blk-want-' + poolId).value;
+  blockError(poolId, '');
+  const res = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId
+                          + '/suggest?prefix=' + encodeURIComponent(want));
+  const data = await res.json();
+  if (data.ok) document.getElementById('blk-subnet-' + poolId).value = data.subnet;
+  else blockError(poolId, data.error || 'No free block of that size.');
+}
+
+async function carveBlock(poolId) {
+  const subnet = document.getElementById('blk-subnet-' + poolId).value.trim();
+  const vlanId = document.getElementById('blk-vlan-' + poolId).value.trim();
+  const name   = document.getElementById('blk-name-' + poolId).value.trim();
+
+  if (!subnet) { blockError(poolId, 'Enter a block, e.g. 10.50.64.0/18.'); return; }
+  if (!/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(subnet)) {
+    blockError(poolId, 'Block must include a prefix, e.g. 10.50.64.0/18.'); return;
+  }
+  blockError(poolId, '');
+
+  const res = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId + '/blocks', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({subnet, vlan_id: vlanId || null, vlan_name: name || null})
+  });
+  const data = await res.json();
+  if (data.ok) location.reload();
+  else blockError(poolId, data.error || 'Could not add block.');
+}
+
+async function removeBlock(poolId, subnet) {
+  if (!confirm('Remove ' + subnet + '? Its space returns to the supernet.')) return;
+  const res = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId + '/blocks', {
+    method: 'DELETE',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({subnet})
+  });
+  const data = await res.json();
+  if (data.ok) location.reload();
+  else blockError(poolId, data.error || 'Could not remove block.');
 }
 
 async function releaseVlan(poolId, subnet) {

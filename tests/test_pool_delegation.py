@@ -374,3 +374,59 @@ class TestPoolFormInitialisation:
         body = auth_client.get('/projects/%s/resources' % proj).data.decode()
         assert "addEventListener('DOMContentLoaded', updatePoolForm)" in body, \
             'pool form is never initialised on page load'
+
+
+class TestSubnetFormatValidation:
+    """A subnet stored without a mask hung the editor.
+
+    "10.50.64.0" with the mask in the separate prefix field parses as a /32
+    server-side, and in the browser parseInt(undefined) made the mask zero —
+    so the address picker tried to enumerate all 4.29 billion IPv4 addresses
+    and locked the tab. No server error, because the page returned 200.
+    """
+
+    def test_bare_address_is_rejected(self, app, proj):
+        with app.app_context():
+            with pytest.raises(PoolOverlapError) as e:
+                add_pool(app, 'admin', proj, {
+                    'id': 'bad', 'type': 'unique', 'name': 'Trusted',
+                    'prefix': 18, 'subnet': '10.50.64.0'})
+        assert 'must include a prefix' in str(e.value)
+
+    def test_nonsense_subnet_is_rejected(self, app, proj):
+        with app.app_context():
+            with pytest.raises(PoolOverlapError) as e:
+                add_pool(app, 'admin', proj, {
+                    'id': 'bad', 'type': 'unique', 'name': 'Junk',
+                    'prefix': 32, 'subnet': 'not-a-subnet/24'})
+        assert 'Invalid subnet' in str(e.value)
+
+    def test_cidr_is_accepted(self, app, proj):
+        with app.app_context():
+            add_pool(app, 'admin', proj, {
+                'id': 'ok', 'type': 'unique', 'name': 'Trusted',
+                'prefix': 32, 'subnet': '10.50.64.0/18'})
+            pools = get_project_config(app, 'admin', proj)['pools']
+        assert any(p['id'] == 'ok' for p in pools)
+
+    def test_api_reports_the_problem(self, app, auth_client, proj):
+        res = auth_client.post('/projects/%s/api/pools' % proj, json={
+            'type': 'unique', 'name': 'Trusted',
+            'prefix': 18, 'subnet': '10.50.64.0'})
+        assert res.status_code == 400
+        assert 'must include a prefix' in res.get_json()['error']
+
+    def test_editor_caps_enumeration(self, app, auth_client, proj):
+        """The browser-side guard that stops an oversized pool hanging.
+
+        The editor only renders its script block once a host is selected,
+        so the request has to name one.
+        """
+        from app.project import project_host_vars_dir
+        with app.app_context():
+            hv = os.path.join(project_host_vars_dir(app, 'admin', proj), 'sw1')
+            os.makedirs(hv, exist_ok=True)
+        body = auth_client.get(
+            '/projects/%s/editor?host=sw1' % proj).data.decode()
+        assert 'MAX_ENUMERATED_IPS' in body
+        assert 'isNaN(subnetPrefix)' in body

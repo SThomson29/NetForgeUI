@@ -187,6 +187,19 @@ def add_pool(app, username, project_name, pool):
     """
     cfg = _load_config(app, username, project_name)
 
+    subnet = (pool.get('subnet') or '').strip()
+    if '/' not in subnet:
+        # Stored without a mask, a subnet is later read as a single /32.
+        # The editor's address pickers then mis-size the pool, and a zero
+        # mask makes them try to enumerate the whole address space.
+        raise PoolOverlapError(
+            'Subnet must include a prefix, e.g. 10.50.64.0/18 (got "%s").'
+            % subnet)
+    try:
+        ipaddress.ip_network(subnet, strict=False)
+    except ValueError as e:
+        raise PoolOverlapError('Invalid subnet "%s": %s' % (subnet, e))
+
     parent_id = pool.get('parent_pool_id')
     if parent_id:
         _validate_delegation(cfg, pool, parent_id)
@@ -203,7 +216,9 @@ def add_pool(app, username, project_name, pool):
     _save_config(app, username, project_name, cfg)
 
     if pool['type'] == 'vlan_supernet':
-        _precarve_supernet(app, username, project_name, pool)
+        # A manual supernet starts empty — blocks are carved on demand.
+        if not is_manual_supernet(pool):
+            _precarve_supernet(app, username, project_name, pool)
     elif parent_id:
         _mark_subnet_delegated(app, username, project_name,
                                parent_id, pool['subnet'], pool['id'])
@@ -231,10 +246,12 @@ def _validate_delegation(cfg, pool, parent_id):
     if not child.subnet_of(supernet):
         raise PoolOverlapError(
             '%s is not inside %s.' % (child, supernet))
-    if child.prefixlen != int(parent['carve_prefix']):
-        raise PoolOverlapError(
-            'Delegated range must be exactly one /%s subnet of the supernet '
-            '(got /%s).' % (parent['carve_prefix'], child.prefixlen))
+    if not is_manual_supernet(parent):
+        if child.prefixlen != int(parent['carve_prefix']):
+            raise PoolOverlapError(
+                'Delegated range must be exactly one /%s subnet of the '
+                'supernet (got /%s).'
+                % (parent['carve_prefix'], child.prefixlen))
 
     # Must not collide with another pool other than the parent itself.
     clash = _overlapping_pool(cfg, pool['subnet'], ignore_id=parent_id)
@@ -246,12 +263,23 @@ def _validate_delegation(cfg, pool, parent_id):
 
 def _mark_subnet_delegated(app, username, project_name,
                            parent_id, subnet, child_pool_id):
-    """Flag a carved subnet as delegated so the VLAN picker skips it."""
+    """Flag a block as delegated so it is not offered for a VLAN.
+
+    A manual supernet has nothing pre-carved, so the block is created here.
+    Without that it would not be recorded as used and the overlap check
+    would happily hand the same space out again.
+    """
     allocs = _load_allocations(app, username, project_name)
-    carved = allocs.get('vlan_supernet', {}).get(parent_id, {})
+    carved = allocs.setdefault('vlan_supernet', {}).setdefault(parent_id, {})
     entry = carved.get(subnet)
     if entry is None:
-        return
+        entry = carved[subnet] = {
+            'status':        'carved',
+            'vlan_id':       None,
+            'vlan_name':     None,
+            'hostname':      None,
+            'peer_hostname': None,
+        }
     entry['status'] = 'delegated'
     entry['delegated_to'] = child_pool_id
     _save_allocations(app, username, project_name, allocs)
@@ -267,8 +295,15 @@ def _release_delegated_subnet(app, username, project_name, pool):
     entry = carved.get(pool.get('subnet'))
     if entry is None:
         return
-    entry['status'] = 'carved'
-    entry.pop('delegated_to', None)
+    cfg = _load_config(app, username, project_name)
+    parent = _find_pool(cfg, parent_id)
+    if parent and is_manual_supernet(parent):
+        # Nothing was carved here before the delegation, so remove the block
+        # rather than leaving it occupying space as an empty entry.
+        carved.pop(pool.get('subnet'), None)
+    else:
+        entry['status'] = 'carved'
+        entry.pop('delegated_to', None)
     _save_allocations(app, username, project_name, allocs)
 
 
@@ -295,6 +330,122 @@ def remove_pool(app, username, project_name, pool_id):
     for pool_type in allocs:
         for pid in doomed:
             allocs[pool_type].pop(pid, None)
+    _save_allocations(app, username, project_name, allocs)
+
+
+def supernet_free_blocks(supernet, used):
+    """Space left in a supernet after `used` blocks are taken.
+
+    Computed rather than stored, so releasing a block automatically merges
+    it back with any adjacent free space — there is no fragmentation state
+    to maintain.
+    """
+    try:
+        free = [ipaddress.ip_network(supernet, strict=False)]
+    except ValueError:
+        return []
+    for u in used:
+        try:
+            taken = ipaddress.ip_network(u, strict=False)
+        except ValueError:
+            continue
+        remaining = []
+        for block in free:
+            if taken.subnet_of(block):
+                remaining.extend(block.address_exclude(taken))
+            elif not block.overlaps(taken):
+                remaining.append(block)
+        free = remaining
+    return sorted(free, key=lambda n: (int(n.network_address), n.prefixlen))
+
+
+def suggest_free_block(app, username, project_name, pool_id, want_prefix):
+    """First free block of the requested size, or None if it will not fit."""
+    cfg = _load_config(app, username, project_name)
+    pool = _find_pool(cfg, pool_id)
+    if not pool or pool['type'] != 'vlan_supernet':
+        return None
+    allocs = _load_allocations(app, username, project_name)
+    used = list(allocs['vlan_supernet'].get(pool_id, {}).keys())
+    for block in supernet_free_blocks(pool['subnet'], used):
+        if block.prefixlen <= int(want_prefix):
+            return str(next(block.subnets(new_prefix=int(want_prefix))))
+    return None
+
+
+def is_manual_supernet(pool):
+    """True when a supernet carves on demand rather than into equal blocks.
+
+    Existing supernets all carry a carve_prefix and keep their behaviour;
+    only pools created without one use manual mode.
+    """
+    return (pool.get('type') == 'vlan_supernet'
+            and not pool.get('carve_prefix'))
+
+
+def carve_supernet_block(app, username, project_name, pool_id, subnet,
+                         vlan_id=None, vlan_name=None):
+    """Carve a block of any size out of a manual supernet.
+
+    The operator does their own subnetting; this only refuses a block that
+    is outside the supernet, overlaps one already carved, or is not a valid
+    network for its mask.
+    """
+    cfg = _load_config(app, username, project_name)
+    pool = _find_pool(cfg, pool_id)
+    if not pool or pool['type'] != 'vlan_supernet':
+        raise ValueError('Pool %s is not a supernet.' % pool_id)
+    if not is_manual_supernet(pool):
+        raise ValueError(
+            'This supernet carves into fixed /%s blocks; assign one of those '
+            'instead.' % pool.get('carve_prefix'))
+
+    if '/' not in str(subnet):
+        raise ValueError('Block must include a prefix, e.g. 10.50.64.0/18.')
+    try:
+        block = ipaddress.ip_network(subnet, strict=True)
+    except ValueError as e:
+        raise ValueError('%s is not a valid network: %s' % (subnet, e))
+
+    supernet = ipaddress.ip_network(pool['subnet'], strict=False)
+    if not block.subnet_of(supernet):
+        raise ValueError('%s is not inside %s.' % (block, supernet))
+
+    allocs = _load_allocations(app, username, project_name)
+    existing = allocs['vlan_supernet'].setdefault(pool_id, {})
+    for other in existing:
+        try:
+            if block.overlaps(ipaddress.ip_network(other, strict=False)):
+                raise ValueError('%s overlaps the existing block %s.'
+                                 % (block, other))
+        except ValueError as e:
+            if 'overlaps' in str(e):
+                raise
+            continue
+
+    existing[str(block)] = {
+        'status':        'assigned' if vlan_id else 'carved',
+        'vlan_id':       vlan_id,
+        'vlan_name':     vlan_name,
+        'hostname':      None,
+        'peer_hostname': None,
+    }
+    _save_allocations(app, username, project_name, allocs)
+    return str(block)
+
+
+def remove_supernet_block(app, username, project_name, pool_id, subnet):
+    """Remove a manually carved block, returning its space to the supernet."""
+    allocs = _load_allocations(app, username, project_name)
+    blocks = allocs['vlan_supernet'].get(pool_id, {})
+    entry = blocks.get(subnet)
+    if entry is None:
+        raise ValueError('%s is not carved from this supernet.' % subnet)
+    if entry.get('status') == 'delegated':
+        raise ValueError(
+            '%s is delegated to another pool. Remove that pool first.' % subnet)
+    blocks.pop(subnet, None)
+    allocs['svi'].get(pool_id, {}).pop(subnet, None)
     _save_allocations(app, username, project_name, allocs)
 
 
