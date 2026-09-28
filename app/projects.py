@@ -17,6 +17,8 @@ from .project import (
     get_available_ptp_pairs, allocate_ptp, release_ptp,
     get_carved_subnets, assign_vlan_subnet, release_vlan_subnet,
     sort_by_address,
+    carve_supernet_block, remove_supernet_block, suggest_free_block,
+    is_manual_supernet,
     get_common, save_common,
     get_conventions, save_conventions,
     get_all_allocations,
@@ -434,6 +436,58 @@ def api_carved_subnets(project_name, pool_id):
     free = [s for s, v in sort_by_address(carved)
             if v.get('status') == 'carved']
     return jsonify({'ok': True, 'subnets': free})
+
+
+@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>/blocks',
+                   methods=['POST'])
+@login_required
+def api_carve_block(project_name, pool_id):
+    """Carve a block of any size from a manual supernet."""
+    app  = current_app._get_current_object()
+    data = request.json or {}
+    try:
+        subnet = carve_supernet_block(
+            app, current_user.username, project_name, pool_id,
+            (data.get('subnet') or '').strip(),
+            (data.get('vlan_id') or None),
+            (data.get('vlan_name') or None))
+        return jsonify({'ok': True, 'subnet': subnet})
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+
+
+@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>/blocks',
+                   methods=['DELETE'])
+@login_required
+def api_remove_block(project_name, pool_id):
+    """Remove a manually carved block, returning its space."""
+    app  = current_app._get_current_object()
+    data = request.json or {}
+    try:
+        remove_supernet_block(app, current_user.username, project_name,
+                              pool_id, (data.get('subnet') or '').strip())
+        return jsonify({'ok': True})
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+
+
+@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>/suggest')
+@login_required
+def api_suggest_block(project_name, pool_id):
+    """First free block of a requested size."""
+    app = current_app._get_current_object()
+    try:
+        want = int(request.args.get('prefix', 24))
+    except ValueError:
+        return jsonify({'ok': False, 'error': 'Invalid prefix'}), 400
+    if not 1 <= want <= 32:
+        return jsonify({'ok': False, 'error': 'Prefix must be 1-32'}), 400
+    subnet = suggest_free_block(app, current_user.username, project_name,
+                                pool_id, want)
+    if not subnet:
+        return jsonify({'ok': False,
+                        'error': 'No free /%s block available.' % want}), 404
+    return jsonify({'ok': True, 'subnet': subnet})
 
 
 @projects_bp.route('/projects/<project_name>/api/pools/<pool_id>', methods=['DELETE'])
