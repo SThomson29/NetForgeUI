@@ -448,3 +448,59 @@ class TestSubdivideButton:
         for pool_id in set(re.findall(r"carveInto\('([^']+)'", body)):
             assert 'id="blk-subnet-%s"' % pool_id in body, (
                 'carveInto offered for %s with no block editor' % pool_id)
+
+
+class TestStrandedContainerRepair:
+    """A container with no children is stranded — no Remove button, and it
+    cannot be subdivided usefully. That state was reachable by removing a
+    delegated pool nested inside one.
+    """
+
+    def test_removing_a_nested_delegation_demotes_the_parent(self, app, proj):
+        from app.project import remove_pool
+        with app.app_context():
+            carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/18')
+            carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/24')
+            add_pool(app, 'admin', proj, {
+                'id': 'wm', 'type': 'unique', 'name': 'WM', 'prefix': '29',
+                'subnet': '10.50.0.0/24', 'parent_pool_id': 'sn'})
+            remove_pool(app, 'admin', proj, 'wm')
+            blocks = get_carved_subnets(app, 'admin', proj, 'sn')
+
+        assert '10.50.0.0/24' not in blocks
+        assert blocks['10.50.0.0/18']['status'] == 'carved', \
+            'empty container left stranded with no way to remove it'
+
+    def test_existing_stranded_state_is_repaired_on_read(self, app, proj):
+        """Projects already in this state must heal without manual editing."""
+        import json, os
+        from app.project import project_dir
+        with app.app_context():
+            path = os.path.join(project_dir(app, 'admin', proj), 'allocations.json')
+            data = json.load(open(path))
+            data['vlan_supernet']['sn'] = {'10.50.0.0/18': {
+                'status': 'container', 'vlan_id': None, 'vlan_name': None,
+                'hostname': None, 'peer_hostname': None}}
+            json.dump(data, open(path, 'w'))
+
+            blocks = get_carved_subnets(app, 'admin', proj, 'sn')
+        assert blocks['10.50.0.0/18']['status'] == 'carved'
+
+    def test_a_real_container_is_left_alone(self, app, proj):
+        with app.app_context():
+            carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/18')
+            carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/24')
+            blocks = get_carved_subnets(app, 'admin', proj, 'sn')
+        assert blocks['10.50.0.0/18']['status'] == 'container'
+
+    def test_repaired_block_is_removable(self, app, auth_client, proj):
+        from app.project import remove_pool
+        with app.app_context():
+            carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/18')
+            carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/24')
+            add_pool(app, 'admin', proj, {
+                'id': 'wm', 'type': 'unique', 'name': 'WM', 'prefix': '29',
+                'subnet': '10.50.0.0/24', 'parent_pool_id': 'sn'})
+            remove_pool(app, 'admin', proj, 'wm')
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        assert "removeBlock('sn', '10.50.0.0/18')" in body
