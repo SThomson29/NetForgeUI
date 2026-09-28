@@ -256,3 +256,39 @@ class TestRoutes:
             add_pool(app, 'admin', proj, dict(FIXED))
         body = auth_client.get('/projects/%s/resources' % proj).data.decode()
         assert "carveBlock('fx')" not in body
+
+
+class TestVlanOnDelegatedBlock:
+    """A delegated block may still be tagged with a VLAN.
+
+    The real shape this came from: a /16 supernet, a /24 delegated to a
+    unique pool handing out /29s, and that /24 is also a VLAN.
+    """
+
+    def test_tag_survives_and_keeps_ownership(self, app, proj):
+        from app.project import assign_vlan_subnet, get_all_allocations
+        with app.app_context():
+            add_pool(app, 'admin', proj, {
+                'id': 'wm', 'type': 'unique', 'name': 'Wireless MGMT',
+                'prefix': '29', 'subnet': '10.50.10.0/24',
+                'parent_pool_id': 'sn'})
+            assign_vlan_subnet(app, 'admin', proj, 'sn', '10.50.10.0/24',
+                               '110', 'Wireless MGMT', 'sw1')
+            entry = get_carved_subnets(app, 'admin', proj, 'sn')['10.50.10.0/24']
+            allocs = get_all_allocations(app, 'admin', proj)
+
+        assert entry['vlan_id'] == '110'
+        assert entry['status'] == 'delegated'
+        assert entry['delegated_to'] == 'wm'
+        assert allocs['svi'].get('sn', {}) == {}, \
+            'gateway addresses must not be derived inside a delegated block'
+
+    def test_page_offers_the_button_on_a_delegated_block(
+            self, app, auth_client, proj):
+        with app.app_context():
+            add_pool(app, 'admin', proj, {
+                'id': 'wm', 'type': 'unique', 'name': 'Wireless MGMT',
+                'prefix': '29', 'subnet': '10.50.10.0/24',
+                'parent_pool_id': 'sn'})
+        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        assert "openVlanAssign('sn', '10.50.10.0/24')" in body
