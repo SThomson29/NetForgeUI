@@ -302,6 +302,10 @@
                min="1" max="32" value="24">
       </div>
       <button class="btn btn-sm" onclick="suggestBlock('{{ pool.id }}')">Find free</button>
+      <span id="blk-scope-{{ pool.id }}" style="display:none;font-size:12px;color:#92400e">
+      </span>
+      <button class="btn btn-sm btn-ghost" onclick="clearCarveScope('{{ pool.id }}')"
+              title="Add at the top level instead">Top level</button>
       <button class="btn btn-sm btn-primary" onclick="carveBlock('{{ pool.id }}')">Add block</button>
     </div>
     <div id="blk-error-{{ pool.id }}" style="display:none;color:#dc2626;font-size:13px;margin-bottom:10px"></div>
@@ -317,14 +321,19 @@
       <thead><tr><th>Subnet</th><th>VLAN ID</th><th>VLAN Name</th><th>Hostname</th><th>Peer</th><th>Status</th><th></th></tr></thead>
       <tbody>
         {% for subnet, entry in pool_allocs.items() %}
-        <tr>
-          <td>{{ subnet }}</td>
+        {% set depth = (block_depths or {}).get(subnet, 0) %}
+        <tr{% if entry.status == 'container' %} style="background:#fafafa"{% endif %}>
+          <td style="padding-left:{{ 10 + depth * 22 }}px">
+            {% if depth %}<span style="color:#bbb">└ </span>{% endif %}{{ subnet }}
+          </td>
           <td class="meta">{{ entry.vlan_id or '—' }}</td>
           <td class="meta">{{ entry.vlan_name or '—' }}</td>
           <td class="meta">{{ entry.hostname or '—' }}</td>
           <td class="meta">{{ entry.peer_hostname or '—' }}</td>
           <td>
-            {% if entry.status == 'assigned' %}
+            {% if entry.status == 'container' %}
+            <span class="pool-type-badge" style="background:#eef2ff;color:#3730a3">Container</span>
+            {% elif entry.status == 'assigned' %}
             <span class="assigned-badge">Assigned</span>
             {% elif entry.status == 'delegated' %}
             {% set child = (config.get('pools', []) | selectattr('id','equalto',entry.get('delegated_to')) | first) %}
@@ -342,13 +351,18 @@
             {% if entry.status == 'assigned' %}
             <button class="btn btn-sm btn-danger"
               onclick="releaseVlan('{{ pool.id }}', '{{ subnet }}')">Release</button>
+            {% elif entry.status == 'container' %}
+            <button class="btn btn-sm"
+              onclick="carveInto('{{ pool.id }}', '{{ subnet }}')">Add inside</button>
             {% else %}
             <button class="btn btn-sm"
               onclick="openVlanAssign('{{ pool.id }}', '{{ subnet }}')">
               {% if entry.vlan_id %}Edit VLAN{% else %}Assign VLAN{% endif %}
             </button>
+            <button class="btn btn-sm"
+              onclick="carveInto('{{ pool.id }}', '{{ subnet }}')">Subdivide</button>
             {% endif %}
-            {% if not pool.carve_prefix and entry.status != 'delegated' %}
+            {% if not pool.carve_prefix and entry.status not in ['delegated', 'container'] %}
             <button class="btn btn-sm btn-danger"
               onclick="removeBlock('{{ pool.id }}', '{{ subnet }}')">Remove</button>
             {% endif %}
@@ -648,11 +662,34 @@ function blockError(poolId, msg) {
   el.style.display = msg ? 'block' : 'none';
 }
 
+/* When set, new blocks and suggestions are scoped inside this container. */
+const carveScope = {};
+
+function carveInto(poolId, subnet) {
+  carveScope[poolId] = subnet;
+  const hint = document.getElementById('blk-scope-' + poolId);
+  if (hint) {
+    hint.textContent = 'Adding inside ' + subnet;
+    hint.style.display = '';
+  }
+  document.getElementById('blk-subnet-' + poolId).value = '';
+  document.getElementById('blk-subnet-' + poolId).focus();
+  blockError(poolId, '');
+}
+
+function clearCarveScope(poolId) {
+  delete carveScope[poolId];
+  const hint = document.getElementById('blk-scope-' + poolId);
+  if (hint) hint.style.display = 'none';
+}
+
 async function suggestBlock(poolId) {
   const want = document.getElementById('blk-want-' + poolId).value;
   blockError(poolId, '');
+  const within = carveScope[poolId]
+    ? '&within=' + encodeURIComponent(carveScope[poolId]) : '';
   const res = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId
-                          + '/suggest?prefix=' + encodeURIComponent(want));
+                          + '/suggest?prefix=' + encodeURIComponent(want) + within);
   const data = await res.json();
   if (data.ok) document.getElementById('blk-subnet-' + poolId).value = data.subnet;
   else blockError(poolId, data.error || 'No free block of that size.');

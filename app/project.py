@@ -359,15 +359,39 @@ def supernet_free_blocks(supernet, used):
     return sorted(free, key=lambda n: (int(n.network_address), n.prefixlen))
 
 
-def suggest_free_block(app, username, project_name, pool_id, want_prefix):
-    """First free block of the requested size, or None if it will not fit."""
+def suggest_free_block(app, username, project_name, pool_id, want_prefix,
+                      within=None):
+    """First free block of the requested size.
+
+    Free space is per level: inside a container it means the container minus
+    its direct children; at the top it means the supernet minus its
+    top-level blocks. `within` selects the container to look inside.
+    """
     cfg = _load_config(app, username, project_name)
     pool = _find_pool(cfg, pool_id)
     if not pool or pool['type'] != 'vlan_supernet':
         return None
+
     allocs = _load_allocations(app, username, project_name)
-    used = list(allocs['vlan_supernet'].get(pool_id, {}).keys())
-    for block in supernet_free_blocks(pool['subnet'], used):
+    blocks = allocs['vlan_supernet'].get(pool_id, {})
+
+    if within:
+        parent = _safe_network(within)
+        if parent is None or str(parent) not in blocks:
+            return None
+        if blocks[str(parent)].get('status') in ('assigned', 'delegated'):
+            return None
+        if _block_depth(parent, blocks) >= MAX_BLOCK_DEPTH:
+            return None
+        scope = str(parent)
+        used = [str(k) for k in _direct_children(parent, blocks)]
+    else:
+        scope = pool['subnet']
+        used = [b for b in blocks
+                if _safe_network(b) and _enclosing_block(
+                    _safe_network(b), blocks) is None]
+
+    for block in supernet_free_blocks(scope, used):
         if block.prefixlen <= int(want_prefix):
             return str(next(block.subnets(new_prefix=int(want_prefix))))
     return None
@@ -381,6 +405,87 @@ def is_manual_supernet(pool):
     """
     return (pool.get('type') == 'vlan_supernet'
             and not pool.get('carve_prefix'))
+
+
+# A block carved directly from the supernet is depth 1. Nesting deeper than
+# this is computable but unreadable, and usually signals a planning mistake.
+MAX_BLOCK_DEPTH = 3
+
+
+def _safe_network(value):
+    """ip_network or None — a malformed key must not abort a calculation."""
+    try:
+        return ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        return None
+
+
+def build_block_tree(blocks):
+    """Nest blocks by containment. Returns [(cidr, [children]), ...].
+
+    The hierarchy is derived from the addresses themselves rather than
+    stored, so there are no parent pointers to keep consistent and existing
+    flat data needs no migration.
+    """
+    nets = []
+    for b in blocks:
+        try:
+            nets.append(ipaddress.ip_network(b, strict=False))
+        except ValueError:
+            continue
+    nets.sort(key=lambda n: (int(n.network_address), n.prefixlen))
+
+    tree, stack = [], []
+    for net in nets:
+        while stack and not net.subnet_of(stack[-1][0]):
+            stack.pop()
+        node = (str(net), [])
+        (stack[-1][1] if stack else tree).append((net, node[1]))
+        stack.append((net, node[1]))
+    return tree
+
+
+def _enclosing_block(block, blocks):
+    """Smallest existing block that strictly contains `block`, if any."""
+    best = None
+    for other in blocks:
+        try:
+            net = ipaddress.ip_network(other, strict=False)
+        except ValueError:
+            continue
+        if net == block:
+            continue
+        if block.subnet_of(net):
+            if best is None or net.prefixlen > best.prefixlen:
+                best = net
+    return best
+
+
+def _block_depth(block, blocks):
+    """How many existing blocks enclose this one, plus one for itself."""
+    depth = 1
+    for other in blocks:
+        try:
+            net = ipaddress.ip_network(other, strict=False)
+        except ValueError:
+            continue
+        if net != block and block.subnet_of(net):
+            depth += 1
+    return depth
+
+
+def _direct_children(parent, blocks):
+    """Blocks immediately inside `parent` — no grandchildren."""
+    kids = []
+    for other in blocks:
+        try:
+            net = ipaddress.ip_network(other, strict=False)
+        except ValueError:
+            continue
+        if net != parent and net.subnet_of(parent):
+            if _enclosing_block(net, blocks) == parent:
+                kids.append(net)
+    return kids
 
 
 def carve_supernet_block(app, username, project_name, pool_id, subnet,
@@ -413,15 +518,56 @@ def carve_supernet_block(app, username, project_name, pool_id, subnet,
 
     allocs = _load_allocations(app, username, project_name)
     existing = allocs['vlan_supernet'].setdefault(pool_id, {})
-    for other in existing:
-        try:
-            if block.overlaps(ipaddress.ip_network(other, strict=False)):
+
+    if str(block) in existing:
+        raise ValueError('%s is already carved.' % block)
+
+    # Carving must go outside-in. Wrapping a larger block around existing
+    # ones would silently reparent them, so it is refused with a clear
+    # message rather than guessed at.
+    swallowed = [b for b in existing
+                 if _safe_network(b) and _safe_network(b).subnet_of(block)]
+    if swallowed:
+        raise ValueError(
+            '%s would contain the existing block %s. Carve larger blocks '
+            'first, then subdivide them.' % (block, sorted(swallowed)[0]))
+
+    parent = _enclosing_block(block, existing)
+
+    if parent is None:
+        # Top level: must not overlap anything already carved here.
+        for other in existing:
+            net = _safe_network(other)
+            if net and block.overlaps(net):
                 raise ValueError('%s overlaps the existing block %s.'
                                  % (block, other))
-        except ValueError as e:
-            if 'overlaps' in str(e):
-                raise
-            continue
+    else:
+        # Nesting inside an existing block — only if that block is free to
+        # be subdivided, and only if it is not already in use as a leaf.
+        pstatus = existing[str(parent)].get('status')
+        if pstatus == 'assigned':
+            raise ValueError(
+                '%s is assigned to VLAN %s. Release it before subdividing.'
+                % (parent, existing[str(parent)].get('vlan_id')))
+        if pstatus == 'delegated':
+            raise ValueError(
+                '%s is delegated to another pool, so it cannot be '
+                'subdivided here.' % parent)
+
+        for sibling in _direct_children(parent, existing):
+            if block.overlaps(sibling):
+                raise ValueError('%s overlaps the existing block %s.'
+                                 % (block, sibling))
+
+        depth = _block_depth(block, existing)
+        if depth > MAX_BLOCK_DEPTH:
+            raise ValueError(
+                'Nesting is limited to %s levels; %s would be level %s.'
+                % (MAX_BLOCK_DEPTH, block, depth))
+
+        # The parent now holds blocks, so it is a container rather than a
+        # usable range.
+        existing[str(parent)]['status'] = 'container'
 
     existing[str(block)] = {
         'status':        'assigned' if vlan_id else 'carved',
@@ -444,7 +590,22 @@ def remove_supernet_block(app, username, project_name, pool_id, subnet):
     if entry.get('status') == 'delegated':
         raise ValueError(
             '%s is delegated to another pool. Remove that pool first.' % subnet)
+
+    net = _safe_network(subnet)
+    kids = _direct_children(net, blocks) if net else []
+    if kids:
+        raise ValueError(
+            '%s contains %s block(s). Remove those first.' % (subnet, len(kids)))
+
     blocks.pop(subnet, None)
+
+    # If its parent now holds nothing, it is a usable range again rather
+    # than a container.
+    if net:
+        parent = _enclosing_block(net, blocks)
+        if parent is not None and not _direct_children(parent, blocks):
+            if blocks[str(parent)].get('status') == 'container':
+                blocks[str(parent)]['status'] = 'carved'
     allocs['svi'].get(pool_id, {}).pop(subnet, None)
     _save_allocations(app, username, project_name, allocs)
 
