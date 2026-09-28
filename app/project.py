@@ -307,6 +307,106 @@ def _release_delegated_subnet(app, username, project_name, pool):
     _save_allocations(app, username, project_name, allocs)
 
 
+def update_pool(app, username, project_name, pool_id, name=None, subnet=None,
+                prefix=None):
+    """Change a pool's name or address range, keeping its allocations.
+
+    Without this, narrowing a delegation (a /18 down to a /24, say) means
+    deleting the pool — and remove_pool takes its allocations with it. The
+    allocation history is the one thing that cannot be reconstructed, so
+    changing the range in place is the safe path.
+
+    Any allocation outside the new range is refused rather than dropped:
+    the operator releases it deliberately, instead of losing it silently.
+    """
+    cfg = _load_config(app, username, project_name)
+    pool = _find_pool(cfg, pool_id)
+    if not pool:
+        raise ValueError('Pool %s does not exist.' % pool_id)
+
+    if name:
+        pool['name'] = name
+    if prefix is not None:
+        pool['prefix'] = prefix
+
+    if subnet and subnet != pool.get('subnet'):
+        if '/' not in str(subnet):
+            raise ValueError(
+                'Subnet must include a prefix, e.g. 10.50.0.0/24.')
+        try:
+            new_net = ipaddress.ip_network(subnet, strict=False)
+        except ValueError as e:
+            raise ValueError('Invalid subnet "%s": %s' % (subnet, e))
+
+        if pool['type'] == 'vlan_supernet':
+            raise ValueError(
+                'A supernet\'s range cannot be changed once blocks are '
+                'carved from it.')
+
+        # Allocations must still fall inside the new range.
+        allocs = _load_allocations(app, username, project_name)
+        held = allocs.get(pool['type'], {}).get(pool_id, {})
+        stranded = []
+        for addr in held:
+            try:
+                if ipaddress.ip_address(str(addr).split('/')[0]) not in new_net:
+                    stranded.append(addr)
+            except ValueError:
+                continue
+        if stranded:
+            raise ValueError(
+                '%s allocation(s) fall outside %s (%s). Release them first.'
+                % (len(stranded), new_net, ', '.join(sorted(stranded)[:3])))
+
+        parent_id = pool.get('parent_pool_id')
+        old_subnet = pool.get('subnet')
+
+        if parent_id:
+            # A delegated pool: the block recorded against the parent has to
+            # move with it, or the supernet would still show the old range
+            # as spoken for.
+            parent = _find_pool(cfg, parent_id)
+            if parent:
+                supernet = ipaddress.ip_network(parent['subnet'], strict=False)
+                if not new_net.subnet_of(supernet):
+                    raise ValueError(
+                        '%s is not inside %s.' % (new_net, supernet))
+
+            blocks = allocs['vlan_supernet'].setdefault(parent_id, {})
+            entry = blocks.pop(old_subnet, None)
+
+            clash = _enclosing_block(new_net, blocks)
+            if clash is not None and blocks[str(clash)].get('status') in (
+                    'assigned', 'delegated'):
+                blocks[old_subnet] = entry     # put it back untouched
+                raise ValueError(
+                    '%s sits inside %s, which is already in use.'
+                    % (new_net, clash))
+
+            blocks[str(new_net)] = entry or {
+                'status': 'delegated', 'vlan_id': None, 'vlan_name': None,
+                'hostname': None, 'peer_hostname': None,
+            }
+            blocks[str(new_net)]['delegated_to'] = pool_id
+
+            # The old parent block may now be a container, or empty again.
+            if clash is not None and blocks[str(clash)].get('status') == 'carved':
+                blocks[str(clash)]['status'] = 'container'
+
+            _save_allocations(app, username, project_name, allocs)
+        else:
+            clash = _overlapping_pool(cfg, subnet, ignore_id=pool_id)
+            if clash:
+                raise ValueError(
+                    '%s overlaps the existing pool "%s" (%s).'
+                    % (subnet, clash.get('name', clash['id']), clash['subnet']))
+
+        pool['subnet'] = str(new_net)
+
+    _save_config(app, username, project_name, cfg)
+    return pool
+
+
 def remove_pool(app, username, project_name, pool_id):
     """Remove a pool and its allocations.
 

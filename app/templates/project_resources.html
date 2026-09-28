@@ -49,6 +49,10 @@
         <span style="font-weight:600;font-size:14px">{{ pool.name }}</span>
         <span class="pool-type-badge type-{{ pool.type.replace('_','-') }}">{{ POOL_LABELS.get(pool.type, pool.type.replace('_',' ')) }}</span>
       </div>
+      {% if pool.type != 'vlan_supernet' %}
+      <button class="btn btn-sm"
+              onclick="editPool('{{ pool.id }}', '{{ pool.name }}', '{{ pool.subnet }}')">Edit</button>
+      {% endif %}
       <button class="btn btn-sm btn-danger" onclick="removePool('{{ pool.id }}', '{{ pool.name }}')">Remove</button>
     </div>
     <div style="font-size:12px;color:#666;font-family:'Courier New',monospace">
@@ -656,6 +660,47 @@ async function submitVlanAssign() {
   else vlanError(data.error || 'Assignment failed');
 }
 
+function editPool(poolId, name, subnet) {
+  const m = document.getElementById('pool-edit-modal');
+  m.dataset.poolId = poolId;
+  document.getElementById('pe-name').value = name;
+  document.getElementById('pe-subnet').value = subnet;
+  document.getElementById('pe-error').style.display = 'none';
+  m.style.display = 'flex';
+  document.getElementById('pe-subnet').focus();
+}
+
+function closeEditPool() {
+  document.getElementById('pool-edit-modal').style.display = 'none';
+}
+
+async function submitEditPool() {
+  const m = document.getElementById('pool-edit-modal');
+  const err = document.getElementById('pe-error');
+  const name = document.getElementById('pe-name').value.trim();
+  const subnet = document.getElementById('pe-subnet').value.trim();
+
+  if (!name || !subnet) {
+    err.textContent = 'Name and range are required.';
+    err.style.display = 'block';
+    return;
+  }
+  if (!/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(subnet)) {
+    err.textContent = 'Range must include a prefix, e.g. 10.50.0.0/24.';
+    err.style.display = 'block';
+    return;
+  }
+
+  const res = await fetch('/projects/' + PROJECT + '/api/pools/' + m.dataset.poolId, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name, subnet})
+  });
+  const data = await res.json();
+  if (data.ok) location.reload();
+  else { err.textContent = data.error; err.style.display = 'block'; }
+}
+
 /* ── Mixed-size supernets ── */
 
 function blockError(poolId, msg) {
@@ -767,6 +812,30 @@ async function releaseVlan(poolId, subnet) {
    type-specific fields unset until the dropdown is changed and changed back. */
 document.addEventListener('DOMContentLoaded', updatePoolForm);
 </script>
+
+<!-- ─── Edit a pool's name or range ─── -->
+<div id="pool-edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:100;align-items:center;justify-content:center">
+  <div class="card" style="width:430px;margin:0">
+    <div class="card-header">Edit pool</div>
+    <div class="fld">
+      <label class="lbl">Name</label>
+      <input class="form-input" type="text" id="pe-name">
+    </div>
+    <div class="fld">
+      <label class="lbl">Range</label>
+      <input class="form-input" type="text" id="pe-subnet" placeholder="10.50.0.0/24">
+      <div class="form-hint">
+        Allocations are kept. Narrowing the range is refused if any allocation
+        would fall outside it — release those first.
+      </div>
+    </div>
+    <div id="pe-error" style="display:none;color:#dc2626;font-size:13px;margin-top:8px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn" onclick="closeEditPool()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitEditPool()">Save</button>
+    </div>
+  </div>
+</div>
 
 <!-- ─── Assign VLAN to a carved subnet ─── -->
 <div id="vlan-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:100;align-items:center;justify-content:center">

@@ -12,7 +12,7 @@ from .project import (
     sync_allocations as _sync_allocations,
     list_projects, create_project, delete_project,
     get_project_config, save_project_config,
-    add_pool, remove_pool, PoolOverlapError,
+    add_pool, remove_pool, update_pool, PoolOverlapError,
     get_available_ips, allocate_unique, release_unique,
     get_available_ptp_pairs, allocate_ptp, release_ptp,
     get_carved_subnets, assign_vlan_subnet, release_vlan_subnet,
@@ -501,6 +501,23 @@ def api_suggest_block(project_name, pool_id):
         return jsonify({'ok': False,
                         'error': 'No free /%s block available.' % want}), 404
     return jsonify({'ok': True, 'subnet': subnet})
+
+
+@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>',
+                   methods=['PATCH'])
+@login_required
+def api_update_pool(project_name, pool_id):
+    """Change a pool's name or range without losing its allocations."""
+    app  = current_app._get_current_object()
+    data = request.json or {}
+    try:
+        pool = update_pool(app, current_user.username, project_name, pool_id,
+                           name=(data.get('name') or None),
+                           subnet=(data.get('subnet') or None),
+                           prefix=data.get('prefix'))
+        return jsonify({'ok': True, 'pool': pool})
+    except (ValueError, PoolOverlapError) as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
 
 
 @projects_bp.route('/projects/<project_name>/api/pools/<pool_id>', methods=['DELETE'])
