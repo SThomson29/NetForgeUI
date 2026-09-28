@@ -504,3 +504,88 @@ class TestStrandedContainerRepair:
             remove_pool(app, 'admin', proj, 'wm')
         body = auth_client.get('/projects/%s/resources' % proj).data.decode()
         assert "removeBlock('sn', '10.50.0.0/18')" in body
+
+
+class TestConvertToMixedSizes:
+    """A fixed-carve supernet cannot hold a /24 and a /18 side by side, and
+    none of the carve or subdivide controls apply to it. Converting has to
+    be possible in place — removing and recreating would take the blocks and
+    their allocations with it.
+    """
+
+    @pytest.fixture
+    def fixed(self, app):
+        from app.project import assign_vlan_subnet
+        with app.app_context():
+            create_project(app, 'admin', 'f')
+            add_pool(app, 'admin', 'f', {
+                'id': 'sn', 'type': 'vlan_supernet', 'name': 'Wireless',
+                'subnet': '10.50.0.0/16', 'carve_prefix': '18'})
+            assign_vlan_subnet(app, 'admin', 'f', 'sn',
+                               '10.50.64.0/18', '20', 'Trusted')
+            add_pool(app, 'admin', 'f', {
+                'id': 'wm', 'type': 'unique', 'name': 'WM', 'prefix': '29',
+                'subnet': '10.50.0.0/18', 'parent_pool_id': 'sn'})
+        return 'f'
+
+    def test_blocks_in_use_are_kept(self, app, fixed):
+        from app.project import convert_supernet_to_mixed
+        with app.app_context():
+            kept, dropped = convert_supernet_to_mixed(app, 'admin', fixed, 'sn')
+        assert kept == ['10.50.0.0/18', '10.50.64.0/18']
+        assert dropped == ['10.50.128.0/18', '10.50.192.0/18']
+
+    def test_vlan_and_delegation_survive(self, app, fixed):
+        from app.project import convert_supernet_to_mixed
+        with app.app_context():
+            convert_supernet_to_mixed(app, 'admin', fixed, 'sn')
+            blocks = get_carved_subnets(app, 'admin', fixed, 'sn')
+        assert blocks['10.50.64.0/18']['vlan_name'] == 'Trusted'
+        assert blocks['10.50.0.0/18']['delegated_to'] == 'wm'
+
+    def test_carve_prefix_is_removed(self, app, fixed):
+        from app.project import convert_supernet_to_mixed, is_manual_supernet
+        with app.app_context():
+            convert_supernet_to_mixed(app, 'admin', fixed, 'sn')
+            pool = [p for p in get_project_config(app, 'admin', fixed)['pools']
+                    if p['id'] == 'sn'][0]
+        assert is_manual_supernet(pool)
+
+    def test_freed_space_accepts_other_sizes(self, app, fixed):
+        """The point of converting."""
+        from app.project import convert_supernet_to_mixed
+        with app.app_context():
+            convert_supernet_to_mixed(app, 'admin', fixed, 'sn')
+            carve_supernet_block(app, 'admin', fixed, 'sn',
+                                 '10.50.128.0/24', '30', 'MGMT')
+            blocks = get_carved_subnets(app, 'admin', fixed, 'sn')
+        assert blocks['10.50.128.0/24']['vlan_name'] == 'MGMT'
+
+    def test_converting_twice_is_refused(self, app, fixed):
+        from app.project import convert_supernet_to_mixed
+        with app.app_context():
+            convert_supernet_to_mixed(app, 'admin', fixed, 'sn')
+            with pytest.raises(ValueError) as e:
+                convert_supernet_to_mixed(app, 'admin', fixed, 'sn')
+        assert 'already uses mixed sizes' in str(e.value)
+
+    def test_button_offered_only_on_fixed_supernets(self, app, auth_client, fixed):
+        body = auth_client.get('/projects/%s/resources' % fixed).data.decode()
+        assert "convertSupernet('sn'" in body
+
+    def test_button_gone_after_conversion(self, app, auth_client, fixed):
+        from app.project import convert_supernet_to_mixed
+        with app.app_context():
+            convert_supernet_to_mixed(app, 'admin', fixed, 'sn')
+        body = auth_client.get('/projects/%s/resources' % fixed).data.decode()
+        assert "convertSupernet('sn'" not in body
+        assert "carveBlock('sn')" in body, 'block editor should now be available'
+
+    def test_convert_via_api(self, app, auth_client, fixed):
+        res = auth_client.post('/projects/%s/api/pools/sn/convert' % fixed)
+        body = res.get_json()
+        assert body['ok'] is True
+        assert body['dropped'] == 2
+
+    def test_convert_requires_login(self, client):
+        assert client.post('/projects/f/api/pools/sn/convert').status_code == 401
