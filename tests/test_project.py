@@ -798,3 +798,114 @@ class TestSviAllocationSync:
             self._host(app, proj, 'sw1', '192.0.2.1')
             svi = get_all_allocations(app, 'admin', proj)['svi'].get('sn', {})
         assert svi == {}
+
+
+class TestSharedVtepAllocation:
+    """A VSX pair shares one anycast VTEP address.
+
+    register_unique enforces one holder per address, which is right for
+    loopback0 and wrong here — the second switch's save was overwriting the
+    first's record, leaving the pool showing only one of them.
+    """
+
+    @pytest.fixture
+    def proj(self, app):
+        from app.project import create_project, add_pool
+        with app.app_context():
+            create_project(app, 'admin', 'v')
+            add_pool(app, 'admin', 'v', {
+                'id': 'lb', 'type': 'unique', 'name': 'VTEP',
+                'prefix': '32', 'subnet': '10.255.1.0/24'})
+        return 'v'
+
+    def _vtep(self, app, proj, host, ip):
+        import os
+        from app.project import project_host_vars_dir, sync_allocations
+        hv = os.path.join(project_host_vars_dir(app, 'admin', proj), host)
+        os.makedirs(hv, exist_ok=True)
+        with open(os.path.join(hv, 'vxlan.yml'), 'w') as f:
+            f.write('loopback_interface: loopback1\nloopback_ip: "%s"\n'
+                    'ospf_area: "0.0.0.0"\nvxlan:\n  vni_map: []\n' % ip)
+        sync_allocations(app, 'admin', proj, host)
+
+    def test_both_members_are_recorded(self, app, proj):
+        from app.project import get_all_allocations
+        with app.app_context():
+            self._vtep(app, proj, 'core-01', '10.255.1.1')
+            self._vtep(app, proj, 'core-02', '10.255.1.1')
+            allocs = get_all_allocations(app, 'admin', proj)['unique']['lb']
+        assert len(allocs) == 1, 'one address, not two'
+        entry = allocs['10.255.1.1']
+        assert entry['shared'] is True
+        assert {entry['hostname'], entry['shared_with']} == {'core-01', 'core-02'}
+
+    def test_peer_keeps_it_when_one_switch_moves(self, app, proj):
+        """Clearing a host's allocations must not erase the peer's claim."""
+        from app.project import get_all_allocations
+        with app.app_context():
+            self._vtep(app, proj, 'core-01', '10.255.1.1')
+            self._vtep(app, proj, 'core-02', '10.255.1.1')
+            self._vtep(app, proj, 'core-02', '10.255.1.9')
+            allocs = get_all_allocations(app, 'admin', proj)['unique']['lb']
+        assert allocs['10.255.1.1']['hostname'] == 'core-01'
+        assert 'shared_with' not in allocs['10.255.1.1']
+        assert allocs['10.255.1.9']['hostname'] == 'core-02'
+
+    def test_resaving_is_stable(self, app, proj):
+        from app.project import get_all_allocations
+        with app.app_context():
+            self._vtep(app, proj, 'core-01', '10.255.1.1')
+            self._vtep(app, proj, 'core-02', '10.255.1.1')
+            self._vtep(app, proj, 'core-01', '10.255.1.1')
+            allocs = get_all_allocations(app, 'admin', proj)['unique']['lb']
+        assert len(allocs) == 1
+        assert allocs['10.255.1.1']['shared'] is True
+
+    def test_ordinary_loopbacks_are_not_shared(self, app, proj):
+        """Two switches on the same loopback0 is a mistake, not sharing."""
+        import os
+        from app.project import (project_host_vars_dir, sync_allocations,
+                                 get_all_allocations)
+        with app.app_context():
+            for host in ('core-01', 'core-02'):
+                hv = os.path.join(project_host_vars_dir(app, 'admin', proj), host)
+                os.makedirs(hv, exist_ok=True)
+                with open(os.path.join(hv, 'interfaces.yml'), 'w') as f:
+                    f.write('interface_groups: []\nphysical_interfaces: []\n'
+                            'lag_interfaces: []\nloopback_interfaces:\n'
+                            '  - name: loopback0\n    ip_address: "10.255.1.5"\n'
+                            '    ip_prefix: "32"\nvlan_interfaces: []\n')
+                sync_allocations(app, 'admin', proj, host)
+            entry = get_all_allocations(app, 'admin', proj)['unique']['lb']['10.255.1.5']
+        assert 'shared' not in entry, 'ordinary loopbacks must not be shareable'
+
+
+class TestBgpPeerType:
+    """A route reflector peering with another RR must not mark it as a
+    client. The distinction is per-neighbour, not per-device.
+    """
+
+    def test_default_is_client(self, app, tmp_path):
+        from app.hostvars import _parse_state
+        d = tmp_path / 'hv'
+        d.mkdir()
+        (d / 'routing.yml').write_text(
+            'device_role: "route_reflector"\nbgp:\n  asn: "65000"\n'
+            '  router_id: "10.255.0.1"\n  neighbors:\n'
+            '    - ip: 10.255.0.3\n      remote_asn: "65000"\n')
+        state = _parse_state(str(d))
+        assert state['bgpNeighbors'][0]['peer_type'] == 'client'
+
+    def test_peer_is_parsed(self, app, tmp_path):
+        from app.hostvars import _parse_state
+        d = tmp_path / 'hv'
+        d.mkdir()
+        (d / 'routing.yml').write_text(
+            'device_role: "route_reflector"\nbgp:\n  asn: "65000"\n'
+            '  router_id: "10.255.0.1"\n  neighbors:\n'
+            '    - ip: 10.255.0.2\n      remote_asn: "65000"\n'
+            '      peer_type: peer\n'
+            '    - ip: 10.255.0.3\n      remote_asn: "65000"\n')
+        state = _parse_state(str(d))
+        types = {n['ip']: n['peer_type'] for n in state['bgpNeighbors']}
+        assert types == {'10.255.0.2': 'peer', '10.255.0.3': 'client'}

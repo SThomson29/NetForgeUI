@@ -221,7 +221,11 @@ def _parse_state(hvdir):
         'bgpAsn':       str(_safe(bgp_data, 'asn')),
         'bgpRid':       str(_safe(bgp_data, 'router_id')),
         'bgpNeighbors': [
-            {'ip': str(_safe(n, 'ip')), 'remote_asn': str(_safe(n, 'remote_asn')), 'update_source': str(_safe(n, 'update_source', default='loopback0'))}
+            {'ip': str(_safe(n, 'ip')), 'remote_asn': str(_safe(n, 'remote_asn')),
+             'update_source': str(_safe(n, 'update_source', default='loopback0')),
+             # client = route-reflector-client; peer = another RR, which must
+             # not be marked as a client.
+             'peer_type': str(_safe(n, 'peer_type', default='client')) or 'client'}
             for n in (_safe(bgp_data, 'neighbors') or [])
         ],
 
