@@ -367,7 +367,15 @@ function genSflow(s) {
 function genAaa(s) {
   const servers = s.radiusServers.length === 0 ? '[]' : '\n' + s.radiusServers.map(r =>
     `  - address: ${r.address}\n    key: "${r.key || ''}"`).join('\n');
-  return `---\nradius_server_key: "${s.radiusServerKey}"\nradius_group_name: ${s.radiusGroup}\ndynamic_authorization: ${yb(s.dynAuth)}\nradius_servers: ${servers}\n`;}
+
+  // Only written when populated — absent means the template falls back to
+  // radius_servers, so existing aaa.yml files are unchanged.
+  const dynauth = (s.radiusDynauthServers || []).filter(r => r.address);
+  const dynauthBlock = dynauth.length === 0 ? '' :
+    '\nradius_dynauth_servers:\n' + dynauth.map(r =>
+      `  - address: ${r.address}` + (r.key ? `\n    key: "${r.key}"` : '')).join('\n');
+
+  return `---\nradius_server_key: "${s.radiusServerKey}"\nradius_group_name: ${s.radiusGroup}\ndynamic_authorization: ${yb(s.dynAuth)}\nradius_servers: ${servers}${dynauthBlock}\n`;}
 
 function genVrfs(s) {
   const list = s.vrfs.length === 0 ? '[]' : '\n' + s.vrfs.map(v => `  - name: ${v.name}`).join('\n');
@@ -484,6 +492,7 @@ function App() {
   const [radiusGroup, setRadiusGroup] = useState('');
   const [dynAuth, setDynAuth] = useState(false);
   const [radiusServers, setRadiusServers] = useState([]);
+  const [radiusDynauthServers, setRadiusDynauthServers] = useState([]);
   const [vrfs, setVrfs] = useState([]);
   const [vlans, setVlans] = useState([]);
   const [routes, setRoutes] = useState([]);
@@ -613,6 +622,7 @@ function App() {
         setRadiusGroup(s.radiusGroup || '');
         setDynAuth(!!s.dynAuth);
         setRadiusServers(s.radiusServers || []);
+        setRadiusDynauthServers(s.radiusDynauthServers || []);
         setVrfs(s.vrfs || []);
         setVlans(s.vlans || []);
         setRoutes(s.routes || []);
@@ -757,7 +767,8 @@ function App() {
     const state = {hostname, platform, profile, timezone, ntpServers, dnsDomain, dnsServers,
       mgmtVrf, mgmtSrc, localUsers, bannerMotd, bannerExec, snmpVersion, snmpVrf, snmpDesc, snmpLocation,
       snmpContact, snmpCommunity, v3Users, syslogServer, syslogSeverity,
-      sflowCollectorIp, sflowAgentIp, radiusServerKey, radiusGroup, dynAuth, radiusServers, vrfs, vlans,
+      sflowCollectorIp, sflowAgentIp, radiusServerKey, radiusGroup, dynAuth, radiusServers,
+      radiusDynauthServers, vrfs, vlans,
       routes, ifGroups, physical, lags, loopbacks, vlanIfs, ospfInstances,
       deviceRole, bgpAsn, bgpRid, bgpNeighbors, vtepLoopback, vtepIp, vtepArea, vnis,
       vsxEnabled, vsxRole, vsxMac, vsxIsl, vsxKaPeer, vsxKaSrc, vsxKaVrf,
@@ -956,7 +967,21 @@ function App() {
           ce('div', {style:{flex:1}}, ce(Field, {label:'Address'}, ce('input', {value:r.address||'', list:'datalist-radius', onChange:ev=>updateItem(setRadiusServers,i,'address',ev.target.value)}))),
           ce('div', {style:{flex:1}}, ce(Field, {label:'Server key'}, ce('input', {type:'password', value:r.key||'', onChange:ev=>updateItem(setRadiusServers,i,'key',ev.target.value)}))),
           ce('button', {className:'remove-btn', style:{marginBottom:12}, onClick:()=>removeItem(setRadiusServers,i)}, 'Remove')))),
-      ce('button', {className:'add-btn', onClick:()=>addItem(setRadiusServers,{address:'',key:''})}, '+ Add RADIUS server')));
+      ce('button', {className:'add-btn', onClick:()=>addItem(setRadiusServers,{address:'',key:''})}, '+ Add RADIUS server')),
+
+    // Only meaningful with CoA enabled, so hidden otherwise.
+    dynAuth && ce('div', {className:'sec'},
+      ce('div', {className:'sec-h'}, 'Dynamic authorization servers'),
+      ce('div', {className:'form-hint', style:{marginBottom:10}},
+        'CoA originates from a ClearPass node\u2019s own address, not the cluster VIP, ' +
+        'so list the individual node addresses here. Leave empty to reuse the ' +
+        'RADIUS servers above. A blank key uses the global RADIUS key.'),
+      radiusDynauthServers.map((r,i) => ce('div', {key:i, className:'item-card'},
+        ce('div', {style:{display:'flex',gap:8,alignItems:'end'}},
+          ce('div', {style:{flex:1}}, ce(Field, {label:'Node address'}, ce('input', {value:r.address||'', onChange:ev=>updateItem(setRadiusDynauthServers,i,'address',ev.target.value)}))),
+          ce('div', {style:{flex:1}}, ce(Field, {label:'Server key', hint:'Optional'}, ce('input', {type:'password', value:r.key||'', onChange:ev=>updateItem(setRadiusDynauthServers,i,'key',ev.target.value)}))),
+          ce('button', {className:'remove-btn', style:{marginBottom:12}, onClick:()=>removeItem(setRadiusDynauthServers,i)}, 'Remove')))),
+      ce('button', {className:'add-btn', onClick:()=>addItem(setRadiusDynauthServers,{address:'',key:''})}, '+ Add CoA node')));
 
   const renderVrfs = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'vrfs', filename:'vrfs.yml'}),

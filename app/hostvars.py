@@ -193,6 +193,13 @@ def _parse_state(hvdir):
             {'address': str(_safe(r, 'address')), 'key': str(_safe(r, 'key'))}
             for r in (_safe(aaa, 'radius_servers') or [])
         ],
+        # CoA originates from a ClearPass node's own address rather than the
+        # cluster VIP, so the dynamic-authorisation targets can differ from
+        # the authentication ones. Empty means the template reuses them.
+        'radiusDynauthServers': [
+            {'address': str(_safe(r, 'address')), 'key': str(_safe(r, 'key'))}
+            for r in (_safe(aaa, 'radius_dynauth_servers') or [])
+        ],
 
         'vrfs':   [{'name': str(_safe(v, 'name'))} for v in (_safe(vrfs, 'vrfs') or [])],
         'vlans':  [{'id': str(_safe(v, 'id')), 'name': str(_safe(v, 'name'))} for v in (_safe(vlans, 'vlans') or [])],

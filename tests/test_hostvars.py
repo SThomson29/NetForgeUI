@@ -912,3 +912,66 @@ class TestSviAllocationVisibility:
         assert svi['10.50.5.1']['role'] == 'gateway'
         assert svi['10.50.5.254']['role'] == 'active_gateway'
         assert svi['10.50.5.254']['shared_with'] == 'sw2'
+
+
+class TestDynAuthServers:
+    """CoA originates from a ClearPass node's own address, not the cluster
+    VIP, so the dynamic-authorisation targets can differ from the
+    authentication ones. Empty means the template reuses radius_servers.
+    """
+
+    def test_absent_list_parses_empty(self, hvdir):
+        write_files(hvdir, {'aaa.yml': """\
+radius_server_key: "SHARED"
+radius_group_name: CPPM
+dynamic_authorization: true
+radius_servers:
+  - address: 10.1.1.10
+    key: "SHARED"
+"""})
+        state = _parse_state(hvdir)
+        assert state['radiusDynauthServers'] == []
+        assert len(state['radiusServers']) == 1
+
+    def test_node_addresses_are_parsed(self, hvdir):
+        write_files(hvdir, {'aaa.yml': """\
+radius_server_key: "SHARED"
+radius_group_name: CPPM
+dynamic_authorization: true
+radius_servers:
+  - address: 10.1.1.10
+    key: "SHARED"
+radius_dynauth_servers:
+  - address: 10.1.1.11
+  - address: 10.1.1.12
+    key: "OTHER"
+"""})
+        state = _parse_state(hvdir)
+        nodes = state['radiusDynauthServers']
+        assert [n['address'] for n in nodes] == ['10.1.1.11', '10.1.1.12']
+        assert nodes[0]['key'] == '', 'blank key falls back to the global one'
+        assert nodes[1]['key'] == 'OTHER'
+
+    def test_auth_and_coa_lists_are_independent(self, hvdir):
+        """The VIP answers auth; the nodes answer CoA."""
+        write_files(hvdir, {'aaa.yml': """\
+radius_server_key: "SHARED"
+radius_group_name: CPPM
+dynamic_authorization: true
+radius_servers:
+  - address: 10.1.1.10
+    key: "SHARED"
+  - address: 10.2.1.10
+    key: "SHARED"
+radius_dynauth_servers:
+  - address: 10.1.1.11
+  - address: 10.1.1.12
+  - address: 10.2.1.11
+  - address: 10.2.1.12
+"""})
+        state = _parse_state(hvdir)
+        assert len(state['radiusServers']) == 2
+        assert len(state['radiusDynauthServers']) == 4
+        auth = {r['address'] for r in state['radiusServers']}
+        coa = {r['address'] for r in state['radiusDynauthServers']}
+        assert not (auth & coa), 'VIPs must not appear in the CoA list'
