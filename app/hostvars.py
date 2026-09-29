@@ -72,7 +72,10 @@ def _parse_state(hvdir):
             'description':       str(_safe(iface, 'description')),
             'admin':             str(_safe(iface, 'admin', default='up')),
             'mtu':               str(_safe(iface, 'mtu', default='9198')),
-            'lag_member':        str(_safe(iface, 'lag_member')),
+            # The template renders 'lag {{ lag_member }}', so the value is
+            # the number alone. Older files may hold 'lag1' — strip it on
+            # read so the field shows what the template actually wants.
+            'lag_member':        str(_safe(iface, 'lag_member')).strip().lower().removeprefix('lag'),
             'port_type':         port_type,
             'routed':            routed,
             'ip_address':        str(_safe(iface, 'ip_address')),

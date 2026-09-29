@@ -396,7 +396,12 @@ function genInterfaces(s) {
     let r = `  - name: "${i.name}"\n    description: "${i.description || ''}"\n    admin: ${i.admin || 'up'}`;
     // MTU is not applicable to authenticated ports — the template omits it
     if (i.port_type !== 'authenticated') { r += `\n    mtu: ${i.mtu || 9198}`; }
-    if (i.lag_member) { r += `\n    lag_member: "${i.lag_member}"\n    port_type: access`; }
+    // The template renders 'lag {{ lag_member }}', so store the number
+    // alone — 'lag1' would come out as 'lag lag1'.
+    if (i.lag_member) {
+      const lagNum = String(i.lag_member).trim().replace(/^lag\s*/i, '');
+      r += `\n    lag_member: "${lagNum}"\n    port_type: access`;
+    }
     else if (i.port_type === 'routed') { r += `\n    routed: true\n    vrf: "${i.vrf || ''}"\n    ip_address: "${i.ip_address || ''}"\n    ip_prefix: "${i.ip_prefix || ''}"\n    ospf_area: "${i.ospf_area || ''}"\n    ospf_process_id: ${i.ospf_process_id || 1}`;
       if (i.ospf_auth_key) { r += `\n    ospf_auth_key: "${i.ospf_auth_key}"`; } }
     else if (i.port_type === 'authenticated') { r += `\n    routed: false\n    port_type: authenticated\n    auth_default_vlan: "${i.auth_default_vlan || '1'}"`; }
@@ -1041,7 +1046,7 @@ function App() {
           ce(Field, {label:'Description'}, ce('input', {value:p.description||'', onChange:ev=>updateItem(setPhysical,i,'description',ev.target.value)})),
           ce(Field, {label:'Admin'}, ce('select', {value:p.admin||'up', onChange:ev=>updateItem(setPhysical,i,'admin',ev.target.value)},
             ce('option',{value:'up'},'up'), ce('option',{value:'down'},'down'))),
-          ce(Field, {label:'LAG member'}, ce('input', {value:p.lag_member||'', onChange:ev=>updateItem(setPhysical,i,'lag_member',ev.target.value), placeholder:'lag1 or leave empty'})),
+          ce(Field, {label:'LAG member', hint:'Number only \u2014 1, not lag1'}, ce('input', {value:p.lag_member||'', onChange:ev=>updateItem(setPhysical,i,'lag_member',ev.target.value), placeholder:'1'})),
           ce(Field, {label:'Mode'}, ce('select', {value:p.port_type||'access', onChange:ev=>updateItem(setPhysical,i,'port_type',ev.target.value)},
             ce('option',{value:'access'},'L2 access'), ce('option',{value:'trunk'},'L2 trunk'), ce('option',{value:'routed'},'L3 routed'), ce('option',{value:'authenticated'},'Authenticated'))),
           p.port_type === 'authenticated'
