@@ -721,3 +721,80 @@ class TestReconcileHostVars:
         second = reconcile_host_vars(app, 'sam', 'p', dry_run=False)
         assert second['total'] == 0
         assert second['hosts'] == {}
+
+
+class TestSviAllocationSync:
+    """SVI addresses chosen in the editor were never recorded.
+
+    sync_allocations routed them through find_pool, which only matches
+    unique and point-to-point pools — an SVI address sits inside a supernet
+    block, so it was silently dropped and nothing could tell it was in use.
+    """
+
+    @pytest.fixture
+    def proj(self, app):
+        from app.project import create_project, add_pool
+        with app.app_context():
+            create_project(app, 'admin', 'svi')
+            add_pool(app, 'admin', 'svi', {
+                'id': 'sn', 'type': 'vlan_supernet', 'name': 'Core',
+                'subnet': '10.50.0.0/16', 'carve_prefix': '24'})
+        return 'svi'
+
+    def _host(self, app, proj, name, ip, agw=None, vlan='vlan100'):
+        import os
+        from app.project import project_host_vars_dir, sync_allocations
+        hv = os.path.join(project_host_vars_dir(app, 'admin', proj), name)
+        os.makedirs(hv, exist_ok=True)
+        body = ('interface_groups: []\nphysical_interfaces: []\n'
+                'lag_interfaces: []\nloopback_interfaces: []\n'
+                'vlan_interfaces:\n  - name: %s\n    ip_address: "%s"\n'
+                '    ip_prefix: "24"\n' % (vlan, ip))
+        if agw:
+            body += '    active_gateway_ip: "%s"\n' % agw
+        with open(os.path.join(hv, 'interfaces.yml'), 'w') as f:
+            f.write(body)
+        sync_allocations(app, 'admin', proj, name)
+
+    def test_gateway_address_is_recorded(self, app, proj):
+        from app.project import get_all_allocations
+        with app.app_context():
+            self._host(app, proj, 'sw1', '10.50.5.1')
+            svi = get_all_allocations(app, 'admin', proj)['svi']['sn']
+        assert svi['10.50.5.1']['hostname'] == 'sw1'
+        assert svi['10.50.5.1']['interface'] == 'vlan100'
+        assert svi['10.50.5.1']['role'] == 'gateway'
+
+    def test_active_gateway_is_recorded(self, app, proj):
+        from app.project import get_all_allocations
+        with app.app_context():
+            self._host(app, proj, 'sw1', '10.50.5.1', agw='10.50.5.254')
+            svi = get_all_allocations(app, 'admin', proj)['svi']['sn']
+        assert svi['10.50.5.254']['role'] == 'active_gateway'
+
+    def test_both_switches_of_a_pair_are_visible(self, app, proj):
+        from app.project import get_all_allocations
+        with app.app_context():
+            self._host(app, proj, 'sw1', '10.50.5.1', agw='10.50.5.254')
+            self._host(app, proj, 'sw2', '10.50.5.2', agw='10.50.5.254')
+            svi = get_all_allocations(app, 'admin', proj)['svi']['sn']
+        assert svi['10.50.5.1']['hostname'] == 'sw1'
+        assert svi['10.50.5.2']['hostname'] == 'sw2'
+        # one shared address, with the peer recorded rather than overwritten
+        assert svi['10.50.5.254']['shared_with'] == 'sw1'
+
+    def test_changing_the_address_releases_the_old_one(self, app, proj):
+        from app.project import get_all_allocations
+        with app.app_context():
+            self._host(app, proj, 'sw1', '10.50.5.1')
+            self._host(app, proj, 'sw1', '10.50.5.9')
+            svi = get_all_allocations(app, 'admin', proj)['svi']['sn']
+        assert '10.50.5.9' in svi
+        assert '10.50.5.1' not in svi, 'stale allocation left behind'
+
+    def test_address_outside_any_pool_is_ignored(self, app, proj):
+        from app.project import get_all_allocations
+        with app.app_context():
+            self._host(app, proj, 'sw1', '192.0.2.1')
+            svi = get_all_allocations(app, 'admin', proj)['svi'].get('sn', {})
+        assert svi == {}

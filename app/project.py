@@ -1211,6 +1211,37 @@ def sync_allocations(app, username, project_name, hostname):
             del allocs['unique'][pid][k]
         allocs['unique'][pid][ip] = {'hostname': hostname, 'interface': interface_name}
  
+    def register_svi(ip, interface_name, pool, role='gateway'):
+        """Record an SVI address against its supernet pool.
+
+        Without this, addresses chosen for an SVI in the editor were never
+        recorded anywhere, so nothing could tell they were in use — unlike
+        loopback and point-to-point addresses.
+        """
+        pid = pool['id']
+        if pid not in allocs['svi']:
+            allocs['svi'][pid] = {}
+        base = interface_name.split(':')[0]
+        to_remove = [k for k, v in allocs['svi'][pid].items()
+                     if v.get('hostname') == hostname
+                     and str(v.get('interface', '')).split(':')[0] == base
+                     and v.get('role', 'gateway') == role]
+        for k in to_remove:
+            del allocs['svi'][pid][k]
+        entry = {
+            'hostname': hostname,
+            'interface': base,
+            'role': role,
+        }
+        # A VSX pair shares one active gateway address, so record the peer
+        # rather than letting the second switch's save erase the first's.
+        existing = allocs['svi'][pid].get(ip)
+        if (role == 'active_gateway' and existing
+                and existing.get('hostname')
+                and existing['hostname'] != hostname):
+            entry['shared_with'] = existing['hostname']
+        allocs['svi'][pid][ip] = entry
+
     def register_ptp(ip, interface_name, pool):
         pid = pool['id']
         if pid not in allocs['point_to_point']:
@@ -1289,6 +1320,33 @@ def sync_allocations(app, username, project_name, hostname):
             register_unique(ip, interface_name, pool)
         elif pool['type'] == 'point_to_point':
             register_ptp(ip, interface_name, pool)
+
+    def process_svi_ip(ip, interface_name, role='gateway'):
+        """SVI addresses sit inside a supernet block, which find_pool does
+        not match — it only looks at unique and point-to-point pools."""
+        if not ip or not str(ip).strip():
+            return
+        ip = strip_prefix(ip)
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            return
+
+        # A delegated block belongs to its child pool, so try those first.
+        pool = find_pool(ip)
+        if pool:
+            if pool['type'] == 'unique':
+                register_unique(ip, interface_name, pool)
+            else:
+                register_ptp(ip, interface_name, pool)
+            return
+
+        for candidate in pools:
+            if candidate['type'] != 'vlan_supernet':
+                continue
+            if ip_in_pool(ip, candidate):
+                register_svi(ip, interface_name, candidate, role)
+                return
  
     def is_valid_ip(ip):
         if not ip or not str(ip).strip():
@@ -1345,10 +1403,10 @@ def sync_allocations(app, username, project_name, hostname):
     for svi in (interfaces.get('vlan_interfaces') or []):
         ip = svi.get('ip_address', '')
         if is_valid_ip(ip):
-            process_ip(ip, svi.get('name', ''))
+            process_svi_ip(ip, svi.get('name', ''), 'gateway')
         agw = svi.get('active_gateway_ip', '')
         if is_valid_ip(agw):
-            process_ip(agw, svi.get('name', '') + ':active_gw')
+            process_svi_ip(agw, svi.get('name', ''), 'active_gateway')
  
     vtep_ip = vxlan.get('loopback_ip', '')
     if is_valid_ip(vtep_ip):
