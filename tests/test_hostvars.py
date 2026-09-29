@@ -975,3 +975,67 @@ radius_dynauth_servers:
         auth = {r['address'] for r in state['radiusServers']}
         coa = {r['address'] for r in state['radiusDynauthServers']}
         assert not (auth & coa), 'VIPs must not appear in the CoA list'
+
+
+class TestLagMemberNormalisation:
+    """The template renders 'lag {{ lag_member }}', so the stored value is
+    the number alone. The field's placeholder used to suggest 'lag1', which
+    would have produced 'lag lag1'.
+    """
+
+    def test_bare_number_is_kept(self, hvdir):
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces:
+  - name: "1/1/1"
+    lag_member: "1"
+    port_type: access
+lag_interfaces: []
+loopback_interfaces: []
+vlan_interfaces: []
+"""})
+        state = _parse_state(hvdir)
+        assert state['physical'][0]['lag_member'] == '1'
+
+    def test_lag_prefix_is_stripped_on_read(self, hvdir):
+        """Older files may hold 'lag1' from when the placeholder was wrong."""
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces:
+  - name: "1/1/1"
+    lag_member: "lag1"
+    port_type: access
+  - name: "1/1/2"
+    lag_member: "LAG256"
+    port_type: access
+lag_interfaces: []
+loopback_interfaces: []
+vlan_interfaces: []
+"""})
+        state = _parse_state(hvdir)
+        assert [p['lag_member'] for p in state['physical']] == ['1', '256']
+
+    def test_empty_stays_empty(self, hvdir):
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces:
+  - name: "1/1/1"
+    port_type: access
+lag_interfaces: []
+loopback_interfaces: []
+vlan_interfaces: []
+"""})
+        state = _parse_state(hvdir)
+        assert state['physical'][0]['lag_member'] == ''
+
+    def test_field_hint_does_not_suggest_a_prefix(self, app, auth_client, tmp_path):
+        """The placeholder taught the wrong format."""
+        import os
+        from app.project import create_project, project_host_vars_dir
+        with app.app_context():
+            create_project(app, 'admin', 'lagp')
+            hv = os.path.join(project_host_vars_dir(app, 'admin', 'lagp'), 'sw1')
+            os.makedirs(hv, exist_ok=True)
+        body = auth_client.get('/projects/lagp/editor?host=sw1').data.decode()
+        assert "placeholder:'lag1 or leave empty'" not in body
+        assert 'not lag1' in body, 'hint should say what not to type'
