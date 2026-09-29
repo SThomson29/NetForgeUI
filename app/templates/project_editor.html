@@ -392,6 +392,12 @@ function genInterfaces(s) {
     if (l.routed === 'true') { r += `\n    routed: true\n    vrf: "${l.vrf || ''}"\n    ip_address: "${l.ip_address || ''}"\n    ip_prefix: "${l.ip_prefix || ''}"\n    ospf_area: "${l.ospf_area || ''}"\n    ospf_process_id: ${l.ospf_process_id || 1}`;
       if (l.ospf_auth_key) { r += `\n    ospf_auth_key: "${l.ospf_auth_key}"`; } }
     else { r += `\n    routed: false\n    trunk_allowed_vlans: "${l.trunk_allowed || 'all'}"\n    trunk_native_vlan: ${l.trunk_native || 1}`; }
+    // Applies to routed and switched LAGs alike, so it sits outside the
+    // branch above. Only written when set, so an untouched LAG leaves its
+    // existing file unchanged — the template defaults the field to false.
+    if (l.multi_chassis === true || l.multi_chassis === 'true') {
+      r += `\n    multi_chassis: true`;
+    }
     return r; }).join('\n');
   const lo = s.loopbacks.length === 0 ? '[]' : '\n' + s.loopbacks.map(l =>
     `  - name: ${l.name}\n    description: "${l.description || ''}"\n    ip_address: "${l.ip_address || ''}"\n    ip_prefix: ${l.ip_prefix || 32}\n    vrf: "${l.vrf || ''}"\n    ospf_area: "${l.ospf_area || ''}"\n    ospf_process_id: ${l.ospf_process_id || 1}`).join('\n');
@@ -1058,7 +1064,12 @@ function App() {
           ce(Field, {label:'LACP mode'}, ce('select', {value:l.lacp_mode||'active', onChange:ev=>updateItem(setLags,i,'lacp_mode',ev.target.value)},
             ce('option',{value:'active'},'active'), ce('option',{value:'passive'},'passive'), ce('option',{value:'off'},'off'))),
           ce(Field, {label:'Mode'}, ce('select', {value:l.routed||'false', onChange:ev=>updateItem(setLags,i,'routed',ev.target.value)},
-            ce('option',{value:'false'},'L2 switched'), ce('option',{value:'true'},'L3 routed')))),
+            ce('option',{value:'false'},'L2 switched'), ce('option',{value:'true'},'L3 routed'))),
+          ce(Field, {label:'Multi-chassis', hint:'VSX pairs only — never the ISL'},
+            ce('label', {className:'chk', style:{display:'flex',alignItems:'center',gap:6}},
+              ce('input', {type:'checkbox', checked: l.multi_chassis === true || l.multi_chassis === 'true',
+                onChange:ev=>updateItem(setLags,i,'multi_chassis',ev.target.checked)}),
+              'Spans both VSX members'))),
         l.routed === 'true'
           ? ce('div', {className:'grid3', style:{marginTop:8}},
               ce(PooledIPField, {label:'IP address', fieldKey:'lag_'+i, value:l.ip_address||'', onChange:v=>updateItem(setLags,i,'ip_address',v), prefix:l.ip_prefix||'', onPrefixChange:v=>updateItem(setLags,i,'ip_prefix',v), allowedPoolTypes:['point_to_point','unique'], hostname:SELECTED_HOST, ipPoolMap:(ipPoolMap[SELECTED_HOST]||{}), setIpPoolMap:(u)=>setIpPoolMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), freeTextMap:(freeTextMap[SELECTED_HOST]||{}), setFreeTextMap:(u)=>setFreeTextMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}})), subnetSearchMap:(subnetSearchMap[SELECTED_HOST]||{}), setSubnetSearchMap:(u)=>setSubnetSearchMap(p=>({...p,[SELECTED_HOST]:{...(p[SELECTED_HOST]||{}),...(typeof u==='function'?u(p[SELECTED_HOST]||{}):u)}}))}),
@@ -1070,7 +1081,7 @@ function App() {
               ce(Field, {label:'Trunk allowed VLANs'}, ce('input', {value:l.trunk_allowed||'all', onChange:ev=>updateItem(setLags,i,'trunk_allowed',ev.target.value)})),
               ce(Field, {label:'Native VLAN'}, ce('input', {value:l.trunk_native||'1', onChange:ev=>updateItem(setLags,i,'trunk_native',ev.target.value)}))),
         ce('button', {className:'remove-btn', style:{marginTop:10}, onClick:()=>removeItem(setLags,i)}, 'Remove LAG'))),
-      ce('button', {className:'add-btn', onClick:()=>addItem(setLags,{name:'',admin:'up',lacp_mode:'active',routed:'false'})}, '+ Add LAG')),
+      ce('button', {className:'add-btn', onClick:()=>addItem(setLags,{name:'',admin:'up',lacp_mode:'active',routed:'false',multi_chassis:false})}, '+ Add LAG')),
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'Loopback interfaces'),
       loopbacks.map((l,i) => ce('div', {key:i, className:'item-card'},
@@ -1089,6 +1100,39 @@ function App() {
         // Build list of all IPs in the selected subnet for IP pickers
         const sviSubnet    = v.subnet || '';
         const sviSubnetIPs = sviSubnet ? generateSubnetIPs(sviSubnet, 32) : [];
+
+        /* SVI allocations are recorded per supernet pool, the same way
+           unique and point-to-point ones are — the picker just was not
+           reading them, so every address looked free. */
+        const sviAllocs = (() => {
+          const out = {};
+          Object.values(PROJECT_ALLOCS.svi || {}).forEach(pool => {
+            Object.entries(pool || {}).forEach(([ip, e]) => { out[ip] = e; });
+          });
+          return out;
+        })();
+
+        /* An address already used by this same SVI is not a clash — it is
+           what is currently configured, so it must stay selectable. */
+        const sviOptions = (currentValue, selfInterface) =>
+          sviSubnetIPs.map(ip => {
+            const a = sviAllocs[ip];
+            const mine = a && a.hostname === SELECTED_HOST
+                           && a.interface === selfInterface;
+            const isCurrent = ip === currentValue;
+            let suffix = ' — available';
+            if (a) {
+              const role = a.role === 'active_gateway' ? 'active gw' : (a.role || '');
+              suffix = ' — ' + a.hostname
+                     + (a.interface ? ' ' + a.interface : '')
+                     + (role ? ' (' + role + ')' : '')
+                     + (a.shared_with ? ' + ' + a.shared_with : '');
+            }
+            return ce('option', {
+              key: ip, value: ip,
+              disabled: !!a && !mine && !isCurrent,
+            }, ip + suffix);
+          });
         const sviSubnetAllVlanPools = PROJECT_POOLS.filter(p => p.type === 'vlan_supernet');
         const sviSubnetOptions = sviSubnetAllVlanPools.flatMap(vp => {
           const subnets = (PROJECT_ALLOCS.vlan_supernet || {})[vp.id] || {};
@@ -1128,7 +1172,7 @@ function App() {
                     style:{width:'100%'}
                   },
                     ce('option', {value:''}, '— select IP —'),
-                    sviSubnetIPs.map(ip => ce('option', {key:ip, value:ip}, ip))
+                    sviOptions(v.ip_address, v.name)
                   )
                 : ce('input', {value:v.ip_address||'', onChange:ev=>updateItem(setVlanIfs,i,'ip_address',ev.target.value)})
             ),
@@ -1144,7 +1188,7 @@ function App() {
                     style:{width:'100%'}
                   },
                     ce('option', {value:''}, '— select IP —'),
-                    sviSubnetIPs.map(ip => ce('option', {key:ip, value:ip}, ip))
+                    sviOptions(v.active_gw_ip, v.name)
                   )
                 : ce('input', {value:v.active_gw_ip||'', onChange:ev=>updateItem(setVlanIfs,i,'active_gw_ip',ev.target.value)})
             ),

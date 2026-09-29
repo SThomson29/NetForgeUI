@@ -765,3 +765,150 @@ vlan_interfaces: []
 """})
         state = _parse_state(hvdir)
         assert 'ospf_auth_key' not in state['loopbacks'][0]
+
+
+# ---------------------------------------------------------------------------
+# Multi-chassis LAGs (VSX)
+# ---------------------------------------------------------------------------
+
+class TestMultiChassisLag:
+
+    def test_absent_field_parses_as_false(self, hvdir):
+        """LAGs written before this field existed must still load."""
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces: []
+lag_interfaces:
+  - name: lag256
+    admin: up
+    lacp_mode: active
+    routed: false
+loopback_interfaces: []
+vlan_interfaces: []
+"""})
+        state = _parse_state(hvdir)
+        assert state['lags'][0]['multi_chassis'] is False
+
+    def test_flag_is_parsed(self, hvdir):
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces: []
+lag_interfaces:
+  - name: lag10
+    admin: up
+    lacp_mode: active
+    routed: false
+    multi_chassis: true
+  - name: lag256
+    admin: up
+    lacp_mode: active
+    routed: false
+    multi_chassis: false
+loopback_interfaces: []
+vlan_interfaces: []
+"""})
+        state = _parse_state(hvdir)
+        lags = {l['name']: l['multi_chassis'] for l in state['lags']}
+        assert lags == {'lag10': True, 'lag256': False}
+
+    def test_applies_to_routed_lags_too(self, hvdir):
+        write_files(hvdir, {'interfaces.yml': """\
+interface_groups: []
+physical_interfaces: []
+lag_interfaces:
+  - name: lag20
+    admin: up
+    lacp_mode: active
+    routed: true
+    ip_address: "10.0.0.0"
+    ip_prefix: "31"
+    multi_chassis: true
+loopback_interfaces: []
+vlan_interfaces: []
+"""})
+        state = _parse_state(hvdir)
+        assert state['lags'][0]['multi_chassis'] is True
+        assert state['lags'][0]['routed'] == 'true'
+
+
+class TestBooleanParsing:
+    """yaml.BaseLoader returns every scalar as a string, so bool('false')
+    is True. Anything written explicitly as false read as enabled — VSX,
+    VSF, dynamic authorisation, OSPF passive and jumbo MTU were all affected.
+    """
+
+    def test_explicit_false_is_false(self, hvdir):
+        write_files(hvdir, {
+            'vsx.yml': 'vsx:\n  enabled: false\n',
+            'vsf.yml': 'vsf:\n  enabled: false\n',
+            'aaa.yml': 'dynamic_authorization: false\n',
+            'interfaces.yml': """\
+interface_groups: []
+physical_interfaces: []
+lag_interfaces: []
+loopback_interfaces: []
+vlan_interfaces:
+  - name: vlan100
+    ospf_passive: false
+    mtu_jumbo: false
+""",
+        })
+        state = _parse_state(hvdir)
+        assert state['vsxEnabled'] is False
+        assert state['vsfEnabled'] is False
+        assert state['dynAuth'] is False
+        assert state['vlanIfs'][0]['ospf_passive'] is False
+        assert state['vlanIfs'][0]['mtu_jumbo'] is False
+
+    def test_explicit_true_is_true(self, hvdir):
+        write_files(hvdir, {
+            'vsx.yml': 'vsx:\n  enabled: true\n',
+            'aaa.yml': 'dynamic_authorization: true\n',
+        })
+        state = _parse_state(hvdir)
+        assert state['vsxEnabled'] is True
+        assert state['dynAuth'] is True
+
+    def test_missing_key_is_false(self, hvdir):
+        state = _parse_state(hvdir)
+        assert state['vsxEnabled'] is False
+        assert state['dynAuth'] is False
+
+
+class TestSviAllocationVisibility:
+    """The SVI address picker listed bare IPs with no allocation state, so
+    every address looked free — unlike the unique and point-to-point
+    pickers, which label who holds each one.
+    """
+
+    def _page(self, app, auth_client):
+        from app.project import (create_project, add_pool, assign_vlan_subnet,
+                                 project_host_vars_dir)
+        import os
+        with app.app_context():
+            create_project(app, 'admin', 'svi')
+            add_pool(app, 'admin', 'svi', {
+                'id': 'sn', 'type': 'vlan_supernet', 'name': 'Core',
+                'subnet': '10.50.0.0/16', 'carve_prefix': '24'})
+            assign_vlan_subnet(app, 'admin', 'svi', 'sn', '10.50.5.0/24',
+                               '100', 'Users', 'sw1', 'sw2')
+            hv = os.path.join(project_host_vars_dir(app, 'admin', 'svi'), 'sw1')
+            os.makedirs(hv, exist_ok=True)
+        return auth_client.get(
+            '/projects/svi/editor?host=sw1').data.decode()
+
+    def test_picker_reads_svi_allocations(self, app, auth_client):
+        body = self._page(app, auth_client)
+        assert 'sviAllocs' in body, 'picker still ignores existing allocations'
+        assert 'sviOptions' in body
+
+    def test_allocations_reach_the_page(self, app, auth_client):
+        """The derived gateway addresses must be in the payload to label."""
+        import json, re
+        body = self._page(app, auth_client)
+        allocs = json.loads(
+            re.search(r'const PROJECT_ALLOCS\s*=\s*(.*?);\n', body, re.S).group(1))
+        svi = allocs['svi']['sn']
+        assert svi['10.50.5.1']['role'] == 'gateway'
+        assert svi['10.50.5.254']['role'] == 'active_gateway'
+        assert svi['10.50.5.254']['shared_with'] == 'sw2'

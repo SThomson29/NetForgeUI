@@ -2,6 +2,18 @@ import os
 import yaml
 
 
+def _as_bool(value):
+    """Interpret a YAML value as a boolean.
+
+    _load_yaml uses yaml.BaseLoader, which returns every scalar as a string,
+    so bool('false') is True. Anything written explicitly as false would
+    otherwise read as enabled.
+    """
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('true', 'yes', '1', 'on')
+
+
 def _safe(d, *keys, default=''):
     """Safely traverse nested dict, returning default if any key is missing or None."""
     for key in keys:
@@ -89,6 +101,7 @@ def _parse_state(hvdir):
             'description':     str(_safe(lag, 'description')),
             'admin':           str(_safe(lag, 'admin', default='up')),
             'lacp_mode':       str(_safe(lag, 'lacp_mode', default='active')),
+            'multi_chassis':   _as_bool(_safe(lag, 'multi_chassis', default=False)),
             'routed':          lag_routed,
             'port_type':       lag_port_type,
             'ip_address':      str(_safe(lag, 'ip_address')),
@@ -122,10 +135,10 @@ def _parse_state(hvdir):
             'ospf_area':         str(_safe(vi, 'ospf_area')),
             'ospf_process_id':   str(_safe(vi, 'ospf_process_id', default='1')),
             'ospf_auth_key':     str(_safe(vi, 'ospf_auth_key')),
-            'ospf_passive':      bool(_safe(vi, 'ospf_passive', default=False)),
+            'ospf_passive':      _as_bool(_safe(vi, 'ospf_passive', default=False)),
             'active_gw_ip':      str(_safe(vi, 'active_gateway_ip')),
             'active_gw_mac':     str(_safe(vi, 'active_gateway_mac')),
-            'mtu_jumbo':         bool(_safe(vi, 'mtu_jumbo', default=False)),
+            'mtu_jumbo':         _as_bool(_safe(vi, 'mtu_jumbo', default=False)),
             'helper_addresses':  [str(h) for h in (_safe(vi, 'helper_addresses') or [])],
         }
 
@@ -175,7 +188,7 @@ def _parse_state(hvdir):
 
         'radiusServerKey': str(_safe(aaa, 'radius_server_key')),
         'radiusGroup':     str(_safe(aaa, 'radius_group_name')),
-        'dynAuth':         bool(_safe(aaa, 'dynamic_authorization', default=False)),
+        'dynAuth':         _as_bool(_safe(aaa, 'dynamic_authorization', default=False)),
         'radiusServers':   [
             {'address': str(_safe(r, 'address')), 'key': str(_safe(r, 'key'))}
             for r in (_safe(aaa, 'radius_servers') or [])
@@ -196,7 +209,7 @@ def _parse_state(hvdir):
 
         'ospfInstances': [
             {
-                'enabled':    bool(_safe(inst, 'enabled', default=False)),
+                'enabled':    _as_bool(_safe(inst, 'enabled', default=False)),
                 'process_id': str(_safe(inst, 'process_id', default='1')),
                 'router_id':  str(_safe(inst, 'router_id')),
                 'vrf':        str(_safe(inst, 'vrf')),
@@ -218,7 +231,7 @@ def _parse_state(hvdir):
         'vnis':         [{'vni': str(_safe(v, 'vni')), 'vlan': str(_safe(v, 'vlan'))} for v in (_safe(vxlan_data, 'vni_map') or [])],
 
         'stackingType': stacking_type,
-        'vsxEnabled':   bool(_safe(vsx_data, 'enabled', default=False)),
+        'vsxEnabled':   _as_bool(_safe(vsx_data, 'enabled', default=False)),
         'vsxRole':      str(_safe(vsx_data, 'role')),
         'vsxMac':       str(_safe(vsx_data, 'system_mac')),
         'vsxIsl':       str(_safe(vsx_data, 'isl_port')),
@@ -226,7 +239,7 @@ def _parse_state(hvdir):
         'vsxKaSrc':     str(_safe(vsx_data, 'keepalive', 'src_ip')),
         'vsxKaVrf':     str(_safe(vsx_data, 'keepalive', 'vrf')),
         'vsxPeer':      str(_safe(vsx_data, 'peer_ip')),
-        'vsfEnabled':   bool(_safe(vsf_data, 'enabled', default=False)),
+        'vsfEnabled':   _as_bool(_safe(vsf_data, 'enabled', default=False)),
         'vsfIf1':       str(_safe(vsf_data, 'interface1')),
         'vsfIf2':       str(_safe(vsf_data, 'interface2')),
         'vsfMembers':   [{'id': str(_safe(m, 'id'))} for m in (_safe(vsf_data, 'members') or [])],
