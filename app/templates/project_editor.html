@@ -277,9 +277,16 @@ function PooledIPField(props) {
         ce('option', {value:''}, '— select IP —'),
         allIPs.map(ip => {
           const alloc = allAllocs[ip];
-          const isMine = alloc && alloc.hostname === hostname;
+          // A shared anycast VTEP is held by both members of a VSX pair, so
+          // it stays selectable for the peer rather than reading as taken.
+          const isMine = alloc && (alloc.hostname === hostname
+                                   || alloc.shared_with === hostname
+                                   || (alloc.shared && value === ip));
+          const sharedNote = alloc && alloc.shared_with
+            ? ' + ' + alloc.shared_with
+            : (alloc && alloc.shared ? ' (shared)' : '');
           return ce('option', {key:ip, value:ip, disabled:!!alloc&&!isMine},
-            ip + (alloc ? ' — ' + alloc.hostname + (alloc.interface ? ' ' + alloc.interface : '') + (isMine?' (this switch)':'') : ' — available'));
+            ip + (alloc ? ' — ' + alloc.hostname + (alloc.interface ? ' ' + alloc.interface : '') + sharedNote + (isMine?' (this switch)':'') : ' — available'));
         }),
         ce('option', {value:'__free'}, '— enter manually —')
       )
@@ -407,7 +414,10 @@ function genInterfaces(s) {
 
 function genRouting(s) {
   const nbrs = s.bgpNeighbors.length === 0 ? '[]' : '\n' + s.bgpNeighbors.map(n =>
-    `  - ip: ${n.ip}\n    remote_asn: ${n.remote_asn}\n    update_source: ${n.update_source || 'loopback0'}`).join('\n');
+    `  - ip: ${n.ip}\n    remote_asn: ${n.remote_asn}\n    update_source: ${n.update_source || 'loopback0'}` +
+    // Only written when it is not the default, so existing routing.yml
+    // files are unchanged until a peer is actually marked as another RR.
+    (n.peer_type === 'peer' ? `\n    peer_type: peer` : '')).join('\n');
   const instances = s.ospfInstances.length === 0 ? '[]' : '\n' + s.ospfInstances.map(i =>
     `  - enabled: ${yb(i.enabled)}\n    process_id: ${i.process_id || 1}\n    router_id: "${i.router_id || ''}"\n    vrf: "${i.vrf || ''}"\n    areas:\n${(i.areas||[]).map(a => `      - area_id: "${a.area_id}"`).join('\n') || '      []'}`
   ).join('\n');
@@ -1271,12 +1281,17 @@ function App() {
       deviceRole && ce('div', null,
         ce('div', {style:{fontWeight:500,fontSize:13,marginBottom:8}}, 'BGP neighbors'),
         bgpNeighbors.map((n,i) => ce('div', {key:i, className:'item-card'},
-          ce('div', {style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr auto',gap:8,alignItems:'end'}},
+          ce('div', {style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr auto',gap:8,alignItems:'end'}},
             ce(Field, {label:'Neighbor IP'}, ce('input', {value:n.ip||'', onChange:ev=>updateItem(setBgpNeighbors,i,'ip',ev.target.value)})),
             ce(Field, {label:'Remote ASN'}, ce('input', {value:n.remote_asn||'', onChange:ev=>updateItem(setBgpNeighbors,i,'remote_asn',ev.target.value)})),
             ce(Field, {label:'Update source'}, ce('input', {value:n.update_source||'loopback0', onChange:ev=>updateItem(setBgpNeighbors,i,'update_source',ev.target.value)})),
+            ce(Field, {label:'Peer type', hint: deviceRole === 'route_reflector'
+                ? 'Peer = another RR (no route-reflector-client)' : 'Only affects route reflectors'},
+              ce('select', {value:n.peer_type||'client', onChange:ev=>updateItem(setBgpNeighbors,i,'peer_type',ev.target.value)},
+                ce('option',{value:'client'},'Client'),
+                ce('option',{value:'peer'},'Peer (another RR)'))),
             ce('button', {className:'remove-btn', style:{marginBottom:12}, onClick:()=>removeItem(setBgpNeighbors,i)}, 'Remove')))),
-        ce('button', {className:'add-btn', onClick:()=>addItem(setBgpNeighbors,{ip:'',remote_asn:'',update_source:'loopback0'})}, '+ Add neighbor'))));
+        ce('button', {className:'add-btn', onClick:()=>addItem(setBgpNeighbors,{ip:'',remote_asn:'',update_source:'loopback0',peer_type:'client'})}, '+ Add neighbor'))));
 
   const renderVxlan = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'vxlan', filename:'vxlan.yml'}),

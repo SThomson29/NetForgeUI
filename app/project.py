@@ -1200,7 +1200,15 @@ def sync_allocations(app, username, project_name, hostname):
     interfaces = load_hv('interfaces.yml')
     vxlan      = load_hv('vxlan.yml')
  
-    def register_unique(ip, interface_name, pool):
+    def register_unique(ip, interface_name, pool, shared=False):
+        """Record a unique-pool address against this host.
+
+        `shared` is for an anycast VTEP, where both members of a VSX pair
+        legitimately carry the same loopback address. Without it the second
+        switch's save overwrites the first's record and the pool shows only
+        one holder. It is deliberately not the default: two switches sharing
+        loopback0 is a mistake worth surfacing, not accommodating.
+        """
         pid = pool['id']
         if pid not in allocs['unique']:
             allocs['unique'][pid] = {}
@@ -1208,8 +1216,27 @@ def sync_allocations(app, username, project_name, hostname):
         to_remove = [k for k, v in allocs['unique'][pid].items()
                      if v.get('hostname') == hostname and v.get('interface') == interface_name]
         for k in to_remove:
-            del allocs['unique'][pid][k]
-        allocs['unique'][pid][ip] = {'hostname': hostname, 'interface': interface_name}
+            # Another switch may still be sharing it, in which case the
+            # address stays allocated to them rather than being freed.
+            peer = allocs['unique'][pid][k].get('shared_with')
+            if peer:
+                allocs['unique'][pid][k] = {
+                    'hostname': peer,
+                    'interface': allocs['unique'][pid][k].get('interface', ''),
+                    'shared': True,
+                }
+            else:
+                del allocs['unique'][pid][k]
+
+        entry = {'hostname': hostname, 'interface': interface_name}
+        existing = allocs['unique'][pid].get(ip)
+        if shared:
+            entry['shared'] = True
+            if existing and existing.get('hostname') not in (None, hostname):
+                entry['shared_with'] = existing['hostname']
+            elif existing and existing.get('shared_with'):
+                entry['shared_with'] = existing['shared_with']
+        allocs['unique'][pid][ip] = entry
  
     def register_svi(ip, interface_name, pool, role='gateway'):
         """Record an SVI address against its supernet pool.
@@ -1361,8 +1388,24 @@ def sync_allocations(app, username, project_name, hostname):
     # This ensures deleted or renamed interfaces don't leave stale reservations
     for pid in list(allocs['unique'].keys()):
         for ip in list(allocs['unique'][pid].keys()):
-            if allocs['unique'][pid][ip].get('hostname') == hostname:
-                del allocs['unique'][pid][ip]
+            entry = allocs['unique'][pid][ip]
+            if entry.get('hostname') == hostname:
+                # A shared anycast VTEP belongs to both members of a pair.
+                # Clearing it outright would erase the peer's claim too, so
+                # hand it back to them instead.
+                peer = entry.get('shared_with')
+                if peer:
+                    allocs['unique'][pid][ip] = {
+                        'hostname': peer,
+                        'interface': entry.get('interface', ''),
+                        'shared': True,
+                    }
+                else:
+                    del allocs['unique'][pid][ip]
+            elif entry.get('shared_with') == hostname:
+                # We were the peer on someone else's shared address; drop
+                # only our half of it.
+                entry.pop('shared_with', None)
  
     for pid in list(allocs['point_to_point'].keys()):
         # Collect all IPs to remove first, then delete — avoids mutation during iteration
@@ -1410,7 +1453,15 @@ def sync_allocations(app, username, project_name, hostname):
  
     vtep_ip = vxlan.get('loopback_ip', '')
     if is_valid_ip(vtep_ip):
-        process_ip(vtep_ip, vxlan.get('loopback_interface', 'loopback1'))
+        # An anycast VTEP is shared across a VSX pair, so both members hold
+        # the same address rather than one overwriting the other.
+        vtep_pool = find_pool(strip_prefix(vtep_ip))
+        if vtep_pool and vtep_pool['type'] == 'unique':
+            register_unique(strip_prefix(vtep_ip),
+                            vxlan.get('loopback_interface', 'loopback1'),
+                            vtep_pool, shared=True)
+        else:
+            process_ip(vtep_ip, vxlan.get('loopback_interface', 'loopback1'))
  
     _save_allocations(app, username, project_name, allocs)
 
