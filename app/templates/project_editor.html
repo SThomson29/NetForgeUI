@@ -638,16 +638,10 @@ function App() {
         // Populate subnet from ip_address reverse lookup if possible
         const vlanIfsWithSubnet = (s.vlanIfs || []).map(v => {
           if (v.subnet || !v.ip_address) return v;
-          // Try to find which vlan_supernet subnet this IP belongs to
-          for (const vp of PROJECT_POOLS.filter(p => p.type === 'vlan_supernet')) {
-            const subnets = (PROJECT_ALLOCS.vlan_supernet || {})[vp.id] || {};
-            for (const subnet of Object.keys(subnets)) {
-              if (generateSubnetIPs(subnet, 32).includes(v.ip_address)) {
-                return {...v, subnet};
-              }
-            }
-          }
-          return v;
+          // Matched by mask rather than by enumerating every address in
+          // every block — a /18 holds 16k addresses and this ran per SVI.
+          const subnet = subnetForIp(v.ip_address);
+          return subnet ? {...v, subnet} : v;
         });
         setVlanIfs(vlanIfsWithSubnet);
         setOspfInstances(s.ospfInstances || []);
@@ -1224,6 +1218,8 @@ function App() {
           ce(Field, {label:'OSPF process ID'}, ce('input', {value:l.ospf_process_id||'', onChange:ev=>updateItem(setLoopbacks,i,'ospf_process_id',ev.target.value), placeholder:'1'})),
           ce('button', {className:'remove-btn', style:{marginBottom:12}, onClick:()=>removeItem(setLoopbacks,i)}, 'Remove')))),
       ce('button', {className:'add-btn', onClick:()=>addItem(setLoopbacks,{name:'',ip_prefix:'32'})}, '+ Add loopback')),
+    copyPanel('svis', 'SVIs', st => copySvisFrom('', st)),
+
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'VLAN interfaces (SVIs)'),
       vlanIfs.map((v,i) => {
@@ -1279,8 +1275,7 @@ function App() {
               value: sviSubnet,
               onChange: ev => {
                 updateItem(setVlanIfs, i, 'subnet', ev.target.value);
-                // Auto-set prefix from subnet
-                if (ev.target.value) updateItem(setVlanIfs, i, 'ip_prefix', ev.target.value.split('/')[1] || '24');
+                sviAutoFill(i, ev.target.value, v);
               },
               style:{width:'100%'}
             },
@@ -1412,6 +1407,137 @@ function App() {
                 ce('option',{value:'peer'},'Peer (another RR)'))),
             ce('button', {className:'remove-btn', style:{marginBottom:12}, onClick:()=>removeItem(setBgpNeighbors,i)}, 'Remove')))),
         ce('button', {className:'add-btn', onClick:()=>addItem(setBgpNeighbors,{ip:'',remote_asn:'',update_source:'loopback0',peer_type:'client'})}, '+ Add neighbor'))));
+
+  /* Picking a subnet used to set only the prefix, leaving the name,
+     description and address to be typed by hand on every switch. The
+     supernet already knows the VLAN id and name, and the project's
+     conventions say where the gateway sits, so fill all of it in. */
+  /* Copy a whole SVI set from another switch, giving each one the next
+     free address in its own subnet rather than the source switch's.
+
+     Doing the first switch by hand and copying to the rest is quicker than
+     repeating the work, and any mistake shows up once rather than on every
+     switch. */
+  /* The subnet picker's value is never written to the file, so after a
+     reload every SVI shows a blank subnet and a free-text address. Derive
+     it from the address instead — the supernet already knows which block
+     each one falls in. */
+  function subnetForIp(ip) {
+    if (!ip) return '';
+    const parts = String(ip).split('.').map(Number);
+    if (parts.length !== 4 || parts.some(isNaN)) return '';
+    const asInt = ((parts[0]<<24)>>>0) + (parts[1]<<16) + (parts[2]<<8) + parts[3];
+
+    let best = '';
+    let bestPrefix = -1;
+    Object.values(PROJECT_ALLOCS.vlan_supernet || {}).forEach(pool => {
+      Object.keys(pool || {}).forEach(cidr => {
+        const [base, pfxStr] = cidr.split('/');
+        const pfx = parseInt(pfxStr, 10);
+        if (isNaN(pfx)) return;
+        const bparts = base.split('.').map(Number);
+        if (bparts.length !== 4 || bparts.some(isNaN)) return;
+        const bInt = ((bparts[0]<<24)>>>0) + (bparts[1]<<16) + (bparts[2]<<8) + bparts[3];
+        const mask = pfx >= 32 ? 0xFFFFFFFF : (~(0xFFFFFFFF >>> pfx)) >>> 0;
+        // Most specific match wins, so a /24 inside a /18 is preferred.
+        if (((asInt & mask) >>> 0) === ((bInt & mask) >>> 0) && pfx > bestPrefix) {
+          best = cidr;
+          bestPrefix = pfx;
+        }
+      });
+    });
+    return best;
+  }
+
+  function copySvisFrom(src, state) {
+    const conv = (PROJECT_CONVS || {}).svi || {};
+    const gwOffset = parseInt(conv.gateway_offset, 10);
+    const agwOffset = parseInt(conv.active_gateway_offset, 10);
+
+    // Addresses already spoken for across the project, so the copy lands on
+    // the next one along rather than clashing with the source switch.
+    const taken = {};
+    Object.values(PROJECT_ALLOCS.svi || {}).forEach(pool => {
+      Object.keys(pool || {}).forEach(ip => { taken[ip] = true; });
+    });
+
+    const copied = (state.vlanIfs || []).map(src_svi => {
+      const out = Object.assign({}, src_svi);
+      const subnet = out.subnet || subnetForIp(src_svi.ip_address) || '';
+      out.subnet = subnet;
+
+      if (subnet && subnet !== '__free') {
+        const ips = generateSubnetIPs(subnet, 32);
+        const agwIp = isNaN(agwOffset) ? null : ips[agwOffset];
+        const start = isNaN(gwOffset) ? 1 : gwOffset;
+        out.ip_address = '';
+        for (let n = start; n < ips.length - 1; n++) {
+          const candidate = ips[n];
+          if (taken[candidate] || candidate === agwIp) continue;
+          out.ip_address = candidate;
+          // Claim it locally so two SVIs in the same subnet do not collide.
+          taken[candidate] = true;
+          break;
+        }
+      }
+      return out;
+    });
+
+    setVlanIfs(copied);
+    return copied.length + ' SVI(s), addresses reassigned';
+  }
+
+  function sviAutoFill(idx, subnet, current) {
+    if (!subnet || subnet === '__free') return;
+
+    // What the supernet recorded for this block.
+    let meta = null;
+    Object.values(PROJECT_ALLOCS.vlan_supernet || {}).forEach(pool => {
+      if (pool && pool[subnet]) meta = pool[subnet];
+    });
+
+    updateItem(setVlanIfs, idx, 'ip_prefix', subnet.split('/')[1] || '24');
+
+    // Never overwrite something already filled in.
+    if (meta && meta.vlan_id && !current.name) {
+      updateItem(setVlanIfs, idx, 'name', 'vlan' + meta.vlan_id);
+    }
+    if (meta && meta.vlan_name && !current.description) {
+      updateItem(setVlanIfs, idx, 'description', meta.vlan_name);
+    }
+
+    const conv = (PROJECT_CONVS || {}).svi || {};
+    const gwOffset = parseInt(conv.gateway_offset, 10);
+    const agwOffset = parseInt(conv.active_gateway_offset, 10);
+    // reserved_from_start is about holding addresses back from DHCP, not
+    // about where gateways sit — switch addresses belong inside it.
+
+    const ips = generateSubnetIPs(subnet, 32);
+    if (!ips.length) return;
+
+    // Addresses already spoken for anywhere in this project.
+    const taken = {};
+    Object.values(PROJECT_ALLOCS.svi || {}).forEach(pool => {
+      Object.keys(pool || {}).forEach(ip => { taken[ip] = true; });
+    });
+
+    if (!current.ip_address) {
+      // Start at the gateway offset and take the first address nobody holds,
+      // so the second switch of a pair lands on the next one along.
+      const start = isNaN(gwOffset) ? 1 : gwOffset;
+      const agwIp = isNaN(agwOffset) ? null : ips[agwOffset];
+      for (let n = start; n < ips.length - 1; n++) {
+        const candidate = ips[n];
+        if (taken[candidate] || candidate === agwIp) continue;
+        updateItem(setVlanIfs, idx, 'ip_address', candidate);
+        break;
+      }
+    }
+
+    // The active gateway is deliberately not filled in — it is chosen from
+    // the dropdown. The offset is still used above to keep that address out
+    // of the switch-address selection.
+  }
 
   const renderVxlan = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'vxlan', filename:'vxlan.yml'}),

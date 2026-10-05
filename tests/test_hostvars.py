@@ -1085,7 +1085,7 @@ class TestCopyVlansBetweenSwitches:
             '/projects/%s/editor?host=sw2' % proj).data.decode()
         keys = set(re.findall(r"copyPanel\('(\w+)'", body))
         assert keys == {'vlans', 'banner', 'snmp', 'logging',
-                        'aaa', 'vrfs', 'vxlan'}
+                        'aaa', 'vrfs', 'vxlan', 'svis'}
 
     def test_panels_only_read_keys_the_parser_produces(self, app, auth_client,
                                                        tmp_path):
@@ -1106,7 +1106,8 @@ class TestCopyVlansBetweenSwitches:
         state = _parse_state(str(d))
 
         for m in re.finditer(r"copyPanel\('(\w+)',", body):
-            chunk = body[m.start():body.index('    }),', m.start())]
+            chunk = body[m.start():body.index('    }),', m.start())
+                         ] if '    }),' in body[m.start():m.start()+2000] else ''
             for key in set(re.findall(r'st\.([A-Za-z_][A-Za-z0-9_]*)', chunk)):
                 assert key in state, (
                     'copyPanel %s reads st.%s, which the parser never sets'
@@ -1116,3 +1117,178 @@ class TestCopyVlansBetweenSwitches:
         proj = self._project(app, auth_client)
         res = auth_client.get('/projects/%s/api/hostvars/nope/state' % proj)
         assert res.status_code == 404
+
+
+class TestSviAutoFill:
+    """Picking a subnet used to set only the prefix, leaving the name,
+    description and address to be typed by hand on every switch — even
+    though the supernet knows the VLAN and the conventions say where the
+    gateway sits.
+    """
+
+    def _page(self, app, auth_client):
+        import os
+        from app.project import (create_project, add_pool, assign_vlan_subnet,
+                                 project_host_vars_dir)
+        with app.app_context():
+            create_project(app, 'admin', 'af')
+            add_pool(app, 'admin', 'af', {
+                'id': 'sn', 'type': 'vlan_supernet', 'name': 'Core',
+                'subnet': '10.50.0.0/16', 'carve_prefix': '24'})
+            assign_vlan_subnet(app, 'admin', 'af', 'sn', '10.50.5.0/24',
+                               '100', 'Users')
+            hv = os.path.join(project_host_vars_dir(app, 'admin', 'af'), 'sw1')
+            os.makedirs(hv, exist_ok=True)
+        return auth_client.get('/projects/af/editor?host=sw1').data.decode()
+
+    def test_autofill_runs_on_subnet_selection(self, app, auth_client):
+        body = self._page(app, auth_client)
+        assert 'sviAutoFill' in body
+        assert 'sviAutoFill(i, ev.target.value, v)' in body
+
+    def test_conventions_reach_the_page(self, app, auth_client):
+        """The offsets decide which address is chosen."""
+        import json, re
+        body = self._page(app, auth_client)
+        convs = json.loads(
+            re.search(r'const PROJECT_CONVS\s*=\s*(.*?);\n', body, re.S).group(1))
+        assert convs['svi']['gateway_offset'] == 1
+        assert convs['svi']['active_gateway_offset'] == 254
+
+    def test_vlan_metadata_reaches_the_page(self, app, auth_client):
+        """Name and description come from the supernet's record."""
+        import json, re
+        body = self._page(app, auth_client)
+        allocs = json.loads(
+            re.search(r'const PROJECT_ALLOCS\s*=\s*(.*?);\n', body, re.S).group(1))
+        block = allocs['vlan_supernet']['sn']['10.50.5.0/24']
+        assert block['vlan_id'] == '100'
+        assert block['vlan_name'] == 'Users'
+
+    def test_active_gateway_is_not_auto_filled(self, app, auth_client):
+        """It is chosen from the dropdown, not assumed from the offset."""
+        body = self._page(app, auth_client)
+        start = body.index('function sviAutoFill')
+        chunk = body[start:start + 2500]
+        assert "updateItem(setVlanIfs, idx, 'active_gw_ip'" not in chunk
+
+    def test_active_gateway_address_is_still_excluded(self, app, auth_client):
+        """It must not be offered as a switch address either."""
+        body = self._page(app, auth_client)
+        start = body.index('function sviAutoFill')
+        chunk = body[start:start + 2500]
+        assert 'candidate === agwIp' in chunk
+
+    def test_reserved_from_start_does_not_gate_the_gateway(self, app, auth_client):
+        """It holds addresses back from DHCP; switch addresses live inside it."""
+        body = self._page(app, auth_client)
+        start = body.index('function sviAutoFill')
+        chunk = body[start:start + 2500]
+        assert 'reserved_from_start is about holding addresses back' in chunk
+        assert 'n < skip' not in chunk, 'gateway selection must not skip past it'
+
+
+class TestCopySvisBetweenSwitches:
+    """Building the SVI set once and copying it is quicker than repeating
+    the work, and a mistake shows up on one switch rather than all of them.
+    Each copy takes the next free address in its own subnet.
+    """
+
+    def _page(self, app, auth_client):
+        import os
+        from app.project import (create_project, add_pool, assign_vlan_subnet,
+                                 project_host_vars_dir)
+        with app.app_context():
+            create_project(app, 'admin', 'cs')
+            add_pool(app, 'admin', 'cs', {
+                'id': 'sn', 'type': 'vlan_supernet', 'name': 'Core',
+                'subnet': '10.50.0.0/16', 'carve_prefix': '24'})
+            assign_vlan_subnet(app, 'admin', 'cs', 'sn', '10.50.5.0/24',
+                               '100', 'Users')
+            base = project_host_vars_dir(app, 'admin', 'cs')
+            for host in ('core-01', 'core-02'):
+                os.makedirs(os.path.join(base, host), exist_ok=True)
+            with open(os.path.join(base, 'core-01', 'interfaces.yml'), 'w') as f:
+                f.write('interface_groups: []\nphysical_interfaces: []\n'
+                        'lag_interfaces: []\nloopback_interfaces: []\n'
+                        'vlan_interfaces:\n  - name: vlan100\n'
+                        '    description: Users\n    subnet: "10.50.5.0/24"\n'
+                        '    ip_address: "10.50.5.1"\n    ip_prefix: "24"\n'
+                        '    active_gateway_ip: "10.50.5.254"\n')
+        return auth_client.get(
+            '/projects/cs/editor?host=core-02').data.decode()
+
+    def test_panel_is_offered(self, app, auth_client):
+        body = self._page(app, auth_client)
+        assert "copyPanel('svis'" in body
+        assert 'copySvisFrom' in body
+
+    def test_source_svis_are_readable(self, app, auth_client):
+        self._page(app, auth_client)
+        data = auth_client.get(
+            '/projects/cs/api/hostvars/core-01/state').get_json()
+        svi = data['vlanIfs'][0]
+        assert svi['name'] == 'vlan100'
+        assert svi['ip_address'] == '10.50.5.1'
+        # subnet is derived in the browser from the address, not stored
+        assert 'subnet' not in svi
+
+    def test_copy_reassigns_rather_than_duplicating(self, app, auth_client):
+        """The source switch's address must not be copied verbatim."""
+        body = self._page(app, auth_client)
+        start = body.index('function copySvisFrom')
+        chunk = body[start:start + 2000]
+        assert "out.ip_address = ''" in chunk, 'address is not cleared first'
+        assert 'taken[candidate] = true' in chunk, \
+            'two SVIs in one subnet would collide'
+
+
+class TestSubnetDerivation:
+    """The subnet picker's value is never written to the file, so it has to
+    be derived from the address on load — otherwise every SVI shows a blank
+    subnet and a free-text address after a save and reload.
+    """
+
+    def _page(self, app, auth_client):
+        import os
+        from app.project import (create_project, add_pool, carve_supernet_block,
+                                 project_host_vars_dir)
+        with app.app_context():
+            create_project(app, 'admin', 'sd')
+            add_pool(app, 'admin', 'sd', {
+                'id': 'sn', 'type': 'vlan_supernet', 'name': 'Core',
+                'subnet': '10.50.0.0/16'})
+            carve_supernet_block(app, 'admin', 'sd', 'sn', '10.50.0.0/18')
+            carve_supernet_block(app, 'admin', 'sd', 'sn', '10.50.5.0/24',
+                                 '100', 'Users')
+            hv = os.path.join(project_host_vars_dir(app, 'admin', 'sd'), 'sw1')
+            os.makedirs(hv, exist_ok=True)
+            with open(os.path.join(hv, 'interfaces.yml'), 'w') as f:
+                f.write('interface_groups: []\nphysical_interfaces: []\n'
+                        'lag_interfaces: []\nloopback_interfaces: []\n'
+                        'vlan_interfaces:\n  - name: vlan100\n'
+                        '    ip_address: "10.50.5.1"\n    ip_prefix: "24"\n')
+        return auth_client.get('/projects/sd/editor?host=sw1').data.decode()
+
+    def test_derivation_helper_is_present(self, app, auth_client):
+        body = self._page(app, auth_client)
+        assert 'function subnetForIp' in body
+
+    def test_derivation_does_not_enumerate_addresses(self, app, auth_client):
+        """It used to call generateSubnetIPs per block per SVI — a /18 holds
+        16k addresses, so that ran 16k comparisons each time."""
+        body = self._page(app, auth_client)
+        start = body.index('const vlanIfsWithSubnet')
+        chunk = body[start:start + 900]
+        assert 'generateSubnetIPs' not in chunk
+        assert 'subnetForIp' in chunk
+
+    def test_blocks_reach_the_page_for_matching(self, app, auth_client):
+        import json, re
+        body = self._page(app, auth_client)
+        allocs = json.loads(
+            re.search(r'const PROJECT_ALLOCS\s*=\s*(.*?);\n', body, re.S).group(1))
+        blocks = allocs['vlan_supernet']['sn']
+        # both the container and the specific block, so longest-prefix wins
+        assert '10.50.0.0/18' in blocks
+        assert '10.50.5.0/24' in blocks
