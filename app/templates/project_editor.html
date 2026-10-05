@@ -892,6 +892,12 @@ function App() {
   const renderBanner = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'banner', filename:'banner.yml'}),
 
+    copyPanel('banner', 'banners', st => {
+      setBannerMotd(st.bannerMotd || '');
+      setBannerExec(st.bannerExec || '');
+      return 'the banners';
+    }),
+
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'MOTD banner'),
       ce('textarea', {value:bannerMotd, onChange:ev=>setBannerMotd(ev.target.value), rows:8})),
@@ -902,6 +908,17 @@ function App() {
 
   const renderSnmp = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'snmp', filename:'snmp.yml'}),
+
+    copyPanel('snmp', 'SNMP', st => {
+      setSnmpVersion(st.snmpVersion || 'v2c');
+      setSnmpVrf(st.snmpVrf || '');
+      setSnmpDesc(st.snmpDesc || '');
+      setSnmpLocation(st.snmpLocation || '');
+      setSnmpContact(st.snmpContact || '');
+      setSnmpCommunity(st.snmpCommunity || '');
+      setV3Users(st.v3Users || []);
+      return 'the SNMP settings';
+    }),
 
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'SNMP'),
@@ -926,6 +943,14 @@ function App() {
   const SYSLOG_SEVERITIES = ['emerg','alert','crit','err','warning','notice','info','debug'];
 
   const renderLogging = () => ce('div', null,
+    copyPanel('logging', 'syslog and sFlow', st => {
+      setSyslogServer(st.syslogServer || '');
+      setSyslogSeverity(st.syslogSeverity || '');
+      setSflowCollectorIp(st.sflowCollectorIp || '');
+      setSflowAgentIp(st.sflowAgentIp || '');
+      return 'syslog and sFlow';
+    }),
+
     ce('div', {className:'sec'},
       ce(IncludeToggle, {tabKey:'syslog', filename:'syslog.yml'}),
       ce('div', {className:'sec-h'}, 'Syslog'),
@@ -956,6 +981,15 @@ function App() {
 
   const renderAaa = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'aaa', filename:'aaa.yml'}),
+
+    copyPanel('aaa', 'AAA', st => {
+      setRadiusServerKey(st.radiusServerKey || '');
+      setRadiusGroup(st.radiusGroup || '');
+      setDynAuth(!!st.dynAuth);
+      setRadiusServers(st.radiusServers || []);
+      setRadiusDynauthServers(st.radiusDynauthServers || []);
+      return 'the AAA settings';
+    }),
 
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'RADIUS'),
@@ -991,6 +1025,12 @@ function App() {
   const renderVrfs = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'vrfs', filename:'vrfs.yml'}),
 
+    copyPanel('vrfs', 'VRFs', st => {
+      const v = st.vrfs || [];
+      setVrfs(v);
+      return v.length + ' VRF(s)';
+    }),
+
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'VRFs'),
       ce('p', {className:'hint'}, 'Leave vrf fields empty on interfaces and routing to use the default VRF.'),
@@ -1000,8 +1040,58 @@ function App() {
           ce('button', {className:'remove-btn', style:{marginBottom:12}, onClick:()=>removeItem(setVrfs,i)}, 'Remove')))),
       ce('button', {className:'add-btn', onClick:()=>addItem(setVrfs,{name:''})}, '+ Add VRF')));
 
+  /* Several sections are usually identical across a project's switches —
+     VLANs, SNMP, syslog and so on — so copying beats retyping. Values are
+     loaded into the form rather than saved, so they can be reviewed first.
+
+     `apply` receives the source host's parsed state and returns a short
+     description of what it took, for the status line. */
+  async function copyFrom(key, apply) {
+    const src = document.getElementById('copy-src-' + key).value;
+    const status = document.getElementById('copy-status-' + key);
+    if (!src) { status.textContent = 'Choose a switch first.'; return; }
+
+    status.textContent = 'Loading from ' + src + '\u2026';
+    try {
+      const res = await fetch('/projects/' + PROJECT_NAME
+        + '/api/hostvars/' + encodeURIComponent(src) + '/state');
+      if (!res.ok) { status.textContent = 'Could not read ' + src + '.'; return; }
+      const state = await res.json();
+      const what = apply(state);
+      status.textContent = 'Loaded ' + what + ' from ' + src
+        + '. Press Save to keep it.';
+    } catch (e) {
+      status.textContent = 'Could not read ' + src + ': ' + e;
+    }
+  }
+
+  /* Renders the picker. Returns false when there is nobody to copy from,
+     so a single-host project shows no dead control. */
+  const copyPanel = (key, label, apply) => {
+    const others = HOST_NAMES.filter(h => h !== SELECTED_HOST);
+    if (!others.length) return null;
+    return ce('div', {className:'sec'},
+      ce('div', {className:'sec-h'}, 'Copy ' + label + ' from another switch'),
+      ce('div', {style:{display:'flex',gap:8,alignItems:'end'}},
+        ce('div', {style:{flex:1,maxWidth:280}},
+          ce(Field, {label:'Switch'},
+            ce('select', {id:'copy-src-' + key},
+              ce('option', {value:''}, '— select —'),
+              others.map(h => ce('option', {key:h, value:h}, h))))),
+        ce('button', {className:'btn btn-sm', style:{marginBottom:12},
+          onClick: () => copyFrom(key, apply)}, 'Load')),
+      ce('div', {className:'form-hint', id:'copy-status-' + key},
+        'Replaces what is below. Nothing is saved until you press Save.'));
+  };
+
   const renderVlans = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'vlans', filename:'vlans.yml'}),
+
+    copyPanel('vlans', 'VLANs', st => {
+      const v = (st.vlans || []).map(x => ({id: x.id, name: x.name}));
+      setVlans(v);
+      return v.length + ' VLAN(s)';
+    }),
 
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'VLANs'),
@@ -1325,6 +1415,13 @@ function App() {
 
   const renderVxlan = () => ce('div', null,
     ce(IncludeToggle, {tabKey:'vxlan', filename:'vxlan.yml'}),
+
+    // Only the VNI map — the VTEP loopback and its address are per-switch.
+    copyPanel('vxlan', 'the VNI map', st => {
+      const v = st.vnis || [];
+      setVnis(v);
+      return v.length + ' VNI mapping(s)';
+    }),
 
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'VTEP loopback'),

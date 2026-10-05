@@ -1039,3 +1039,80 @@ vlan_interfaces: []
         body = auth_client.get('/projects/lagp/editor?host=sw1').data.decode()
         assert "placeholder:'lag1 or leave empty'" not in body
         assert 'not lag1' in body, 'hint should say what not to type'
+
+
+class TestCopyVlansBetweenSwitches:
+    """The L2 VLAN list is often identical across a project's switches, so
+    copying beats retyping. Uses the existing per-host state endpoint, so
+    there is no new backend.
+    """
+
+    def _project(self, app, auth_client):
+        import os
+        from app.project import create_project, project_host_vars_dir
+        with app.app_context():
+            create_project(app, 'admin', 'vl')
+            base = project_host_vars_dir(app, 'admin', 'vl')
+            for host, vlans in (('sw1', '  - id: "100"\n    name: USERS\n'
+                                        '  - id: "200"\n    name: VOICE\n'),
+                                ('sw2', '')):
+                hv = os.path.join(base, host)
+                os.makedirs(hv, exist_ok=True)
+                with open(os.path.join(hv, 'vlans.yml'), 'w') as f:
+                    f.write('vlans:\n' + (vlans or ' []\n'))
+        return 'vl'
+
+    def test_source_vlans_are_readable_from_the_state_endpoint(
+            self, app, auth_client):
+        proj = self._project(app, auth_client)
+        data = auth_client.get(
+            '/projects/%s/api/hostvars/sw1/state' % proj).get_json()
+        assert [(v['id'], v['name']) for v in data['vlans']] == [
+            ('100', 'USERS'), ('200', 'VOICE')]
+
+    def test_control_is_offered_when_other_switches_exist(self, app, auth_client):
+        proj = self._project(app, auth_client)
+        body = auth_client.get(
+            '/projects/%s/editor?host=sw2' % proj).data.decode()
+        assert 'copyFrom' in body
+        assert "copy-src-' + key" in body
+
+    def test_every_section_offers_a_copy_panel(self, app, auth_client):
+        """VLANs, banner, SNMP, logging, AAA, VRFs and the VNI map."""
+        import re
+        proj = self._project(app, auth_client)
+        body = auth_client.get(
+            '/projects/%s/editor?host=sw2' % proj).data.decode()
+        keys = set(re.findall(r"copyPanel\('(\w+)'", body))
+        assert keys == {'vlans', 'banner', 'snmp', 'logging',
+                        'aaa', 'vrfs', 'vxlan'}
+
+    def test_panels_only_read_keys_the_parser_produces(self, app, auth_client,
+                                                       tmp_path):
+        """A typo in a state key would silently copy nothing.
+
+        The panels read from the source host's parsed state, so every key
+        they touch has to exist in it.
+        """
+        import re, os
+        from app.hostvars import _parse_state
+        proj = self._project(app, auth_client)
+        body = auth_client.get(
+            '/projects/%s/editor?host=sw2' % proj).data.decode()
+
+        d = tmp_path / 'hv'
+        d.mkdir()
+        (d / 'general.yml').write_text('hostname: x\n')
+        state = _parse_state(str(d))
+
+        for m in re.finditer(r"copyPanel\('(\w+)',", body):
+            chunk = body[m.start():body.index('    }),', m.start())]
+            for key in set(re.findall(r'st\.([A-Za-z_][A-Za-z0-9_]*)', chunk)):
+                assert key in state, (
+                    'copyPanel %s reads st.%s, which the parser never sets'
+                    % (m.group(1), key))
+
+    def test_unknown_host_is_a_404(self, app, auth_client):
+        proj = self._project(app, auth_client)
+        res = auth_client.get('/projects/%s/api/hostvars/nope/state' % proj)
+        assert res.status_code == 404
