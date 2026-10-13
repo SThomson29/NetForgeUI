@@ -51,13 +51,13 @@
       </div>
       {% if pool.type != 'vlan_supernet' %}
       <button class="btn btn-sm"
-              onclick="editPool('{{ pool.id }}', '{{ pool.name }}', '{{ pool.subnet }}')">Edit</button>
+              onclick='editPool({{ pool.id|tojson }}, {{ pool.name|tojson }}, {{ pool.subnet|tojson }})'>Edit</button>
       {% elif pool.carve_prefix %}
       <button class="btn btn-sm"
-              onclick="convertSupernet('{{ pool.id }}', '{{ pool.name }}', '{{ pool.carve_prefix }}')"
+              onclick='convertSupernet({{ pool.id|tojson }}, {{ pool.name|tojson }}, {{ pool.carve_prefix|tojson }})'
               title="Allow blocks of different sizes in this supernet">Use mixed sizes</button>
       {% endif %}
-      <button class="btn btn-sm btn-danger" onclick="removePool('{{ pool.id }}', '{{ pool.name }}')">Remove</button>
+      <button class="btn btn-sm btn-danger" onclick='removePool({{ pool.id|tojson }}, {{ pool.name|tojson }})'>Remove</button>
     </div>
     <div style="font-size:12px;color:#666;font-family:'Courier New',monospace">
       {{ pool.subnet }}
@@ -183,7 +183,7 @@
   <div class="card">
     <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
       {{ label }}
-      <button class="btn btn-sm" onclick="addCommonEntry('{{ key }}', '{{ placeholder }}')">+ Add</button>
+      <button class="btn btn-sm" onclick='addCommonEntry({{ key|tojson }}, {{ placeholder|tojson }})'>+ Add</button>
     </div>
     <div id="common-{{ key }}">
       {% for ip in config.common.get(key, []) %}
@@ -232,7 +232,7 @@
           <td class="meta">{{ entry.interface }}</td>
           <td style="text-align:right">
             <button class="btn btn-sm btn-danger"
-              onclick="releaseUnique('{{ pool.id }}', '{{ ip }}')">Release</button>
+              onclick='releaseUnique({{ pool.id|tojson }}, {{ ip|tojson }})'>Release</button>
           </td>
         </tr>
         {% endfor %}
@@ -272,7 +272,7 @@
           </td>
           <td style="text-align:right">
             <button class="btn btn-sm btn-danger"
-              onclick="releasePtp('{{ pool.id }}', '{{ ip }}')">Release</button>
+              onclick='releasePtp({{ pool.id|tojson }}, {{ ip|tojson }})'>Release</button>
           </td>
         </tr>
         {% endif %}
@@ -309,12 +309,12 @@
         <input class="form-input" type="number" id="blk-want-{{ pool.id }}"
                min="1" max="32" value="24">
       </div>
-      <button class="btn btn-sm" onclick="suggestBlock('{{ pool.id }}')">Find free</button>
+      <button class="btn btn-sm" onclick='suggestBlock({{ pool.id|tojson }})'>Find free</button>
       <span id="blk-scope-{{ pool.id }}" style="display:none;font-size:12px;color:#92400e">
       </span>
-      <button class="btn btn-sm btn-ghost" onclick="clearCarveScope('{{ pool.id }}')"
+      <button class="btn btn-sm btn-ghost" onclick='clearCarveScope({{ pool.id|tojson }})'
               title="Add at the top level instead">Top level</button>
-      <button class="btn btn-sm btn-primary" onclick="carveBlock('{{ pool.id }}')">Add block</button>
+      <button class="btn btn-sm btn-primary" onclick='carveBlock({{ pool.id|tojson }})'>Add block</button>
     </div>
     <div id="blk-error-{{ pool.id }}" style="display:none;color:#dc2626;font-size:13px;margin-bottom:10px"></div>
     <div class="form-hint" style="margin-bottom:12px">
@@ -361,26 +361,26 @@
                switch yet, and releasing to add one would drop its derived
                SVI addresses. #}
             <button class="btn btn-sm"
-              onclick="openVlanAssign('{{ pool.id }}', '{{ subnet }}')">Edit VLAN</button>
+              onclick='openVlanAssign({{ pool.id|tojson }}, {{ subnet|tojson }})'>Edit VLAN</button>
             <button class="btn btn-sm btn-danger"
-              onclick="releaseVlan('{{ pool.id }}', '{{ subnet }}')">Release</button>
+              onclick='releaseVlan({{ pool.id|tojson }}, {{ subnet|tojson }})'>Release</button>
             {% elif entry.status == 'container' %}
             <button class="btn btn-sm"
-              onclick="carveInto('{{ pool.id }}', '{{ subnet }}')">Add inside</button>
+              onclick='carveInto({{ pool.id|tojson }}, {{ subnet|tojson }})'>Add inside</button>
             {% else %}
             <button class="btn btn-sm"
-              onclick="openVlanAssign('{{ pool.id }}', '{{ subnet }}')">
+              onclick='openVlanAssign({{ pool.id|tojson }}, {{ subnet|tojson }})'>
               {% if entry.vlan_id %}Edit VLAN{% else %}Assign VLAN{% endif %}
             </button>
             {# Only a mixed-size supernet has a block editor to subdivide into. #}
             {% if not pool.carve_prefix %}
             <button class="btn btn-sm"
-              onclick="carveInto('{{ pool.id }}', '{{ subnet }}')">Subdivide</button>
+              onclick='carveInto({{ pool.id|tojson }}, {{ subnet|tojson }})'>Subdivide</button>
             {% endif %}
             {% endif %}
             {% if not pool.carve_prefix and entry.status not in ['delegated', 'container'] %}
             <button class="btn btn-sm btn-danger"
-              onclick="removeBlock('{{ pool.id }}', '{{ subnet }}')">Remove</button>
+              onclick='removeBlock({{ pool.id|tojson }}, {{ subnet|tojson }})'>Remove</button>
             {% endif %}
           </td>
         </tr>
@@ -436,7 +436,7 @@ function updatePoolForm() {
     const sel = document.getElementById('pool-parent');
     if (!sel.options.length) {
       sel.innerHTML = SUPERNETS.map(p =>
-        `<option value="${p.id}">${p.name} (${p.subnet} → /${p.carve_prefix})</option>`).join('');
+        `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.subnet)} → /${esc(p.carve_prefix)})</option>`).join('');
     }
     loadCarvedSubnets();
   }
@@ -457,7 +457,7 @@ async function loadCarvedSubnets() {
       hint.textContent = 'Every subnet in this supernet is already assigned or delegated.';
       return;
     }
-    sel.innerHTML = free.map(sn => `<option value="${sn}">${sn}</option>`).join('');
+    sel.innerHTML = free.map(sn => `<option value="${esc(sn)}">${esc(sn)}</option>`).join('');
     hint.textContent = free.length + ' free subnet(s). The one you pick stops being '
                      + 'available to VLANs while this pool exists.';
   } catch (e) {
@@ -616,7 +616,7 @@ function openVlanAssign(poolId, subnet) {
   document.getElementById('vlan-error').style.display = 'none';
 
   const blank = '<option value="">— none —</option>';
-  const opts  = PROJECT_HOSTS.map(h => `<option value="${h}">${h}</option>`).join('');
+  const opts  = PROJECT_HOSTS.map(h => `<option value="${esc(h)}">${esc(h)}</option>`).join('');
   document.getElementById('vlan-host').innerHTML = blank + opts;
   document.getElementById('vlan-peer').innerHTML = blank + opts;
   document.getElementById('vlan-host').value = existing.hostname || '';

@@ -6,7 +6,7 @@ services:
       - "5001:5000"
     environment:
       # --- Required ---
-      SECRET_KEY: "XdfLjM@Ug%x69q7l81c1"
+      SECRET_KEY: "${SECRET_KEY:?Set SECRET_KEY in the environment or a .env file}"
       CONFIGGEN_REPO_URL: "https://github.com/SThomson29/NetForge.git"
 
       # --- Optional overrides ---

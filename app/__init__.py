@@ -11,6 +11,26 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
+    from .security import check_secret_key, install_origin_check
+
+    # Refuse to start with a published or trivial key rather than run with
+    # sessions anyone can forge. Tests set TESTING and use their own key.
+    if not app.config.get('TESTING'):
+        check_secret_key(app.config.get('SECRET_KEY'))
+
+    # Behind Nginx every request arrives from the proxy's address, so the
+    # login throttle would treat all users as one client and the CSRF check
+    # would see the upstream host name. Only trust the forwarded headers
+    # when a proxy is actually configured in front.
+    proxies = int(app.config.get('TRUSTED_PROXIES') or 0)
+    if proxies > 0:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxies,
+                                x_proto=proxies, x_host=proxies)
+
+    install_origin_check(app)
+
+
     login_manager.init_app(app)
     login_manager.login_view = 'auth.login'
     login_manager.login_message = 'Please log in to continue.'

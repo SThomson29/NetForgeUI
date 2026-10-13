@@ -7,6 +7,20 @@
   <title>{% block title %}NetForgeUI{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/design.css') }}">
   {% block extra_head %}{% endblock %}
+<script>
+/* Escape a value for HTML, in text *and* in quoted attributes.
+   Anything built with innerHTML or a template literal bypasses Jinja's
+   autoescaping, so user-entered names and playbook output — which can
+   carry switch running-config content — must go through this first. */
+function esc(value) {
+  return String(value === null || value === undefined ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+</script>
 </head>
 <body>
 

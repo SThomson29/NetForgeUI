@@ -83,7 +83,7 @@
       <span class="config-name">{{ cfg }}</span>
       <div class="config-actions">
         <a href="{{ url_for('generate.download', filename=cfg) }}" class="btn btn-sm">Download</a>
-        <button class="btn btn-sm btn-danger" onclick="deleteConfig('{{ cfg }}')">Delete</button>
+        <button class="btn btn-sm btn-danger" onclick='deleteConfig({{ cfg|tojson }})'>Delete</button>
       </div>
     </div>
     {% endfor %}

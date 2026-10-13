@@ -1237,7 +1237,7 @@ class TestCopySvisBetweenSwitches:
         """The source switch's address must not be copied verbatim."""
         body = self._page(app, auth_client)
         start = body.index('function copySvisFrom')
-        chunk = body[start:start + 2000]
+        chunk = body[start:body.index('\n  }\n', start)]
         assert "out.ip_address = ''" in chunk, 'address is not cleared first'
         assert 'taken[candidate] = true' in chunk, \
             'two SVIs in one subnet would collide'

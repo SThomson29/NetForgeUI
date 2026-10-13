@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 import glob
 import yaml
+
+from .ansible_safe import dump_unsafe, validate_targets
 from datetime import datetime
 from flask import (
     render_template, request, jsonify,
@@ -118,7 +120,7 @@ def _run_playbook_job(job_id, playbook_name, repo_dir, ansible_bin,
     with tempfile.TemporaryDirectory() as tmpdir:
         inv_path = os.path.join(tmpdir, 'inventory.yml')
         with open(inv_path, 'w') as f:
-            yaml.dump(inventory_dict, f, default_flow_style=False)
+            dump_unsafe(inventory_dict, f)
 
         results_dir = os.path.join(tmpdir, 'results')
         os.makedirs(results_dir, exist_ok=True)
@@ -127,7 +129,7 @@ def _run_playbook_job(job_id, playbook_name, repo_dir, ansible_bin,
 
         vars_path = os.path.join(tmpdir, 'extra_vars.yml')
         with open(vars_path, 'w') as f:
-            yaml.dump(extra_vars, f, default_flow_style=False)
+            dump_unsafe(extra_vars, f)
 
         playbook_path = os.path.join(repo_dir, 'playbooks', playbook_name)
         if not os.path.isfile(playbook_path):
@@ -219,7 +221,7 @@ def _run_playbook(playbook_name, inventory_dict, extra_vars, limit_hosts=None):
         # Write inventory
         inv_path = os.path.join(tmpdir, 'inventory.yml')
         with open(inv_path, 'w') as f:
-            yaml.dump(inventory_dict, f, default_flow_style=False)
+            dump_unsafe(inventory_dict, f)
 
         # Write extra vars
         extra_vars['results_file'] = os.path.join(tmpdir, 'results')
@@ -227,7 +229,7 @@ def _run_playbook(playbook_name, inventory_dict, extra_vars, limit_hosts=None):
 
         vars_path = os.path.join(tmpdir, 'extra_vars.yml')
         with open(vars_path, 'w') as f:
-            yaml.dump(extra_vars, f, default_flow_style=False)
+            dump_unsafe(extra_vars, f)
 
         # Locate playbook. The config key is CONFIGGEN_REPO — CONFIGGEN_DIR
         # has never existed, so this silently fell back to the relative string
@@ -357,6 +359,11 @@ def deployment_ips_save(project_name):
         seen.add(name)
         cleaned.append({'hostname': name, 'mgmt_ip': ip})
 
+    # These names become Ansible inventory keys and --limit patterns.
+    problems = validate_targets(cleaned)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
+
     mapping = _load_mapping(app, username, project_name)
     mapping['hosts'] = cleaned
     _save_mapping(app, username, project_name, mapping)
@@ -424,6 +431,10 @@ def deploy_dryrun(project_name):
     if not hosts or not username or not password:
         return jsonify(ok=False, error='Missing hosts or credentials'), 400
 
+    problems = validate_targets(hosts)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
+
     app = current_app._get_current_object()
     config_dir = project_generated_configs_dir(
         app, current_user.username, project_name
@@ -468,6 +479,10 @@ def deploy_push(project_name):
 
     if not hosts or not username or not password:
         return jsonify(ok=False, error='Missing hosts or credentials'), 400
+
+    problems = validate_targets(hosts)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
 
     app = current_app._get_current_object()
     config_dir = project_generated_configs_dir(

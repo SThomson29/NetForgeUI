@@ -26,6 +26,8 @@ import glob
 import uuid
 import shlex
 import yaml
+
+from .ansible_safe import dump_unsafe, validate_targets
 import tempfile
 import threading
 import subprocess
@@ -139,7 +141,7 @@ def _run_firmware_playbook(job_id, playbook_path, repo_dir, ansible_bin,
     with tempfile.TemporaryDirectory() as tmpdir:
         inv_path = os.path.join(tmpdir, 'inventory.yml')
         with open(inv_path, 'w') as f:
-            yaml.dump(inventory_dict, f, default_flow_style=False)
+            dump_unsafe(inventory_dict, f)
 
         results_dir = os.path.join(tmpdir, 'results')
         os.makedirs(results_dir, exist_ok=True)
@@ -147,7 +149,7 @@ def _run_firmware_playbook(job_id, playbook_path, repo_dir, ansible_bin,
 
         vars_path = os.path.join(tmpdir, 'extra_vars.yml')
         with open(vars_path, 'w') as f:
-            yaml.dump(extra_vars, f, default_flow_style=False)
+            dump_unsafe(extra_vars, f)
 
         cmd = [ansible_bin, playbook_path, '-i', inv_path, '-e', '@' + vars_path]
         if limit_hosts:
@@ -268,6 +270,11 @@ def firmware_run(project_name):
             ok=False,
             error='No target hosts with a management IP. Set them on the '
                   'Deploy tab first.'), 400
+
+    # The mapping may predate validation, so check what is actually used.
+    problems = validate_targets(chosen)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
 
     repo_dir = app.config.get('CONFIGGEN_REPO', 'configgen')
     playbook_path = os.path.join(repo_dir, 'playbooks', 'firmware_upgrade.yml')

@@ -45,7 +45,7 @@
       <td style="color:#888;font-size:12px;font-family:'Courier New',monospace">{{ host.group }}</td>
       <td style="text-align:right;display:flex;gap:6px;justify-content:flex-end">
         <a href="{{ url_for('hostvars.editor', host=host.hostname) }}" class="btn btn-sm">Edit vars</a>
-        <form method="POST" action="{{ url_for('hosts.delete', hostname=host.hostname) }}" style="display:inline" onsubmit="return confirm('Remove {{ host.hostname }}? This will also delete its host_vars.')">
+        <form method="POST" action="{{ url_for('hosts.delete', hostname=host.hostname) }}" style="display:inline" onsubmit='return confirm("Remove " + {{ host.hostname|tojson }} + "? This will also delete its host_vars.")'>
           <button type="submit" class="btn btn-sm btn-danger">Remove</button>
         </form>
       </td>
