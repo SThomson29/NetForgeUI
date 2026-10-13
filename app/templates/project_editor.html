@@ -1061,17 +1061,18 @@ function App() {
 
   /* Renders the picker. Returns false when there is nobody to copy from,
      so a single-host project shows no dead control. */
-  const copyPanel = (key, label, apply) => {
+  const copyPanel = (key, label, apply, extra) => {
     const others = HOST_NAMES.filter(h => h !== SELECTED_HOST);
     if (!others.length) return null;
     return ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'Copy ' + label + ' from another switch'),
-      ce('div', {style:{display:'flex',gap:8,alignItems:'end'}},
+      ce('div', {style:{display:'flex',gap:8,alignItems:'end',flexWrap:'wrap'}},
         ce('div', {style:{flex:1,maxWidth:280}},
           ce(Field, {label:'Switch'},
             ce('select', {id:'copy-src-' + key},
               ce('option', {value:''}, '— select —'),
               others.map(h => ce('option', {key:h, value:h}, h))))),
+        extra || null,
         ce('button', {className:'btn btn-sm', style:{marginBottom:12},
           onClick: () => copyFrom(key, apply)}, 'Load')),
       ce('div', {className:'form-hint', id:'copy-status-' + key},
@@ -1218,7 +1219,14 @@ function App() {
           ce(Field, {label:'OSPF process ID'}, ce('input', {value:l.ospf_process_id||'', onChange:ev=>updateItem(setLoopbacks,i,'ospf_process_id',ev.target.value), placeholder:'1'})),
           ce('button', {className:'remove-btn', style:{marginBottom:12}, onClick:()=>removeItem(setLoopbacks,i)}, 'Remove')))),
       ce('button', {className:'add-btn', onClick:()=>addItem(setLoopbacks,{name:'',ip_prefix:'32'})}, '+ Add loopback')),
-    copyPanel('svis', 'SVIs', st => copySvisFrom('', st)),
+    copyPanel('svis', 'SVIs',
+      st => copySvisFrom(st, document.getElementById('svi-copy-target').value),
+      ce('div', {style:{flex:1,maxWidth:320}},
+        ce(Field, {label:'Addressing', hint:'Matched by VLAN ID'},
+          ce('select', {id:'svi-copy-target', defaultValue: detectSviSupernet()},
+            ce('option', {value:''}, 'Same subnets as the source switch'),
+            PROJECT_POOLS.filter(p => p.type === 'vlan_supernet').map(p =>
+              ce('option', {key:p.id, value:p.id}, p.name + ' (' + p.subnet + ')')))))),
 
     ce('div', {className:'sec'},
       ce('div', {className:'sec-h'}, 'VLAN interfaces (SVIs)'),
@@ -1449,34 +1457,124 @@ function App() {
     return best;
   }
 
-  function copySvisFrom(src, state) {
+  function ipToInt(ip) {
+    const p = String(ip || '').split('.').map(Number);
+    if (p.length !== 4 || p.some(n => isNaN(n) || n < 0 || n > 255)) return null;
+    return ((p[0]<<24)>>>0) + (p[1]<<16) + (p[2]<<8) + p[3];
+  }
+
+  /* Which supernet this switch already lives in — from its own SVI
+     addresses, or from blocks and gateways recorded against it — so a
+     cross-site copy defaults to the right site without being told. */
+  function detectSviSupernet() {
+    const counts = {};
+    const bump = id => { counts[id] = (counts[id] || 0) + 1; };
+    const blocksByPool = PROJECT_ALLOCS.vlan_supernet || {};
+
+    (vlanIfs || []).forEach(v => {
+      const cidr = v.subnet && v.subnet !== '__free' ? v.subnet : subnetForIp(v.ip_address);
+      if (!cidr) return;
+      Object.entries(blocksByPool).forEach(([pid, blocks]) => {
+        if (blocks && blocks[cidr]) bump(pid);
+      });
+    });
+    Object.entries(PROJECT_ALLOCS.svi || {}).forEach(([pid, addrs]) => {
+      Object.values(addrs || {}).forEach(a => { if (a && a.hostname === SELECTED_HOST) bump(pid); });
+    });
+    Object.entries(blocksByPool).forEach(([pid, blocks]) => {
+      Object.values(blocks || {}).forEach(b => { if (b && b.hostname === SELECTED_HOST) bump(pid); });
+    });
+
+    let best = '', bestCount = 0;
+    Object.entries(counts).forEach(([pid, n]) => { if (n > bestCount) { best = pid; bestCount = n; } });
+    return best;
+  }
+
+  /* Copy a whole SVI set from another switch.
+
+     With no target supernet, each SVI stays in its source subnet and takes
+     the next free address there — a second switch at the same site.
+
+     With a target, each SVI is matched to the block tagged with the same
+     VLAN ID in that supernet, so site A's VLAN 100 lands in site B's VLAN
+     100 block. Anything with no match keeps its name and settings but comes
+     over unaddressed, so it is visibly unfinished rather than quietly
+     carrying the other site's subnet. */
+  function copySvisFrom(state, targetPoolId) {
     const conv = (PROJECT_CONVS || {}).svi || {};
     const gwOffset = parseInt(conv.gateway_offset, 10);
     const agwOffset = parseInt(conv.active_gateway_offset, 10);
 
-    // Addresses already spoken for across the project, so the copy lands on
-    // the next one along rather than clashing with the source switch.
     const taken = {};
     Object.values(PROJECT_ALLOCS.svi || {}).forEach(pool => {
       Object.keys(pool || {}).forEach(ip => { taken[ip] = true; });
     });
 
+    // VLAN ID -> block in the target supernet
+    const byVlan = {};
+    if (targetPoolId) {
+      Object.entries((PROJECT_ALLOCS.vlan_supernet || {})[targetPoolId] || {})
+        .forEach(([cidr, b]) => {
+          if (b && b.vlan_id && !byVlan[String(b.vlan_id)]) byVlan[String(b.vlan_id)] = cidr;
+        });
+    }
+
+    const unmatched = [];
+
     const copied = (state.vlanIfs || []).map(src_svi => {
       const out = Object.assign({}, src_svi);
-      const subnet = out.subnet || subnetForIp(src_svi.ip_address) || '';
+      const srcSubnet = out.subnet && out.subnet !== '__free'
+        ? out.subnet : subnetForIp(src_svi.ip_address) || '';
+      let subnet = srcSubnet;
+
+      if (targetPoolId) {
+        const m = /^vlan\s*(\d+)$/i.exec(String(out.name || '').trim());
+        const vlanId = m ? m[1] : '';
+        subnet = vlanId ? (byVlan[vlanId] || '') : '';
+
+        if (!subnet) {
+          unmatched.push(out.name || '(unnamed)');
+          out.subnet = '';
+          out.ip_address = '';
+          out.active_gw_ip = '';
+          return out;
+        }
+
+        // Keep the active gateway's position, not its address: if the source
+        // used .254 of its subnet, use .254 of the new one.
+        if (srcSubnet && out.active_gw_ip) {
+          const srcNet = ipToInt(srcSubnet.split('/')[0]);
+          const agw = ipToInt(out.active_gw_ip);
+          const tgtIps = generateSubnetIPs(subnet, 32);
+          const offset = (srcNet !== null && agw !== null) ? agw - srcNet : -1;
+          out.active_gw_ip = (offset > 0 && offset < tgtIps.length - 1) ? tgtIps[offset] : '';
+        } else {
+          out.active_gw_ip = '';
+        }
+        out.ip_prefix = subnet.split('/')[1] || out.ip_prefix;
+      }
+
       out.subnet = subnet;
 
-      if (subnet && subnet !== '__free') {
+      // Not in any tagged block: the address is the source switch's own, so
+      // copying it would only ever produce a duplicate. Clear it and say so.
+      if (!subnet) {
+        unmatched.push(out.name || '(unnamed)');
+        out.ip_address = '';
+        out.active_gw_ip = '';
+        return out;
+      }
+
+      if (subnet) {
         const ips = generateSubnetIPs(subnet, 32);
-        const agwIp = isNaN(agwOffset) ? null : ips[agwOffset];
+        const agwIp = out.active_gw_ip || (isNaN(agwOffset) ? null : ips[agwOffset]);
         const start = isNaN(gwOffset) ? 1 : gwOffset;
         out.ip_address = '';
         for (let n = start; n < ips.length - 1; n++) {
           const candidate = ips[n];
           if (taken[candidate] || candidate === agwIp) continue;
           out.ip_address = candidate;
-          // Claim it locally so two SVIs in the same subnet do not collide.
-          taken[candidate] = true;
+          taken[candidate] = true;   // two SVIs in one subnet must not collide
           break;
         }
       }
@@ -1484,7 +1582,13 @@ function App() {
     });
 
     setVlanIfs(copied);
-    return copied.length + ' SVI(s), addresses reassigned';
+    let msg = copied.length + ' SVI(s), addresses reassigned';
+    if (unmatched.length) {
+      msg += '. ' + (targetPoolId ? 'No matching VLAN at the target for '
+                                  : 'Not in any carved block: ')
+           + unmatched.join(', ') + ' — address these by hand';
+    }
+    return msg;
   }
 
   function sviAutoFill(idx, subnet, current) {
