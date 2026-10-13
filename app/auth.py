@@ -21,14 +21,36 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip().lower()
         password = request.form.get('password', '')
+        throttle = _login_throttle()
+        addr = request.remote_addr or 'unknown'
+
+        if throttle.blocked(addr, username):
+            # Checked before the password, so a correct guess made while
+            # blocked is not confirmed either.
+            flash('Too many failed attempts. Try again later.', 'error')
+            return render_template('login.html'), 429
+
         user = User.authenticate(username, password, current_app._get_current_object())
         if user:
+            throttle.record_success(addr, username)
             login_user(user)
             ensure_workspace(current_app._get_current_object(), user.username)
             return redirect(url_for('projects.projects_page'))
+        throttle.record_failure(addr, username)
         flash('Invalid username or password.', 'error')
 
     return render_template('login.html')
+
+
+def _login_throttle():
+    """One throttle per app, created on first use."""
+    from .security import LoginThrottle
+    app = current_app._get_current_object()
+    if 'login_throttle' not in app.extensions:
+        app.extensions['login_throttle'] = LoginThrottle(
+            max_failures=app.config.get('LOGIN_MAX_FAILURES', 5),
+            window_seconds=app.config.get('LOGIN_WINDOW_SECONDS', 900))
+    return app.extensions['login_throttle']
 
 
 @auth_bp.route('/logout')

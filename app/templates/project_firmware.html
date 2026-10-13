@@ -191,10 +191,10 @@ function renderHosts() {
   }
   box.innerHTML = HOSTS.map(h => `
     <div class="fw-host-row ${h.mgmt_ip ? '' : 'no-ip'}">
-      <input type="checkbox" class="fw-host-cb" value="${h.hostname}"
+      <input type="checkbox" class="fw-host-cb" value="${esc(h.hostname)}"
              ${h.mgmt_ip ? '' : 'disabled'} checked>
-      <span class="fw-host-name">${h.hostname}</span>
-      <span class="fw-host-ip">${h.mgmt_ip || 'no management IP'}</span>
+      <span class="fw-host-name">${esc(h.hostname)}</span>
+      <span class="fw-host-ip">${esc(h.mgmt_ip || 'no management IP')}</span>
     </div>`).join('');
 }
 
@@ -211,7 +211,7 @@ async function loadImages() {
       document.getElementById('fw-start').disabled = true;
       return;
     }
-    sel.innerHTML = data.images.map(i => `<option value="${i}">${i}</option>`).join('');
+    sel.innerHTML = data.images.map(i => `<option value="${esc(i)}">${esc(i)}</option>`).join('');
     opts.style.display = 'grid';
   } catch (e) {
     none.style.display = 'block';
@@ -353,17 +353,17 @@ function renderResults(results) {
     const good = r.reachable_after_boot;
     return `
       <div class="fw-result ${good ? 'ok' : 'bad'}">
-        <div><strong>${r.hostname}</strong> <span class="fw-host-ip">${r.mgmt_ip || ''}</span></div>
+        <div><strong>${esc(r.hostname)}</strong> <span class="fw-host-ip">${esc(r.mgmt_ip || '')}</span></div>
         <div class="text-secondary">
-          ${r.image || ''} → ${r.partition || ''} partition
-          ${r.previous_version ? ' · was ' + r.previous_version : ''}
+          ${esc(r.image || '')} → ${esc(r.partition || '')} partition
+          ${r.previous_version ? ' · was ' + esc(r.previous_version) : ''}
         </div>
         <div class="text-secondary">
           uploaded: ${r.uploaded ? 'yes' : 'no'} ·
           booted: ${r.booted ? 'yes' : 'no'} ·
           back online: ${good ? 'yes' : 'NO'}
           ${r.unsafe_updates_allowed
-            ? ' · non-failsafe updates permitted (' + (r.unsafe_command || '') + ')'
+            ? ' · non-failsafe updates permitted (' + esc(r.unsafe_command || '') + ')'
             : ''}
         </div>
       </div>`;

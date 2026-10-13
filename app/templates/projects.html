@@ -47,7 +47,7 @@
           Export
         </a>
         <form method="post" action="{{ url_for('projects.delete', project_name=p.name) }}"
-              onsubmit="return confirm('Delete project {{ p.display_name }} and all its data? This cannot be undone.')">
+              onsubmit='return confirm("Delete project " + {{ p.display_name|tojson }} + " and all its data? This cannot be undone.")'>
           <button class="btn btn-sm btn-danger">Delete</button>
         </form>
       </div>

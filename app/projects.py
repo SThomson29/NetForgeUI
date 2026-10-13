@@ -1,4 +1,5 @@
 import os
+import re
 import io
 import zipfile
 import uuid
@@ -38,6 +39,31 @@ from .utils import (
 )
 
 projects_bp = Blueprint('projects', __name__)
+
+
+# Names arrive from the URL and are joined straight into filesystem paths.
+# Flask's default converter accepts '..' as a whole segment, and names were
+# only checked when a project or host was created — not on the routes that
+# use them. So /projects/../delete reached shutil.rmtree on the user's
+# entire directory. Validating here covers every route on the blueprint,
+# including ones added later.
+_SAFE_URL_VALUES = {
+    'project_name': re.compile(r'^[A-Za-z0-9_\-]{1,64}$'),
+    'hostname':     re.compile(r'^[A-Za-z0-9_\-]{1,64}$'),
+    'pool_id':      re.compile(r'^[A-Za-z0-9_\-]{1,64}$'),
+    'job_id':       re.compile(r'^[A-Za-z0-9\-]{1,64}$'),
+    # Generated config names; the first character can't be a dot, so '..'
+    # and hidden files are both excluded.
+    'filename':     re.compile(r'^[A-Za-z0-9_\-][A-Za-z0-9_.\-]{0,127}$'),
+}
+
+
+@projects_bp.url_value_preprocessor
+def _reject_unsafe_url_values(endpoint, values):
+    for key, value in (values or {}).items():
+        pattern = _SAFE_URL_VALUES.get(key)
+        if pattern is not None and not pattern.match(str(value)):
+            abort(404)
 
 # In-memory job store shared with generate
 _jobs = {}

@@ -34,3 +34,30 @@ class Config:
     # rather than uploaded — images are large and machine-local.
     FIRMWARE_DIR       = os.environ.get(
         'FIRMWARE_DIR', os.path.join(BASE_DIR, 'firmware'))
+
+    # ── Session cookies ──
+    # Lax stops the session cookie riding along on cross-site form posts,
+    # which is the main CSRF route for the plain HTML forms (delete project,
+    # delete host, admin user management). Browsers mostly default to Lax
+    # already, but not all of them, so it is set explicitly.
+    SESSION_COOKIE_SAMESITE  = 'Lax'
+    SESSION_COOKIE_HTTPONLY  = True
+    REMEMBER_COOKIE_SAMESITE = 'Lax'
+    REMEMBER_COOKIE_HTTPONLY = True
+    # Only send cookies over HTTPS. Off by default because the app is often
+    # served over plain HTTP on an internal network, where a Secure cookie
+    # would never be sent and nobody could log in. Turn it on behind TLS.
+    SESSION_COOKIE_SECURE    = os.environ.get('SESSION_COOKIE_SECURE', '').lower() in ('1', 'true', 'yes')
+    REMEMBER_COOKIE_SECURE   = SESSION_COOKIE_SECURE
+
+    # ── Reverse proxy ──
+    # Number of proxies in front of the app (Nginx alone is 1). When set,
+    # the client address, scheme and host are taken from the X-Forwarded-*
+    # headers the proxy adds. Leave at 0 when serving directly: trusting
+    # those headers without a proxy lets a client set its own address and
+    # sidestep the login throttle.
+    TRUSTED_PROXIES = int(os.environ.get('TRUSTED_PROXIES', '0'))
+
+    # ── Login throttling ──
+    LOGIN_MAX_FAILURES   = int(os.environ.get('LOGIN_MAX_FAILURES', '5'))
+    LOGIN_WINDOW_SECONDS = int(os.environ.get('LOGIN_WINDOW_SECONDS', '900'))

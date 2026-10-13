@@ -412,7 +412,7 @@ async function startDryRun() {
     });
     start = await res.json();
   } catch (err) {
-    container.innerHTML = `<div class="alert alert-danger"><span>${err.message}</span></div>`;
+    container.innerHTML = `<div class="alert alert-danger"><span>${esc(err.message)}</span></div>`;
     return;
   }
 
@@ -420,7 +420,7 @@ async function startDryRun() {
     container.innerHTML = `
       <div class="alert alert-danger">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-        <span>${start.error || 'Dry run failed to start'}</span>
+        <span>${esc(start.error || 'Dry run failed to start')}</span>
       </div>`;
     return;
   }
@@ -434,7 +434,7 @@ async function startDryRun() {
       if (job.status !== 'done') {
         container.insertAdjacentHTML('beforeend',
           `<details style="margin-top:12px"><summary class="text-sm text-secondary">Playbook output</summary>
-           <pre class="code-block" style="white-space:pre-wrap">${job.output || ''}</pre></details>`);
+           <pre class="code-block" style="white-space:pre-wrap">${esc(job.output || '')}</pre></details>`);
       }
       return;
     }
@@ -443,7 +443,7 @@ async function startDryRun() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
         <span>Dry run failed — no results returned.</span>
       </div>
-      <pre class="code-block" style="white-space:pre-wrap">${job.output || ''}</pre>`;
+      <pre class="code-block" style="white-space:pre-wrap">${esc(job.output || '')}</pre>`;
   });
 }
 
@@ -466,8 +466,8 @@ function renderDryRunResults(results) {
     <div class="deploy-host-card">
       <div class="deploy-host-header" onclick="this.nextElementSibling.classList.toggle('open')">
         <div class="host-info">
-          <span style="font-weight:600;font-size:13px">${r.hostname}</span>
-          <span class="text-sm text-tertiary mono">${r.mgmt_ip}</span>
+          <span style="font-weight:600;font-size:13px">${esc(r.hostname)}</span>
+          <span class="text-sm text-tertiary mono">${esc(r.mgmt_ip)}</span>
           ${statusBadge}
         </div>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;color:var(--text-tertiary)">
@@ -531,7 +531,7 @@ function liveLogMarkup(label) {
     <div class="flex items-center gap-2" style="margin-bottom:10px">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            style="animation:spin 1s linear infinite;width:14px;height:14px"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
-      <span class="text-secondary" id="job-label">${label}</span>
+      <span class="text-secondary" id="job-label">${esc(label)}</span>
     </div>
     <pre class="code-block" id="job-log" style="max-height:340px;overflow:auto;white-space:pre-wrap"></pre>`;
 }
@@ -545,13 +545,13 @@ function pollDeployJob(jobId, container, onDone) {
         `/projects/${encodeURIComponent(PROJECT)}/deploy/status/${jobId}`);
       if (!res.ok) {
         container.innerHTML =
-          `<div class="alert alert-danger"><span>Lost track of this job (status ${res.status}).`
+          `<div class="alert alert-danger"><span>Lost track of this job (status ${esc(res.status)}).`
           + ` It may still be running — reload the page to check.</span></div>`;
         return;
       }
       job = await res.json();
     } catch (e) {
-      container.innerHTML = `<div class="alert alert-danger"><span>Lost contact with the job: ${e}</span></div>`;
+      container.innerHTML = `<div class="alert alert-danger"><span>Lost contact with the job: ${esc(e)}</span></div>`;
       return;
     }
 
@@ -610,13 +610,13 @@ async function confirmDeploy() {
     });
     start = await res.json();
   } catch (err) {
-    container.innerHTML = `<div class="alert alert-danger"><span>${err.message}</span></div>`;
+    container.innerHTML = `<div class="alert alert-danger"><span>${esc(err.message)}</span></div>`;
     resetBtn();
     return;
   }
 
   if (!start.ok) {
-    container.innerHTML = `<div class="alert alert-danger"><span>${start.error || 'Deploy failed to start'}</span></div>`;
+    container.innerHTML = `<div class="alert alert-danger"><span>${esc(start.error || 'Deploy failed to start')}</span></div>`;
     resetBtn();
     return;
   }
@@ -627,12 +627,12 @@ async function confirmDeploy() {
       if (job.status !== 'done') {
         container.insertAdjacentHTML('beforeend',
           `<details style="margin-top:12px"><summary class="text-sm text-secondary">Playbook output</summary>
-           <pre class="code-block" style="white-space:pre-wrap">${job.output || ''}</pre></details>`);
+           <pre class="code-block" style="white-space:pre-wrap">${esc(job.output || '')}</pre></details>`);
       }
     } else {
       container.innerHTML = `
         <div class="alert alert-danger"><span>Deploy failed — no results returned.</span></div>
-        <pre class="code-block" style="white-space:pre-wrap">${job.output || ''}</pre>`;
+        <pre class="code-block" style="white-space:pre-wrap">${esc(job.output || '')}</pre>`;
     }
     resetBtn();
   });
@@ -645,9 +645,9 @@ function renderDeployResults(results, data) {
     container.innerHTML = `
       <div class="alert alert-danger">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-        <span>${data.error || 'Deploy failed'}</span>
+        <span>${esc(data.error || 'Deploy failed')}</span>
       </div>
-      <pre class="code-block">${data.output || ''}</pre>`;
+      <pre class="code-block">${esc(data.output || '')}</pre>`;
     return;
   }
 
@@ -658,7 +658,7 @@ function renderDeployResults(results, data) {
       statusBadge = '<span class="badge badge-green">Confirmed — write mem</span>';
       statusIcon = '<span class="status-dot status-dot-green"></span>';
     } else if (r.rollback_pending) {
-      statusBadge = `<span class="badge badge-red">Unreachable — rollback in ${r.rollback_timeout_mins}m</span>`;
+      statusBadge = `<span class="badge badge-red">Unreachable — rollback in ${esc(r.rollback_timeout_mins)}m</span>`;
       statusIcon = '<span class="status-dot status-dot-red"></span>';
     } else {
       statusBadge = '<span class="badge badge-neutral">Unknown</span>';
@@ -670,11 +670,11 @@ function renderDeployResults(results, data) {
       <div class="deploy-host-header">
         <div class="host-info">
           ${statusIcon}
-          <span style="font-weight:600;font-size:13px">${r.hostname}</span>
-          <span class="text-sm text-tertiary mono">${r.mgmt_ip}</span>
+          <span style="font-weight:600;font-size:13px">${esc(r.hostname)}</span>
+          <span class="text-sm text-tertiary mono">${esc(r.mgmt_ip)}</span>
           ${statusBadge}
         </div>
-        <span class="text-xs text-tertiary">checkpoint: ${r.checkpoint || '—'}</span>
+        <span class="text-xs text-tertiary">checkpoint: ${esc(r.checkpoint || '—')}</span>
       </div>
     </div>`;
   });

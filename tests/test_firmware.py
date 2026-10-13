@@ -134,7 +134,7 @@ class TestJobRunner:
         binp = self._make_bin(tmp_path, 'ok.sh', """#!/bin/sh
 echo "TASK [Upload image] ***"
 VARS=$(echo "$@" | tr ' ' '\n' | grep '^@' | tr -d '@')
-RES=$(grep '^results_file:' "$VARS" | awk '{print $2}')
+RES=$(sed -n "s/^results_file: *\\(!unsafe \\)\\{0,1\\}'\\{0,1\\}\\([^']*\\)'\\{0,1\\}$/\\2/p" "$VARS")
 echo '{"hostname":"core-01","booted":true}' > "$RES/core-01_firmware.json"
 echo "PLAY RECAP ***"
 exit 0
