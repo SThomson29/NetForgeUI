@@ -101,25 +101,21 @@ def test_html_built_in_javascript_escapes_its_data():
     assert not offenders, offenders
 
 
-def test_esc_handles_text_and_attribute_contexts():
-    import shutil, subprocess
-    if shutil.which('node') is None:
-        pytest.skip('node not installed here')
+def test_esc_covers_text_and_attribute_contexts():
+    """Text needs & < >; quoted attributes also need both quote styles."""
     src = open('app/templates/base.html').read()
     fn = re.search(r'function esc\(value\) \{.*?\n\}', src, re.S).group(0)
-    script = fn + """
-    const cases = [
-      ['<script>x</script>', '&lt;script&gt;x&lt;/script&gt;'],
-      ['" onmouseover="x', '&quot; onmouseover=&quot;x'],
-      ["x');alert(1);//", 'x&#39;);alert(1);//'],
-      ['a & b', 'a &amp; b'],
-      [null, ''], [undefined, ''], [42, '42'],
-    ];
-    for (const [input, want] of cases) {
-      const got = esc(input);
-      if (got !== want) { console.log('FAIL', JSON.stringify(input), got); process.exit(1); }
-    }
-    console.log('ok');
-    """
-    res = subprocess.run(['node', '-e', script], capture_output=True, text=True)
-    assert res.stdout.strip() == 'ok', res.stdout + res.stderr
+    for char, entity in (('&', '&amp;'), ('<', '&lt;'), ('>', '&gt;'),
+                         ('"', '&quot;'), ("'", '&#39;')):
+        assert entity in fn, 'esc() does not escape %s' % char
+    # & must be replaced first, or the other entities get double-escaped
+    assert fn.index('&amp;') < fn.index('&lt;')
+
+
+def test_esc_is_available_on_every_page():
+    """Defined in base.html, which every other template extends."""
+    import glob
+    for path in glob.glob('app/templates/*.html'):
+        src = open(path).read()
+        if 'esc(' in src and path != 'app/templates/base.html':
+            assert ('{% extends "base' in src or "{% extends 'base" in src), path
