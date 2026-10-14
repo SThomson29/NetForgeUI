@@ -14,6 +14,7 @@ import threading
 import yaml
 
 from .ansible_safe import validate_targets
+from . import audit
 from .api import json_body, bad_request
 from .jobs import run_ansible_job, prune_finished, mark_finished
 from .security import job_tag, visible_job
@@ -175,7 +176,7 @@ def _run_playbook_job(job_id, playbook_name, repo_dir, ansible_bin,
 
 
 def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts,
-                      owner=None, project_name=None):
+                      owner=None, project_name=None, audit_id=None):
     """Kick off a playbook in the background. Returns the job id."""
     prune_finished(_deploy_jobs, _deploy_jobs_lock)
     job_id = str(uuid.uuid4())
@@ -202,6 +203,11 @@ def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts,
         finally:
             with _deploy_jobs_lock:
                 mark_finished(_deploy_jobs[job_id])
+                final = dict(_deploy_jobs[job_id])
+            try:
+                audit.record_finish(app, audit_id, final)
+            except Exception:                       # noqa: BLE001
+                pass    # never let the log take down the job's own result
 
     threading.Thread(target=_worker, daemon=True).start()
     return job_id
@@ -371,10 +377,15 @@ def deploy_dryrun(project_name):
         'deploy_password': password,
     }
 
+    audit_id = audit.record_start(
+        app, username=current_user.username, project=project_name,
+        action='deploy_dryrun', switch_user=username,
+        targets=audit.deploy_targets(hosts, config_dir), params={})
     job_id = _start_deploy_job(
         app, 'deploy_dryrun.yml', inventory, extra_vars,
         limit_hosts=[h['hostname'] for h in hosts],
         owner=current_user.username, project_name=project_name,
+        audit_id=audit_id,
     )
     return jsonify(ok=True, job_id=job_id)
 
@@ -425,9 +436,15 @@ def deploy_push(project_name):
         'rollback_timeout': rollback_timeout,
     }
 
+    audit_id = audit.record_start(
+        app, username=current_user.username, project=project_name,
+        action='deploy_push', switch_user=username,
+        targets=audit.deploy_targets(hosts, config_dir),
+        params={'rollback_timeout': rollback_timeout})
     job_id = _start_deploy_job(
         app, 'deploy_push.yml', inventory, extra_vars,
         limit_hosts=[h['hostname'] for h in hosts],
         owner=current_user.username, project_name=project_name,
+        audit_id=audit_id,
     )
     return jsonify(ok=True, job_id=job_id)

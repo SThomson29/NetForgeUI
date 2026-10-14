@@ -38,6 +38,9 @@ def init_db(app):
                        'session_version INTEGER NOT NULL DEFAULT 0')
         db.commit()
 
+    from .audit import init_audit
+    init_audit(app)
+
 
 class User(UserMixin):
     """A login.

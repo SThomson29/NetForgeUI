@@ -143,6 +143,15 @@
         Firmware
       </a>
 
+      <a href="/projects/${encodeURIComponent(projectName)}/history"
+         class="nav-item ${'{{ "active" if request.endpoint == "projects.project_history" else "" }}'}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9"/>
+          <polyline points="12 7 12 12 15 14"/>
+        </svg>
+        History
+      </a>
+
       <div class="sidebar-divider"></div>
 
       <a href="/projects" class="nav-item">

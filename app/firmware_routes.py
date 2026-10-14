@@ -18,6 +18,7 @@ import uuid
 import threading
 
 from .ansible_safe import validate_targets
+from . import audit
 from .api import json_body
 from .jobs import run_ansible_job, prune_finished, mark_finished
 from .security import job_tag, visible_job
@@ -238,6 +239,15 @@ def firmware_run(project_name):
 
     ansible_bin = app.config.get('ANSIBLE_BIN', 'ansible-playbook')
 
+    audit_id = audit.record_start(
+        app, username=username, project=project_name, action='firmware',
+        switch_user=sw_user,
+        targets=[{'hostname': h['hostname'], 'mgmt_ip': h.get('mgmt_ip', '')}
+                 for h in chosen],
+        params={'image': image, 'partition': partition,
+                'allow_unsafe': allow,
+                'unsafe_window_mins': window if allow else None})
+
     def _worker():
         try:
             _run_firmware_playbook(
@@ -253,6 +263,11 @@ def firmware_run(project_name):
         finally:
             with _fw_jobs_lock:
                 mark_finished(_fw_jobs[job_id])
+                final = dict(_fw_jobs[job_id])
+            try:
+                audit.record_finish(app, audit_id, final)
+            except Exception:                       # noqa: BLE001
+                pass    # never let the log take down the job's own result
 
     threading.Thread(target=_worker, daemon=True).start()
 

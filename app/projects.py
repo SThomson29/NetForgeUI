@@ -432,6 +432,21 @@ def delete_config(project_name, filename):
 
 
 # ---------------------------------------------------------------------------
+# History — deploys and firmware runs against this project's switches
+# ---------------------------------------------------------------------------
+
+@projects_bp.route('/projects/<project_name>/history')
+@login_required
+def project_history(project_name):
+    from . import audit
+    app = current_app._get_current_object()
+    return render_template(
+        'project_history.html', project_name=project_name,
+        entries=audit.entries(app, username=current_user.username,
+                              project=project_name))
+
+
+# ---------------------------------------------------------------------------
 # Resources — Pools
 # ---------------------------------------------------------------------------
 

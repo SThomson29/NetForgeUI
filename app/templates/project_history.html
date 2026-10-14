@@ -1,0 +1,11 @@
+{% extends "base_project.html" %}
+{% block title %}History — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}History{% endblock %}
+
+{% block content %}
+<p class="text-sm text-secondary" style="margin-bottom:12px">
+  Every dry run, push and firmware run against this project's switches,
+  newest first.
+</p>
+{% with show_owner=False %}{% include "_audit_entries.html" %}{% endwith %}
+{% endblock %}

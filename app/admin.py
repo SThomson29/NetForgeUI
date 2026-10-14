@@ -88,6 +88,23 @@ def delete_user(user_id):
 
 
 # ---------------------------------------------------------------------------
+# Audit log — every user's deploys and firmware runs
+# ---------------------------------------------------------------------------
+
+@admin_bp.route('/admin/audit')
+@login_required
+def audit_log():
+    _require_admin()
+    from . import audit
+    app = current_app._get_current_object()
+    user = (request.args.get('user') or '').strip() or None
+    project = (request.args.get('project') or '').strip() or None
+    return render_template(
+        'admin_audit.html', filter_user=user, filter_project=project,
+        entries=audit.entries(app, username=user, project=project, limit=500))
+
+
+# ---------------------------------------------------------------------------
 # Repo management — admin only
 # ---------------------------------------------------------------------------
 

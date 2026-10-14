@@ -21,6 +21,14 @@
 
 {% block content %}
 
+<div class="card mb-4">
+  <div class="card-header">Audit log</div>
+  <div class="card-body-compact" style="display:flex;align-items:center;gap:12px">
+    <span class="text-sm text-secondary">Every user's dry runs, pushes and firmware runs.</span>
+    <a class="btn btn-sm" href="{{ url_for('admin.audit_log') }}" style="margin-left:auto">View audit log</a>
+  </div>
+</div>
+
 {# ── Repo management ──────────────────────────────────────────────── #}
 <div class="card">
   <div class="card-header">Config repo</div>

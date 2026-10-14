@@ -9,6 +9,7 @@ PAGES = [
     ('/projects/{p}/deployment-ips', 'deployment ips'),
     ('/projects/{p}/deploy',    'deploy'),
     ('/projects/{p}/firmware',  'firmware'),
+    ('/projects/{p}/history',   'history'),
 ]
 
 @pytest.fixture
