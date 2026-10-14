@@ -170,8 +170,11 @@ class TestRoutes:
         import inspect
         import app.deploy_routes as dr
         import app.firmware_routes as fr
-        for fn in (dr._run_playbook_job, dr._run_playbook,
-                   fr._run_firmware_playbook):
-            src = inspect.getsource(fn)
-            assert 'dump_unsafe(' in src, fn.__name__
-            assert 'yaml.dump(' not in src, fn.__name__
+        import app.jobs as jobs
+        # Deploy and firmware both hand their vars to the shared runner,
+        # which is the only place they are written out.
+        for fn in (dr._run_playbook_job, fr._run_firmware_playbook):
+            assert 'run_ansible_job(' in inspect.getsource(fn), fn.__name__
+        src = inspect.getsource(jobs.run_ansible_job)
+        assert src.count('dump_unsafe(') == 2
+        assert 'yaml.dump(' not in src

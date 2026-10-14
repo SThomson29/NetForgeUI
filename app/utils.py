@@ -239,12 +239,3 @@ def list_project_generated_configs(app, username, project_name):
         f for f in os.listdir(gcdir)
         if f.endswith('.ios') and not f.startswith('.')
     )
-
-def save_hostvars_file(app_or_path, *args):
-    """Write a single host_vars YAML file.
-    Accepts either (app, username, project_name, hostname, filename, content)
-    or legacy (app, username, hostname, filename, content) for compatibility.
-    """
-    # Called from projects.py as save_hostvars_file directly with path
-    # This is a thin wrapper kept for import compatibility
-    raise NotImplementedError("Use project-scoped save in projects.py directly")

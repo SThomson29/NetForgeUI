@@ -12,7 +12,7 @@ from flask_login import login_required, current_user
 from .project import (
     sync_allocations as _sync_allocations,
     list_projects, create_project, delete_project,
-    get_project_config, save_project_config,
+    get_project_config,
     add_pool, remove_pool, update_pool, convert_supernet_to_mixed,
     PoolOverlapError,
     get_available_ips, allocate_unique, release_unique,
@@ -20,7 +20,7 @@ from .project import (
     get_carved_subnets, assign_vlan_subnet, release_vlan_subnet,
     sort_by_address,
     carve_supernet_block, remove_supernet_block, suggest_free_block,
-    is_manual_supernet, _block_depth, _safe_network,
+    _block_depth, _safe_network,
     get_common, save_common,
     get_conventions, save_conventions,
     get_all_allocations,
@@ -30,11 +30,12 @@ from .transfer import (
     export_project, import_project, read_manifest, TransferError,
 )
 
+from .jobs import prune_finished, mark_finished
 from .security import job_tag, visible_job
 from .utils import (
     read_project_hosts, add_project_host, remove_project_host,
     list_project_generated_configs,
-    project_hosts_ini_path, project_host_vars_dir,
+    project_host_vars_dir,
     reconcile_host_vars,
     HOSTVARS_FILES,
 )
@@ -308,7 +309,7 @@ def save_all_hostvars(project_name, hostname):
     # Sync IP allocations from saved host_vars
     try:
         _sync_allocations(app, current_user.username, project_name, hostname)
-    except Exception as e:
+    except Exception:
         pass  # Don't fail the save if allocation sync errors
 
     # Return updated allocations so the frontend can refresh pool pickers
@@ -346,6 +347,7 @@ def run_generate(project_name):
 
     username = current_user.username  # capture before thread starts — request context won't exist inside thread
 
+    prune_finished(_jobs, _jobs_lock)
     job_id = str(uuid.uuid4())
     with _jobs_lock:
         _jobs[job_id] = {'status': 'running', 'output': '', 'returncode': None,
@@ -380,6 +382,9 @@ def run_generate(project_name):
                 _jobs[jid]['output']     = str(ex)
                 _jobs[jid]['returncode'] = -1
                 _jobs[jid]['status']     = 'failed'
+        finally:
+            with _jobs_lock:
+                mark_finished(_jobs[jid])
 
     threading.Thread(target=_run, args=(job_id,), daemon=True).start()
 
