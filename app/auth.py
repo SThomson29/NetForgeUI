@@ -1,7 +1,9 @@
-from flask import Blueprint, render_template, redirect, url_for, request, flash, current_app
+from flask import (Blueprint, render_template, redirect, url_for, request, flash,
+                   current_app, abort)
 from flask_login import login_user, logout_user, login_required, current_user
 from .models import User
 from .utils import ensure_workspace
+from . import sso
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -44,9 +46,14 @@ def login():
             # Checked before the password, so a correct guess made while
             # blocked is not confirmed either.
             flash('Too many failed attempts. Try again later.', 'error')
-            return render_template('login.html'), 429
+            return _login_page(), 429
 
         user = User.authenticate(username, password, current_app._get_current_object())
+        # With SSO on, passwords are the way in for local admins only — for
+        # when the identity provider is unavailable. Refused with the same
+        # message as a wrong password, so it says nothing about the account.
+        if user and sso.enabled(current_app) and not (user.local_admin and user.has_password):
+            user = None
         if user:
             throttle.record_success(addr, username)
             login_user(user)
@@ -55,7 +62,13 @@ def login():
         throttle.record_failure(addr, username)
         flash('Invalid username or password.', 'error')
 
-    return render_template('login.html')
+    return _login_page()
+
+
+def _login_page():
+    app = current_app
+    return render_template('login.html', sso_enabled=sso.enabled(app),
+                           sso_label=app.config.get('OIDC_BUTTON_LABEL') or 'Sign in with SSO')
 
 
 def _login_throttle():
@@ -79,6 +92,8 @@ def logout():
 @auth_bp.route('/account', methods=['GET', 'POST'])
 @login_required
 def account():
+    if request.method == 'POST' and not current_user.has_password:
+        abort(403)
     if request.method == 'POST':
         current_pw = request.form.get('current_password', '')
         new_pw     = request.form.get('new_password', '')

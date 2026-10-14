@@ -64,6 +64,14 @@
 {# ── User management ──────────────────────────────────────────────── #}
 <div class="card">
   <div class="card-header">Create user</div>
+  {% if sso_enabled %}
+  <p class="text-sm text-secondary" style="margin-bottom:10px">
+    SSO is on: people get an account on their first SSO sign-in. Local accounts
+    are for admins, who can still sign in with a password if the identity
+    provider is unavailable. To keep someone's existing projects, link their
+    local account to their SSO email below.
+  </p>
+  {% endif %}
   <form method="POST" action="{{ url_for('admin.create_user') }}">
     <div class="grid3">
       <div class="fld">
@@ -94,6 +102,7 @@
     <thead>
       <tr>
         <th>Username</th>
+        <th>Sign-in</th>
         <th>Role</th>
         <th></th>
       </tr>
@@ -102,14 +111,40 @@
     {% for user in users %}
     <tr>
       <td style="font-family:'Courier New',monospace;font-weight:500">{{ user.username }}</td>
+      <td style="font-size:12px">
+        {% if user.source == 'sso' %}
+          <span class="badge badge-blue">SSO</span> {{ user.email or '' }}
+        {% elif user.oidc_sub %}
+          <span class="badge badge-none">Local</span> <span class="badge badge-blue">SSO</span> {{ user.email or '' }}
+        {% elif user.link_email %}
+          <span class="badge badge-none">Local</span> <span class="badge badge-yellow">link pending</span> {{ user.link_email }}
+        {% else %}
+          <span class="badge badge-none">Local</span>
+        {% endif %}
+      </td>
       <td>
         {% if user.is_admin %}
         <span class="badge" style="background:#fef3c7;color:#92400e">Admin</span>
+        {% if user.sso_admin and not user.local_admin %}<span class="text-sm text-secondary">via SSO group</span>{% endif %}
         {% else %}
         <span class="badge badge-none">User</span>
         {% endif %}
       </td>
-      <td style="text-align:right">
+      <td style="text-align:right;white-space:nowrap">
+        {% if sso_enabled and user.source == 'local' %}
+          {% if user.oidc_sub or user.link_email %}
+          {% if not (user.id == current_user.id and user.oidc_sub) %}
+          <form method="POST" action="{{ url_for('admin.unlink_sso', user_id=user.id) }}" style="display:inline">
+            <button type="submit" class="btn btn-sm btn-ghost">{{ 'Cancel link' if not user.oidc_sub else 'Unlink SSO' }}</button>
+          </form>
+          {% endif %}
+          {% else %}
+          <form method="POST" action="{{ url_for('admin.link_sso', user_id=user.id) }}" style="display:inline-flex;gap:6px">
+            <input class="form-input" type="email" name="email" placeholder="SSO email" required style="width:180px;height:28px;font-size:12px">
+            <button type="submit" class="btn btn-sm btn-ghost">Link SSO</button>
+          </form>
+          {% endif %}
+        {% endif %}
         {% if user.id != current_user.id %}
         <form method="POST" action="{{ url_for('admin.delete_user', user_id=user.id) }}"
               style="display:inline"

@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -32,7 +33,9 @@ def admin_page():
     app   = current_app._get_current_object()
     users = User.all_users(app)
     repo_status = _get_repo_status(app)
-    return render_template('admin.html', users=users, repo_status=repo_status)
+    from .sso import enabled as sso_enabled
+    return render_template('admin.html', users=users, repo_status=repo_status,
+                           sso_enabled=sso_enabled(app))
 
 
 @admin_bp.route('/admin/create', methods=['POST'])
@@ -44,7 +47,6 @@ def create_user():
     password = request.form.get('password', '')
     is_admin = bool(request.form.get('is_admin'))
 
-    import re
     if not re.match(r'^[a-z0-9_\-]+$', username):
         flash('Username may only contain lowercase letters, numbers, hyphens and underscores.', 'error')
         return redirect(url_for('admin.admin_page'))
@@ -84,6 +86,72 @@ def delete_user(user_id):
 
     User.delete(user_id, app)
     flash(f'User {user.username} deleted.', 'success')
+    return redirect(url_for('admin.admin_page'))
+
+
+# ---------------------------------------------------------------------------
+# SSO linking — attach a local account to someone's SSO identity
+# ---------------------------------------------------------------------------
+
+_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+
+@admin_bp.route('/admin/link/<int:user_id>', methods=['POST'])
+@login_required
+def link_sso(user_id):
+    """Link a local account to an SSO email.
+
+    Normally done before the person's first SSO sign-in, which then lands
+    in this account and its projects. If they have already signed in and
+    got a new account, its identity moves here — provided that account has
+    no projects to lose.
+    """
+    _require_admin()
+    from .project import list_projects
+    app   = current_app._get_current_object()
+    user  = User.get(user_id, app)
+    email = request.form.get('email', '').strip().lower()
+    if not user or user.source != 'local' or user.oidc_sub:
+        flash('Only an unlinked local account can be linked.', 'error')
+        return redirect(url_for('admin.admin_page'))
+    if not _EMAIL.match(email):
+        flash('Enter the email address the person signs in to SSO with.', 'error')
+        return redirect(url_for('admin.admin_page'))
+
+    existing = User.get_sso_by_email(email, app)
+    if existing:
+        if list_projects(app, existing.username):
+            flash(f'{email} has already signed in as {existing.username}, which has '
+                  f'projects. Export and remove them, or delete that account, '
+                  f'then link again.', 'error')
+            return redirect(url_for('admin.admin_page'))
+        User.move_sso_identity(existing.id, user.id, app)
+        workspace = user_dir(app, existing.username)
+        if os.path.isdir(workspace):
+            shutil.rmtree(workspace)
+        flash(f'{user.username} is now linked to {email}; the empty account '
+              f'{existing.username} was removed.', 'success')
+        return redirect(url_for('admin.admin_page'))
+
+    User.set_link_email(user.id, email, app)
+    flash(f'{user.username} will be linked when {email} next signs in by SSO.', 'success')
+    return redirect(url_for('admin.admin_page'))
+
+
+@admin_bp.route('/admin/unlink/<int:user_id>', methods=['POST'])
+@login_required
+def unlink_sso(user_id):
+    _require_admin()
+    app  = current_app._get_current_object()
+    user = User.get(user_id, app)
+    if not user or user.source != 'local':
+        flash('Only a local account can be unlinked.', 'error')
+        return redirect(url_for('admin.admin_page'))
+    if user.id == current_user.id and user.oidc_sub:
+        flash('You cannot unlink your own account.', 'error')
+        return redirect(url_for('admin.admin_page'))
+    User.unlink_sso(user.id, app)
+    flash(f'{user.username} is no longer linked to SSO.', 'success')
     return redirect(url_for('admin.admin_page'))
 
 

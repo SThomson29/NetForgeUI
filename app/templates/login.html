@@ -61,6 +61,16 @@
           </button>
         </form>
 
+        {% if sso_enabled %}
+        <div style="display:flex;align-items:center;gap:10px;margin:20px 0;color:var(--text-tertiary);font-size:11px">
+          <span style="flex:1;height:1px;background:var(--border)"></span>or<span style="flex:1;height:1px;background:var(--border)"></span>
+        </div>
+        <a class="btn btn-secondary" href="{{ url_for('sso.start') }}" style="width:100%;justify-content:center">{{ sso_label }}</a>
+        <p style="font-size:11px;color:var(--text-tertiary);text-align:center;margin-top:12px">
+          Password sign-in is for local administrators only.
+        </p>
+        {% endif %}
+
       </div>
     </div>
 

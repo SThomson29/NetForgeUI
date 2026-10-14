@@ -15,6 +15,8 @@ A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — 
 - **Deployment** — push generated configs to live switches over SSH, with a diff-first dry run and automatic on-box rollback if a push breaks connectivity
 - **Firmware** — upload an AOS-CX image to a chosen partition and boot to it, with optional permission for non-failsafe subcomponent updates
 - **Multi-user** — per-user data isolation with an admin panel for user management
+- **Single sign-on** — optional OpenID Connect sign-in (Entra ID, Okta, Keycloak, ...), limited to a group, with admins by group
+- **Project checks** — cross-switch mistakes (duplicate addresses, mismatched VSX pairs, undefined VLANs and VRFs, stale configs) flagged as warnings
 
 ---
 
@@ -188,6 +190,7 @@ up by their bare names.
 | `PORT` | No | `5000` | Port the Flask app listens on inside the container |
 | `FLASK_DEBUG` | No | `false` | Enable Flask debug mode — never use in production |
 | `FLASK_PROXY_FIX` | No | `false` | Set to `true` when running behind a reverse proxy |
+| `OIDC_ISSUER` | No | — | Turns on single sign-on — see [Single sign-on](#single-sign-on) |
 
 `REPO_VOLUME_NAME` and `DATA_VOLUME_NAME` only need setting if your volumes are
 named something other than the defaults — for example when Compose has applied a
@@ -198,6 +201,65 @@ project prefix.
 ## Reverse Proxy
 
 NetForgeUI is designed to sit behind a reverse proxy for TLS termination. Set `FLASK_PROXY_FIX=true` when doing so. Do not expose the published port directly.
+
+---
+
+## Single sign-on
+
+NetForgeUI can sign people in through one OpenID Connect provider — Entra ID,
+Okta, Keycloak, Authentik and others that can send group membership in a
+claim (Google's own sign-in can't, so it isn't suitable). It is off unless
+`OIDC_ISSUER` is set.
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `OIDC_ISSUER` | Yes | — | The provider's issuer URL; discovery is read from `<issuer>/.well-known/openid-configuration` |
+| `OIDC_CLIENT_ID` | Yes | — | Client (application) ID registered with the provider |
+| `OIDC_CLIENT_SECRET` | Yes | — | Client secret |
+| `OIDC_ALLOWED_GROUP` | Yes | — | Only members of this group can sign in |
+| `OIDC_ADMIN_GROUP` | No | — | Members are admins, re-checked at every sign-in |
+| `OIDC_GROUPS_CLAIM` | No | `groups` | Claim that lists the user's groups |
+| `OIDC_SCOPES` | No | `openid email profile` | Add a groups scope here if your provider needs one |
+| `OIDC_REDIRECT_URI` | No | derived | Override the callback URL if the derived one is wrong |
+| `OIDC_BUTTON_LABEL` | No | `Sign in with SSO` | Text on the login page button |
+
+The app refuses to start if `OIDC_ISSUER` is set without the other required
+values, rather than run with sign-in open to anyone the provider knows.
+
+**Registering the app with your provider**
+
+- Application type: web, confidential client, authorization code flow (PKCE is used).
+- Redirect URI: `https://<your NetForgeUI address>/login/sso/callback`. Behind a
+  reverse proxy, set `FLASK_PROXY_FIX=true` so the URL is built with the
+  public `https` address, or set `OIDC_REDIRECT_URI` explicitly.
+- Groups must be in the ID token or the userinfo response:
+  - **Entra ID:** add a *groups* claim to the ID token (Token configuration).
+    Entra sends group **Object IDs**, so `OIDC_ALLOWED_GROUP` and
+    `OIDC_ADMIN_GROUP` are those GUIDs. Use "Groups assigned to the
+    application" so users in many groups aren't cut off; if they are, sign-in
+    explains why.
+  - **Keycloak:** add a *Group Membership* mapper to the client; group names
+    may be given with or without the leading `/`.
+  - **Okta:** add a *groups* claim to the ID token with a filter matching your groups.
+
+**How accounts work**
+
+- A first SSO sign-in creates an account named from the email:
+  `sam.thomson@corp.com` becomes `sam-thomson` (`sam-thomson-2` if taken).
+  Accounts are matched on the provider's subject ID afterwards, so a changed
+  email or name doesn't create a new account.
+- Removing someone from `OIDC_ADMIN_GROUP` removes their admin role at their
+  next sign-in. An admin role granted in the Admin page is never removed by SSO.
+- With SSO on, **password sign-in is for local admins only** — the way in if
+  the provider is down or misconfigured. Keep at least one local admin.
+- Someone with an existing local account keeps their projects by being linked:
+  in **Admin → Users**, enter their SSO email against their account. Their next
+  SSO sign-in lands in that account. If they already signed in and got a new,
+  empty account, linking moves their SSO identity across and removes the empty one.
+- Signing out ends the NetForgeUI session only, not the provider's.
+- Taking someone out of `OIDC_ALLOWED_GROUP` stops new sign-ins; a session
+  already open lasts until they sign out or close the browser. Deleting the
+  account in Admin ends it at once, but also removes their workspace.
 
 ---
 
