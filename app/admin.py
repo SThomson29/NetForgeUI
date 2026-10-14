@@ -32,10 +32,8 @@ def admin_page():
     _require_admin()
     app   = current_app._get_current_object()
     users = User.all_users(app)
-    repo_status = _get_repo_status(app)
     from .sso import enabled as sso_enabled
-    return render_template('admin.html', users=users, repo_status=repo_status,
-                           sso_enabled=sso_enabled(app))
+    return render_template('admin.html', users=users, sso_enabled=sso_enabled(app))
 
 
 @admin_bp.route('/admin/create', methods=['POST'])
@@ -188,6 +186,53 @@ def audit_log():
 # ---------------------------------------------------------------------------
 # Repo management — admin only
 # ---------------------------------------------------------------------------
+
+# The playbooks NetForgeUI runs, and what for.
+REQUIRED_PLAYBOOKS = [
+    ('generate_configs.yml', 'Generate'),
+    ('deploy_dryrun.yml',    'Deploy dry run'),
+    ('deploy_push.yml',      'Deploy push'),
+    ('firmware_upgrade.yml', 'Firmware'),
+]
+
+
+@admin_bp.route('/admin/repo')
+@login_required
+def repo_page():
+    """The NetForge repo: what's checked out, whether the playbooks and
+    skeleton this app relies on are there, and which projects are missing
+    skeleton files added since they were created."""
+    _require_admin()
+    app = current_app._get_current_object()
+    repo = app.config['CONFIGGEN_REPO']
+    playbooks = [{'file': f, 'used_by': used_by,
+                  'present': os.path.isfile(os.path.join(repo, 'playbooks', f))}
+                 for f, used_by in REQUIRED_PLAYBOOKS]
+    skeleton = os.path.join(app.config['SKELETON_DIR'], 'aoscx')
+    skeleton_files = sorted(f for f in os.listdir(skeleton) if f.endswith('.yml')) \
+        if os.path.isdir(skeleton) else []
+    return render_template('admin_repo.html', repo_status=_get_repo_status(app),
+                           playbooks=playbooks, skeleton_files=skeleton_files,
+                           behind=_projects_missing_skeleton_files(app))
+
+
+def _projects_missing_skeleton_files(app):
+    """[{owner, project, hosts, files}] for projects whose switches lack
+    skeleton files — what each project's Hosts page offers to add."""
+    from .project import list_projects
+    from .utils import reconcile_host_vars
+    out = []
+    for user in User.all_users(app):
+        for p in list_projects(app, user.username):
+            try:
+                r = reconcile_host_vars(app, user.username, p['name'], dry_run=True)
+            except Exception:                       # noqa: BLE001
+                continue
+            if r['total']:
+                out.append({'owner': user.username, 'project': p['name'],
+                            'hosts': len(r['hosts']), 'files': r['total']})
+    return out
+
 
 def _get_repo_status(app):
     """Return dict with current commit, branch, and remote URL."""

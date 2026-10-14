@@ -12,7 +12,6 @@
   {% if filter_user or filter_project %}
   <a class="btn btn-sm btn-ghost" href="{{ url_for('admin.audit_log') }}">Clear</a>
   {% endif %}
-  <a class="btn btn-sm btn-ghost" href="{{ url_for('admin.admin_page') }}" style="margin-left:auto">Back to admin</a>
 </form>
 {% with show_owner=True %}{% include "_audit_entries.html" %}{% endwith %}
 {% endblock %}
