@@ -117,13 +117,32 @@ def test_esc_covers_text_and_attribute_contexts():
 
 
 def test_esc_is_available_on_every_page():
-    """Defined in base.html, which every other template extends."""
+    """Defined in base.html, which every other template extends.
+
+    Partials (_name.html) are only ever included, so the pages that
+    include them must extend base instead.
+    """
     import glob
+    import os
+    sources = {}
     for path in glob.glob('app/templates/*.html'):
         with open(path) as f:
-            src = f.read()
-        if 'esc(' in src and path != 'app/templates/base.html':
-            assert ('{% extends "base' in src or "{% extends 'base" in src), path
+            sources[path] = f.read()
+
+    def extends_base(src):
+        return '{% extends "base' in src or "{% extends 'base" in src
+
+    for path, src in sources.items():
+        if 'esc(' not in src or path == 'app/templates/base.html':
+            continue
+        name = os.path.basename(path)
+        if name.startswith('_'):
+            includers = [p for p, s in sources.items() if name in s and p != path]
+            assert includers, '%s is never included' % path
+            for inc in includers:
+                assert extends_base(sources[inc]), (path, inc)
+        else:
+            assert extends_base(src), path
 
 
 # ---------------------------------------------------------------------------

@@ -57,6 +57,7 @@
 {% endblock %}
 
 {% block content %}
+{% include "_reachability.html" %}
 
 <div class="card">
   <div class="card-header">Firmware image</div>
@@ -109,10 +110,19 @@
 </div>
 
 <div class="card">
-  <div class="card-header">Target switches</div>
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+    Target switches
+    <button class="btn btn-sm" id="reach-btn"
+            onclick="checkReachability(
+              Array.from(document.querySelectorAll('.fw-host-cb:checked')).map(cb => cb.value),
+              document.getElementById('reach-results'), this)">
+      Check reachability
+    </button>
+  </div>
   <div id="fw-hosts">
     <div class="text-sm text-secondary">Loading…</div>
   </div>
+  <div id="reach-results"></div>
   <div class="hint" style="margin-top:8px">
     Hosts and management IPs come from the
     <a href="{{ url_for('projects.deployment_ips', project_name=project_name) }}">Deployment IPs</a> page.

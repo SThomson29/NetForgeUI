@@ -1,0 +1,57 @@
+{# Reachability check. Pages call checkReachability(hostnames, box, button);
+   PROJECT is defined by the including page. #}
+<style>
+.reach-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+.reach-table th { text-align: left; font-size: 12px; font-weight: 600; color: var(--text-secondary);
+                  padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.reach-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-subtle); }
+.reach-table td.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.reach-summary { font-size: 12px; color: var(--text-secondary); margin-top: 10px; }
+</style>
+<script>
+function reachCell(r) {
+  if (r === null || r === undefined) return '<span class="badge badge-neutral">no address</span>';
+  return r.ok
+    ? '<span class="badge badge-green">open · ' + esc(r.ms) + ' ms</span>'
+    : '<span class="badge badge-red">' + esc(r.error) + '</span>';
+}
+
+function renderReachability(results) {
+  if (!results.length) {
+    return '<div class="reach-summary">No mapped switches with a management address to check.</div>';
+  }
+  const ssh = results.filter(r => r.ssh && r.ssh.ok).length;
+  const https = results.filter(r => r.https && r.https.ok).length;
+  const rows = results.map(r =>
+    '<tr><td>' + esc(r.hostname) + '</td><td class="mono">' + esc(r.mgmt_ip || '—') + '</td>' +
+    '<td>' + reachCell(r.ssh) + '</td><td>' + reachCell(r.https) + '</td></tr>').join('');
+  return '<div class="reach-summary">SSH open on ' + ssh + ' of ' + results.length +
+         ' · HTTPS open on ' + https + ' of ' + results.length +
+         ' — deploy needs SSH; firmware needs both.</div>' +
+         '<table class="reach-table"><thead><tr><th>Switch</th><th>Address</th>' +
+         '<th>SSH (22)</th><th>HTTPS (443)</th></tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+async function checkReachability(hostnames, box, btn) {
+  if (!hostnames.length) { toast('Select at least one switch to check.'); return; }
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  box.innerHTML = '<div class="reach-summary">Connecting to ' + hostnames.length + ' switch(es)…</div>';
+  try {
+    const res = await fetch('/projects/' + encodeURIComponent(PROJECT) + '/reachability', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({hosts: hostnames})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || ('server returned ' + res.status));
+    box.innerHTML = renderReachability(data.results);
+  } catch (e) {
+    box.innerHTML = '<div class="alert alert-danger"><span>' +
+      esc('Reachability check failed: ' + e.message) + '</span></div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+</script>

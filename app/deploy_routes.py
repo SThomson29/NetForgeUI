@@ -391,6 +391,28 @@ def deploy_dryrun(project_name):
 
 
 @login_required
+def reachability(project_name):
+    """TCP-probe the mapped switches on the ports deploy and firmware use.
+
+    POST {"hosts": [hostname, ...]}; omitted or empty means every mapped
+    switch. Addresses are looked up in the saved mapping — the request
+    names switches, never addresses.
+    """
+    from . import reachability as reach
+    body = json_body()
+    wanted = body.get('hosts') or []
+    if not isinstance(wanted, list):
+        bad_request('hosts must be a list of hostnames.')
+    mapping = _load_mapping(current_app._get_current_object(),
+                            current_user.username, project_name)
+    hosts = [h for h in mapping.get('hosts', [])
+             if isinstance(h, dict) and (not wanted or h.get('hostname') in wanted)]
+    # The mapping may predate validation.
+    hosts = [h for h in hosts if not validate_targets([h])]
+    return jsonify(ok=True, results=reach.check(hosts))
+
+
+@login_required
 def deploy_status(project_name, job_id):
     """Poll a running or finished deploy job."""
     with _deploy_jobs_lock:

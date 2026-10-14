@@ -763,6 +763,7 @@ def api_get_allocations(project_name):
 # Deploy routes
 # ---------------------------------------------------------------------------
 from .deploy_routes import (
+    reachability,
     project_deploy,
     deploy_status,
     deployment_ips,
@@ -840,6 +841,12 @@ projects_bp.add_url_rule(
     '/projects/<project_name>/deploy/push',
     'deploy_push',
     deploy_push,
+    methods=['POST']
+)
+projects_bp.add_url_rule(
+    '/projects/<project_name>/reachability',
+    'reachability',
+    reachability,
     methods=['POST']
 )
 projects_bp.add_url_rule(
