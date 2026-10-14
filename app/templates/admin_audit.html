@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block title %}Audit log — NetForgeUI{% endblock %}
+{% block page_title %}Audit log{% endblock %}
+
+{% block content %}
+<form method="GET" style="display:flex;gap:8px;align-items:flex-end;margin-bottom:12px;flex-wrap:wrap">
+  <label class="text-sm">User<br>
+    <input class="form-input" name="user" value="{{ filter_user or '' }}" style="width:160px"></label>
+  <label class="text-sm">Project<br>
+    <input class="form-input" name="project" value="{{ filter_project or '' }}" style="width:160px"></label>
+  <button class="btn btn-sm" type="submit">Filter</button>
+  {% if filter_user or filter_project %}
+  <a class="btn btn-sm btn-ghost" href="{{ url_for('admin.audit_log') }}">Clear</a>
+  {% endif %}
+  <a class="btn btn-sm btn-ghost" href="{{ url_for('admin.admin_page') }}" style="margin-left:auto">Back to admin</a>
+</form>
+{% with show_owner=True %}{% include "_audit_entries.html" %}{% endwith %}
+{% endblock %}

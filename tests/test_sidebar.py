@@ -2,13 +2,14 @@
 import pytest
 
 PAGES = [
-    ('/projects/{p}/hosts',     'hosts'),
-    ('/projects/{p}/editor',    'editor'),
-    ('/projects/{p}/resources', 'resources'),
-    ('/projects/{p}/generate',  'generate'),
-    ('/projects/{p}/deployment-ips', 'deployment ips'),
-    ('/projects/{p}/deploy',    'deploy'),
-    ('/projects/{p}/firmware',  'firmware'),
+    ('/projects/admin/{p}/hosts',     'hosts'),
+    ('/projects/admin/{p}/editor',    'editor'),
+    ('/projects/admin/{p}/resources', 'resources'),
+    ('/projects/admin/{p}/generate',  'generate'),
+    ('/projects/admin/{p}/deployment-ips', 'deployment ips'),
+    ('/projects/admin/{p}/deploy',    'deploy'),
+    ('/projects/admin/{p}/firmware',  'firmware'),
+    ('/projects/admin/{p}/history',   'history'),
 ]
 
 @pytest.fixture
@@ -45,28 +46,28 @@ class TestDeploymentIps:
         return 'ipproj'
 
     def test_page_renders(self, auth_client, proj2):
-        res = auth_client.get('/projects/%s/deployment-ips' % proj2)
+        res = auth_client.get('/projects/admin/%s/deployment-ips' % proj2)
         assert res.status_code == 200
         assert b'Host &#39;' not in res.data          # no broken escaping
         assert b'Management IP' in res.data
 
     def test_save_and_reload_round_trip(self, app, auth_client, proj2):
-        res = auth_client.post('/projects/%s/deployment-ips/save' % proj2, json={
+        res = auth_client.post('/projects/admin/%s/deployment-ips/save' % proj2, json={
             'mappings': [{'hostname': 'core-01', 'mgmt_ip': '10.0.0.1'},
                          {'hostname': 'core-02', 'mgmt_ip': ''}]})
         assert res.get_json() == {'ok': True, 'count': 2}
 
-        page = auth_client.get('/projects/%s/deployment-ips' % proj2).data.decode()
+        page = auth_client.get('/projects/admin/%s/deployment-ips' % proj2).data.decode()
         assert 'core-01' in page and '10.0.0.1' in page
 
     def test_blank_hostnames_are_dropped(self, auth_client, proj2):
-        res = auth_client.post('/projects/%s/deployment-ips/save' % proj2, json={
+        res = auth_client.post('/projects/admin/%s/deployment-ips/save' % proj2, json={
             'mappings': [{'hostname': '', 'mgmt_ip': '10.0.0.9'},
                          {'hostname': 'real', 'mgmt_ip': '10.0.0.1'}]})
         assert res.get_json()['count'] == 1
 
     def test_duplicate_hostnames_are_collapsed(self, auth_client, proj2):
-        res = auth_client.post('/projects/%s/deployment-ips/save' % proj2, json={
+        res = auth_client.post('/projects/admin/%s/deployment-ips/save' % proj2, json={
             'mappings': [{'hostname': 'dup', 'mgmt_ip': '10.0.0.1'},
                          {'hostname': 'dup', 'mgmt_ip': '10.0.0.2'}]})
         assert res.get_json()['count'] == 1
@@ -77,7 +78,7 @@ class TestDeploymentIps:
         with app.app_context():
             _save_mapping(app, 'admin', proj2,
                           {'hosts': [], 'settings': {'rollback_timeout': 17}})
-        auth_client.post('/projects/%s/deployment-ips/save' % proj2, json={
+        auth_client.post('/projects/admin/%s/deployment-ips/save' % proj2, json={
             'mappings': [{'hostname': 'core-01', 'mgmt_ip': '10.0.0.1'}]})
         with app.app_context():
             m = _load_mapping(app, 'admin', proj2)
@@ -85,6 +86,6 @@ class TestDeploymentIps:
         assert m['hosts'][0]['hostname'] == 'core-01'
 
     def test_requires_login(self, client):
-        assert client.get('/projects/p/deployment-ips').status_code == 401
-        assert client.post('/projects/p/deployment-ips/save',
+        assert client.get('/projects/admin/p/deployment-ips').status_code == 401
+        assert client.post('/projects/admin/p/deployment-ips/save',
                            json={'mappings': []}).status_code == 401

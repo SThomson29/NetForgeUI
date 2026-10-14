@@ -53,8 +53,13 @@ def create_app():
     from .auth     import auth_bp
     from .admin    import admin_bp
     from .projects import projects_bp
+    from .sso      import sso_bp, init_sso
+
+    # Refuses to start if SSO is half configured.
+    init_sso(app)
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(sso_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(projects_bp)
 

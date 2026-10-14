@@ -36,6 +36,8 @@ import tarfile
 import logging
 import threading
 
+from .jobs import OutputBuffer
+
 log = logging.getLogger(__name__)
 
 DEFAULT_ANSIBLE_IMAGE = os.environ.get('ANSIBLE_IMAGE', 'cytopia/ansible:latest')
@@ -332,18 +334,16 @@ def run_generate(job_id, username, project_name, data_dir, limit=None, tags=None
         timer.start()
 
         # Stream logs as they arrive so the frontend can show progress
-        output_parts = []
+        out = OutputBuffer(progress_callback or (lambda _text: None))
         try:
             for chunk in container.logs(stream=True, follow=True):
-                line = chunk.decode('utf-8', errors='replace')
-                output_parts.append(line)
-                if progress_callback:
-                    progress_callback(''.join(output_parts))
+                out.add(chunk.decode('utf-8', errors='replace'))
             result = container.wait()
         finally:
             timer.cancel()
 
-        output = ''.join(output_parts)
+        out.flush()
+        output = out.text()
         returncode = result.get('StatusCode', -1)
 
         if timed_out.is_set():

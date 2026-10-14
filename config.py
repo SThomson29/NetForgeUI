@@ -61,3 +61,22 @@ class Config:
     # ── Login throttling ──
     LOGIN_MAX_FAILURES   = int(os.environ.get('LOGIN_MAX_FAILURES', '5'))
     LOGIN_WINDOW_SECONDS = int(os.environ.get('LOGIN_WINDOW_SECONDS', '900'))
+
+    # ── Single sign-on (OIDC) ──
+    # Off unless OIDC_ISSUER is set. With it on, password sign-in is kept
+    # for local admins only, so there is a way in if the identity provider
+    # is down or misconfigured. See README "Single sign-on".
+    OIDC_ISSUER          = os.environ.get('OIDC_ISSUER', '').strip()
+    OIDC_CLIENT_ID       = os.environ.get('OIDC_CLIENT_ID', '').strip()
+    OIDC_CLIENT_SECRET   = os.environ.get('OIDC_CLIENT_SECRET', '').strip()
+    # Only members of this group can sign in by SSO. Required.
+    OIDC_ALLOWED_GROUP   = os.environ.get('OIDC_ALLOWED_GROUP', '').strip()
+    # Members are admins, re-checked at every SSO sign-in. Optional.
+    OIDC_ADMIN_GROUP     = os.environ.get('OIDC_ADMIN_GROUP', '').strip()
+    OIDC_GROUPS_CLAIM    = os.environ.get('OIDC_GROUPS_CLAIM', 'groups').strip()
+    OIDC_SCOPES          = os.environ.get('OIDC_SCOPES', 'openid email profile').strip()
+    # Only needed when the address the identity provider redirects back to
+    # differs from what the app sees, e.g. behind a proxy without
+    # FLASK_PROXY_FIX or TRUSTED_PROXIES set.
+    OIDC_REDIRECT_URI    = os.environ.get('OIDC_REDIRECT_URI', '').strip()
+    OIDC_BUTTON_LABEL    = os.environ.get('OIDC_BUTTON_LABEL', 'Sign in with SSO').strip()

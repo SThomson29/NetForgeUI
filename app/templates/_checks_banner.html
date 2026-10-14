@@ -1,0 +1,11 @@
+{# Summary of open project checks. Needs checks_summary ({errors, warnings}
+   or None) and project_name. Shows nothing when there is nothing to say. #}
+{% if checks_summary and (checks_summary.errors or checks_summary.warnings) %}
+<div class="alert alert-{{ 'danger' if checks_summary.errors else 'warning' }}" style="margin-bottom:16px">
+  <span>
+    Project checks:
+    {% if checks_summary.errors %}{{ checks_summary.errors }} error{{ '' if checks_summary.errors == 1 else 's' }}{% endif %}{% if checks_summary.errors and checks_summary.warnings %}, {% endif %}{% if checks_summary.warnings %}{{ checks_summary.warnings }} warning{{ '' if checks_summary.warnings == 1 else 's' }}{% endif %}
+    — <a href="{{ url_for('projects.project_checks', project_name=project_name) }}">view</a>
+  </span>
+</div>
+{% endif %}

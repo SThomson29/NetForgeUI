@@ -45,14 +45,14 @@ BASE = {'image':'good.swi','partition':'secondary',
     ('window junk',    {**BASE,'allow_unsafe':True,'unsafe_window_mins':'abc'}, False, 'whole number'),
 ])
 def test_validation(auth_client, fw_project, label, body, expect_ok, fragment):
-    res = auth_client.post('/projects/proj/firmware/run', json=body)
+    res = auth_client.post('/projects/admin/proj/firmware/run', json=body)
     data = res.get_json()
     assert data['ok'] is expect_ok, (label, data)
     if fragment:
         assert fragment in data['error'], (label, data)
 
 def test_images_listed(auth_client, fw_project):
-    res = auth_client.get('/projects/proj/firmware/images')
+    res = auth_client.get('/projects/admin/proj/firmware/images')
     assert res.get_json()['images'] == ['good.swi']
 
 def test_requires_login(app, client):
@@ -61,9 +61,9 @@ def test_requires_login(app, client):
     Note this deliberately does not use the fw_project fixture: that depends
     on auth_client, which logs in using this same client object.
     """
-    assert client.post('/projects/proj/firmware/run', json=BASE).status_code == 401
-    assert client.get('/projects/proj/firmware/images').status_code == 401
-    assert client.get('/projects/proj/firmware/status/abc').status_code == 401
+    assert client.post('/projects/admin/proj/firmware/run', json=BASE).status_code == 401
+    assert client.get('/projects/admin/proj/firmware/images').status_code == 401
+    assert client.get('/projects/admin/proj/firmware/status/abc').status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ class TestFirmwarePage:
             'hosts': [{'hostname': 'core-01', 'mgmt_ip': '10.0.0.1'},
                       {'hostname': 'core-02', 'mgmt_ip': ''}]})
 
-        res = auth_client.get('/projects/proj/firmware')
+        res = auth_client.get('/projects/admin/proj/firmware')
         assert res.status_code == 200
         body = res.data.decode()
         assert 'core-01' in body
@@ -195,16 +195,16 @@ class TestFirmwarePage:
         """An empty mapping must not blow up the template."""
         import app.firmware_routes as fr
         monkeypatch.setattr(fr, '_load_mapping', lambda a, u, p: {'hosts': []})
-        res = auth_client.get('/projects/proj/firmware')
+        res = auth_client.get('/projects/admin/proj/firmware')
         assert res.status_code == 200
 
     def test_page_requires_login(self, client):
-        assert client.get('/projects/proj/firmware').status_code == 401
+        assert client.get('/projects/admin/proj/firmware').status_code == 401
 
     def test_nav_includes_firmware(self, app, auth_client, monkeypatch):
         import app.firmware_routes as fr
         monkeypatch.setattr(fr, '_load_mapping', lambda a, u, p: {'hosts': []})
-        res = auth_client.get('/projects/proj/firmware')
+        res = auth_client.get('/projects/admin/proj/firmware')
         assert b'/firmware"' in res.data
 
 
@@ -217,7 +217,7 @@ class TestPageDataSerialisation:
         monkeypatch.setattr(fr, '_load_mapping', lambda a, u, p: {
             'hosts': [{'hostname': "quote'd\"host", 'mgmt_ip': '10.0.0.1'}]})
 
-        res = auth_client.get('/projects/proj/firmware')
+        res = auth_client.get('/projects/admin/proj/firmware')
         body = res.data.decode()
 
         hosts_literal = re.search(r'const HOSTS\s*=\s*(.*?);', body, re.S).group(1)

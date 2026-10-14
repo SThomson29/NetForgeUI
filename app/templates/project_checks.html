@@ -1,0 +1,103 @@
+{% extends "base_project.html" %}
+{% block title %}Checks — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}Checks{% endblock %}
+
+{% block project_extra_head %}
+<style>
+.check-group { margin-bottom: 18px; }
+.check-group h2 { font-size: 13px; font-weight: 600; color: var(--text-secondary);
+                  text-transform: uppercase; letter-spacing: .04em; margin: 0 0 8px; }
+.finding { display: flex; gap: 12px; align-items: flex-start; padding: 10px 14px;
+           border-bottom: 1px solid var(--border-subtle); }
+.finding:last-child { border-bottom: none; }
+.finding-body { flex: 1; min-width: 0; }
+.finding-title { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.finding-details { margin: 4px 0 0; padding-left: 16px; font-size: 12px;
+                   color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; }
+.finding-details li { overflow-wrap: anywhere; }
+.finding .badge { flex-shrink: 0; margin-top: 1px; }
+.checks-summary { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; }
+details.dismissed summary { cursor: pointer; font-size: 13px; color: var(--text-secondary);
+                            margin-bottom: 8px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<p class="checks-summary">
+  Mistakes across switches that a single editor tab can't see, read from the
+  saved host_vars, Resources and the generated configs. These are warnings
+  only and nothing is blocked. Dismiss anything that's intentional; it will
+  come back if its details change.
+</p>
+
+{% macro finding_row(f, dismissed=False) %}
+<div class="finding">
+  <span class="badge badge-{{ 'red' if f.severity == 'error' else 'yellow' }}">{{ f.severity }}</span>
+  <div class="finding-body">
+    <div class="finding-title">{{ f.title }}</div>
+    {% if f.details %}
+    <ul class="finding-details">
+      {% for line in f.details %}<li>{{ line }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  <button class="btn btn-ghost btn-sm" data-key="{{ f.key }}"
+          data-action="{{ 'restore' if dismissed else 'dismiss' }}"
+          onclick="checkAction(this)">{{ 'Restore' if dismissed else 'Dismiss' }}</button>
+</div>
+{% endmacro %}
+
+{% if not host_count %}
+<div class="card"><div class="card-body text-secondary">Add switches to the project to check it.</div></div>
+{% elif not findings %}
+<div class="alert alert-success"><span>
+  No open findings across {{ host_count }} switch{{ '' if host_count == 1 else 'es' }}.
+</span></div>
+{% else %}
+{% set errors = findings | selectattr('severity', 'equalto', 'error') | list %}
+<p class="checks-summary">
+  {{ errors | length }} error{{ '' if errors | length == 1 else 's' }},
+  {{ findings | length - errors | length }} warning{{ '' if findings | length - errors | length == 1 else 's' }}
+  across {{ host_count }} switch{{ '' if host_count == 1 else 'es' }}.
+</p>
+{% for cat in categories %}
+  {% set rows = findings | selectattr('category', 'equalto', cat) | list %}
+  {% if rows %}
+  <div class="check-group">
+    <h2>{{ cat }}</h2>
+    <div class="card">
+      {% for f in rows %}{{ finding_row(f) }}{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+{% endfor %}
+{% endif %}
+
+{% if dismissed %}
+<details class="dismissed">
+  <summary>{{ dismissed | length }} dismissed</summary>
+  <div class="card">
+    {% for f in dismissed %}{{ finding_row(f, True) }}{% endfor %}
+  </div>
+</details>
+{% endif %}
+
+<script>
+const PROJECT = {{ project_name | tojson }};
+async function checkAction(btn) {
+  btn.disabled = true;
+  try {
+    const res = await fetch(PROJECT_BASE + '/checks/' + btn.dataset.action, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key: btn.dataset.key})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || ('server returned ' + res.status));
+    location.reload();
+  } catch (e) {
+    toast(e.message);
+    btn.disabled = false;
+  }
+}
+</script>
+{% endblock %}

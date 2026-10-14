@@ -45,7 +45,7 @@ def test_pool_name_stays_inside_a_string(app, auth_client, name):
         add_pool(app, 'admin', 'xss', {
             'id': 'pool_1', 'type': 'unique', 'name': name,
             'prefix': '32', 'subnet': '10.255.0.0/24'})
-    body = auth_client.get('/projects/xss/resources').data.decode()
+    body = auth_client.get('/projects/admin/xss/resources').data.decode()
 
     calls = _handler_args(body, 'removePool')
     assert calls, 'removePool handler not found'
@@ -61,7 +61,9 @@ def test_no_handler_interpolates_inside_a_quoted_string():
     import glob
     offenders = []
     for path in glob.glob('app/templates/*.html'):
-        for i, line in enumerate(open(path), 1):
+        with open(path) as f:
+            lines = f.readlines()
+        for i, line in enumerate(lines, 1):
             if re.search(r'''on[a-z]+=["'][^"']*'\{\{''', line):
                 offenders.append('%s:%d' % (path, i))
     assert not offenders, offenders
@@ -82,14 +84,18 @@ _INTENTIONAL_HTML = re.compile(
     r"^(esc\(|escapeHtml\(|encodeURIComponent\(|'\{\{|statusBadge$|diffHtml$"
     r"|lines$|summaryClass$|summaryMsg$|statusIcon$|r\.changed \?|failed > 0"
     r"|good \?|r\.uploaded \?|r\.booted \?|h\.mgmt_ip \? ''"
-    r"|r\.previous_version \?|r\.unsafe_updates_allowed)")
+    r"|r\.previous_version \?|r\.unsafe_updates_allowed"
+    # Built server-side from validated owner and project names, and the
+    # sidebar's shared-by note, which escapes its own text.
+    r"|PROJECT_BASE$|projectShared$)")
 
 
 def test_html_built_in_javascript_escapes_its_data():
     import glob
     offenders = []
     for path in glob.glob('app/templates/*.html'):
-        src = open(path).read()
+        with open(path) as f:
+            src = f.read()
         for lit in re.finditer(r'`([^`]*)`', src):
             body = lit.group(1)
             if not re.search(r'<[a-zA-Z/]', body):
@@ -103,7 +109,8 @@ def test_html_built_in_javascript_escapes_its_data():
 
 def test_esc_covers_text_and_attribute_contexts():
     """Text needs & < >; quoted attributes also need both quote styles."""
-    src = open('app/templates/base.html').read()
+    with open('app/templates/base.html') as f:
+        src = f.read()
     fn = re.search(r'function esc\(value\) \{.*?\n\}', src, re.S).group(0)
     for char, entity in (('&', '&amp;'), ('<', '&lt;'), ('>', '&gt;'),
                          ('"', '&quot;'), ("'", '&#39;')):
@@ -113,12 +120,32 @@ def test_esc_covers_text_and_attribute_contexts():
 
 
 def test_esc_is_available_on_every_page():
-    """Defined in base.html, which every other template extends."""
+    """Defined in base.html, which every other template extends.
+
+    Partials (_name.html) are only ever included, so the pages that
+    include them must extend base instead.
+    """
     import glob
+    import os
+    sources = {}
     for path in glob.glob('app/templates/*.html'):
-        src = open(path).read()
-        if 'esc(' in src and path != 'app/templates/base.html':
-            assert ('{% extends "base' in src or "{% extends 'base" in src), path
+        with open(path) as f:
+            sources[path] = f.read()
+
+    def extends_base(src):
+        return '{% extends "base' in src or "{% extends 'base" in src
+
+    for path, src in sources.items():
+        if 'esc(' not in src or path == 'app/templates/base.html':
+            continue
+        name = os.path.basename(path)
+        if name.startswith('_'):
+            includers = [p for p, s in sources.items() if name in s and p != path]
+            assert includers, '%s is never included' % path
+            for inc in includers:
+                assert extends_base(sources[inc]), (path, inc)
+        else:
+            assert extends_base(src), path
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +177,7 @@ def test_reconcile_output_escapes_host_names(app, auth_client):
     from app.project import create_project
     with app.app_context():
         create_project(app, 'admin', 'recon')
-    body = auth_client.get('/projects/recon/hosts').data.decode()
+    body = auth_client.get('/projects/admin/recon/hosts').data.decode()
     lines = _markup_lines(body, 'host')
     assert any("esc(host)" in line for line in lines)
     assert any("data.hosts[host].map(esc)" in line for line in lines)

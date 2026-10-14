@@ -20,6 +20,7 @@
 {% endblock %}
 
 {% block content %}
+{% include "_checks_banner.html" %}
 <div class="card">
   <div class="card-header">Run config generation</div>
   <div class="run-controls">
@@ -114,12 +115,13 @@ async function runGenerate() {
   status.innerHTML = '<span class="status-badge status-running">Running</span>';
 
   try {
-    const res  = await fetch('/projects/' + PROJECT_NAME + '/generate/run', {
+    const res  = await fetch(PROJECT_BASE + '/generate/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({limit, tags})
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.job_id) throw new Error(data.error || ('server returned ' + res.status));
     currentJobId = data.job_id;
     pollInterval = setInterval(pollStatus, 1000);
   } catch (e) {
@@ -132,7 +134,7 @@ async function runGenerate() {
 async function pollStatus() {
   if (!currentJobId) return;
   try {
-    const res  = await fetch('/projects/' + PROJECT_NAME + '/generate/status/' + currentJobId);
+    const res  = await fetch(PROJECT_BASE + '/generate/status/' + currentJobId);
     const output = document.getElementById('output-box');
     const status = document.getElementById('run-status');
     const btn    = document.getElementById('run-btn');
@@ -190,7 +192,7 @@ async function deleteAll() {
   const rows = document.querySelectorAll('.config-row');
   for (const row of rows) {
     const filename = row.id.replace('row-', '');
-    await fetch('/projects/' + PROJECT_NAME + '/generate/delete/' + encodeURIComponent(filename), {method: 'POST'});
+    await fetch(PROJECT_BASE + '/generate/delete/' + encodeURIComponent(filename), {method: 'POST'});
     row.remove();
   }
   if (!document.querySelector('.config-row')) {
@@ -200,7 +202,7 @@ async function deleteAll() {
 
 async function deleteConfig(filename) {
   if (!confirm('Delete ' + filename + '?')) return;
-  const res  = await fetch('/projects/' + PROJECT_NAME + '/generate/delete/' + encodeURIComponent(filename), {method: 'POST'});
+  const res  = await fetch(PROJECT_BASE + '/generate/delete/' + encodeURIComponent(filename), {method: 'POST'});
   const data = await res.json();
   if (data.ok) {
     const row = document.getElementById('row-' + filename);

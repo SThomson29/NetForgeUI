@@ -10,7 +10,11 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/netforge-ui
 
 jobs:
+  tests:
+    uses: ./.github/workflows/test.yml
+
   build-and-push:
+    needs: tests
     runs-on: ubuntu-latest
     permissions:
       contents: read

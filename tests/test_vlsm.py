@@ -233,50 +233,50 @@ class TestDelegationFromManualSupernet:
 class TestRoutes:
 
     def test_carve_via_api(self, app, auth_client, proj):
-        res = auth_client.post('/projects/%s/api/pools/sn/blocks' % proj,
+        res = auth_client.post('/projects/admin/%s/api/pools/sn/blocks' % proj,
                                json={'subnet': '10.50.64.0/18',
                                      'vlan_id': '20', 'vlan_name': 'Trusted'})
         assert res.get_json() == {'ok': True, 'subnet': '10.50.64.0/18'}
 
     def test_outside_in_rule_via_api(self, app, auth_client, proj):
-        auth_client.post('/projects/%s/api/pools/sn/blocks' % proj,
+        auth_client.post('/projects/admin/%s/api/pools/sn/blocks' % proj,
                          json={'subnet': '10.50.64.0/20'})
-        res = auth_client.post('/projects/%s/api/pools/sn/blocks' % proj,
+        res = auth_client.post('/projects/admin/%s/api/pools/sn/blocks' % proj,
                                json={'subnet': '10.50.64.0/18'})
         assert res.status_code == 400
         assert 'would contain' in res.get_json()['error']
 
     def test_suggest_via_api(self, app, auth_client, proj):
-        auth_client.post('/projects/%s/api/pools/sn/blocks' % proj,
+        auth_client.post('/projects/admin/%s/api/pools/sn/blocks' % proj,
                          json={'subnet': '10.50.0.0/24'})
-        res = auth_client.get('/projects/%s/api/pools/sn/suggest?prefix=24' % proj)
+        res = auth_client.get('/projects/admin/%s/api/pools/sn/suggest?prefix=24' % proj)
         assert res.get_json()['subnet'] == '10.50.1.0/24'
 
     def test_suggest_rejects_a_silly_prefix(self, app, auth_client, proj):
-        res = auth_client.get('/projects/%s/api/pools/sn/suggest?prefix=99' % proj)
+        res = auth_client.get('/projects/admin/%s/api/pools/sn/suggest?prefix=99' % proj)
         assert res.status_code == 400
 
     def test_remove_via_api(self, app, auth_client, proj):
-        auth_client.post('/projects/%s/api/pools/sn/blocks' % proj,
+        auth_client.post('/projects/admin/%s/api/pools/sn/blocks' % proj,
                          json={'subnet': '10.50.0.0/24'})
-        res = auth_client.delete('/projects/%s/api/pools/sn/blocks' % proj,
+        res = auth_client.delete('/projects/admin/%s/api/pools/sn/blocks' % proj,
                                  json={'subnet': '10.50.0.0/24'})
         assert res.get_json()['ok'] is True
 
     def test_routes_require_login(self, client):
-        assert client.post('/projects/w/api/pools/sn/blocks',
+        assert client.post('/projects/admin/w/api/pools/sn/blocks',
                            json={'subnet': '10.0.0.0/24'}).status_code == 401
-        assert client.get('/projects/w/api/pools/sn/suggest').status_code == 401
+        assert client.get('/projects/admin/w/api/pools/sn/suggest').status_code == 401
 
     def test_page_shows_the_block_editor(self, app, auth_client, proj):
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'Mixed-size supernet' in body
         assert 'carveBlock("sn")' in body
 
     def test_page_hides_it_for_a_fixed_supernet(self, app, auth_client, proj):
         with app.app_context():
             add_pool(app, 'admin', proj, dict(FIXED))
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'carveBlock("fx")' not in body
 
 
@@ -312,7 +312,7 @@ class TestVlanOnDelegatedBlock:
                 'id': 'wm', 'type': 'unique', 'name': 'Wireless MGMT',
                 'prefix': '29', 'subnet': '10.50.10.0/24',
                 'parent_pool_id': 'sn'})
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'openVlanAssign("sn", "10.50.10.0/24")' in body
 
 
@@ -417,7 +417,7 @@ class TestNestedBlocks:
         with app.app_context():
             self._carve(app, proj, '10.50.0.0/18')
             self._carve(app, proj, '10.50.0.0/24', '110', 'MGMT')
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'padding-left:32px' in body, 'child block is not indented'
         assert 'Container' in body
         assert 'carveInto("sn", "10.50.0.0/18")' in body
@@ -428,14 +428,14 @@ class TestSubdivideButton:
     def test_offered_on_a_mixed_size_supernet(self, app, auth_client, proj):
         with app.app_context():
             carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/18')
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'carveInto("sn", "10.50.0.0/18")' in body
 
     def test_not_offered_on_a_fixed_supernet(self, app, auth_client, proj):
         """There is no block editor there, so the button would do nothing."""
         with app.app_context():
             add_pool(app, 'admin', proj, dict(FIXED))
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'carveInto("fx"' not in body
 
     def test_click_target_exists_for_every_button(self, app, auth_client, proj):
@@ -444,7 +444,7 @@ class TestSubdivideButton:
         with app.app_context():
             carve_supernet_block(app, 'admin', proj, 'sn', '10.50.0.0/18')
             add_pool(app, 'admin', proj, dict(FIXED))
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         for pool_id in set(re.findall(r"carveInto\('([^']+)'", body)):
             assert 'id="blk-subnet-%s"' % pool_id in body, (
                 'carveInto offered for %s with no block editor' % pool_id)
@@ -477,11 +477,13 @@ class TestStrandedContainerRepair:
         from app.project import project_dir
         with app.app_context():
             path = os.path.join(project_dir(app, 'admin', proj), 'allocations.json')
-            data = json.load(open(path))
+            with open(path) as f:
+                data = json.load(f)
             data['vlan_supernet']['sn'] = {'10.50.0.0/18': {
                 'status': 'container', 'vlan_id': None, 'vlan_name': None,
                 'hostname': None, 'peer_hostname': None}}
-            json.dump(data, open(path, 'w'))
+            with open(path, 'w') as f:
+                json.dump(data, f)
 
             blocks = get_carved_subnets(app, 'admin', proj, 'sn')
         assert blocks['10.50.0.0/18']['status'] == 'carved'
@@ -502,7 +504,7 @@ class TestStrandedContainerRepair:
                 'id': 'wm', 'type': 'unique', 'name': 'WM', 'prefix': '29',
                 'subnet': '10.50.0.0/24', 'parent_pool_id': 'sn'})
             remove_pool(app, 'admin', proj, 'wm')
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'removeBlock("sn", "10.50.0.0/18")' in body
 
 
@@ -570,25 +572,25 @@ class TestConvertToMixedSizes:
         assert 'already uses mixed sizes' in str(e.value)
 
     def test_button_offered_only_on_fixed_supernets(self, app, auth_client, fixed):
-        body = auth_client.get('/projects/%s/resources' % fixed).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % fixed).data.decode()
         assert 'convertSupernet("sn"' in body
 
     def test_button_gone_after_conversion(self, app, auth_client, fixed):
         from app.project import convert_supernet_to_mixed
         with app.app_context():
             convert_supernet_to_mixed(app, 'admin', fixed, 'sn')
-        body = auth_client.get('/projects/%s/resources' % fixed).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % fixed).data.decode()
         assert 'convertSupernet("sn"' not in body
         assert 'carveBlock("sn")' in body, 'block editor should now be available'
 
     def test_convert_via_api(self, app, auth_client, fixed):
-        res = auth_client.post('/projects/%s/api/pools/sn/convert' % fixed)
+        res = auth_client.post('/projects/admin/%s/api/pools/sn/convert' % fixed)
         body = res.get_json()
         assert body['ok'] is True
         assert body['dropped'] == 2
 
     def test_convert_requires_login(self, client):
-        assert client.post('/projects/f/api/pools/sn/convert').status_code == 401
+        assert client.post('/projects/admin/f/api/pools/sn/convert').status_code == 401
 
 
 class TestEditingAnAssignedBlock:
@@ -617,7 +619,7 @@ class TestEditingAnAssignedBlock:
         with app.app_context():
             carve_supernet_block(app, 'admin', proj, 'sn',
                                  '10.50.10.0/24', '110', 'MGMT')
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'openVlanAssign("sn", "10.50.10.0/24")' in body, \
             'an assigned block could only be released, not edited'
 
@@ -627,7 +629,7 @@ class TestEditingAnAssignedBlock:
         with app.app_context():
             carve_supernet_block(app, 'admin', proj, 'sn',
                                  '10.50.10.0/24', '110', 'MGMT')
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         entries = json.loads(
             re.search(r'const VLAN_ENTRIES = (.*?);', body, re.S).group(1))
         assert entries['sn']['10.50.10.0/24']['vlan_name'] == 'MGMT'

@@ -13,15 +13,15 @@
 
 {% block content %}
 
-{% if projects %}
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
-  {% for p in projects %}
+{% macro project_card(p) %}
   <div class="card" style="padding:0;overflow:hidden">
     <div style="padding:16px 18px 14px">
       <div style="display:flex;align-items:start;justify-content:space-between;margin-bottom:8px">
         <div>
           <div style="font-size:15px;font-weight:600">{{ p.display_name }}</div>
-          <div style="font-size:11px;color:#888;margin-top:2px">Created {{ p.created }}</div>
+          <div style="font-size:11px;color:#888;margin-top:2px">
+            {% if p.owner != current_user.username %}{{ p.owner }} · {{ level_labels[p.level] }} access · {% endif %}Created {{ p.created }}
+          </div>
         </div>
       </div>
       <div style="display:flex;gap:16px;margin-top:10px">
@@ -34,28 +34,37 @@
       </div>
     </div>
     <div style="padding:10px 18px;border-top:1px solid #f0efe8;display:flex;align-items:center;justify-content:space-between;background:#faf9f7">
-      <a href="{{ url_for('projects.hosts_page', project_name=p.name) }}" class="btn btn-primary btn-sm">Open</a>
+      <a href="{{ url_for('projects.hosts_page', owner=p.owner, project_name=p.name) }}" class="btn btn-primary btn-sm">Open</a>
       <div style="display:flex;gap:6px">
         {% if p.config_count > 0 %}
-        <a href="{{ url_for('projects.download_all', project_name=p.name) }}" class="btn btn-sm">
+        <a href="{{ url_for('projects.download_all', owner=p.owner, project_name=p.name) }}" class="btn btn-sm">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Download all
         </a>
         {% endif %}
-        <a href="{{ url_for('projects.export_project_route', project_name=p.name) }}" class="btn btn-sm"
+        <a href="{{ url_for('projects.export_project_route', owner=p.owner, project_name=p.name) }}" class="btn btn-sm"
            title="Download this project as a portable archive (credentials are removed)">
           Export
         </a>
-        <form method="post" action="{{ url_for('projects.delete', project_name=p.name) }}"
+        {% if p.owner == current_user.username %}
+        <form method="post" action="{{ url_for('projects.delete', owner=p.owner, project_name=p.name) }}"
               onsubmit='return confirm("Delete project " + {{ p.display_name|tojson }} + " and all its data? This cannot be undone.")'>
           <button class="btn btn-sm btn-danger">Delete</button>
         </form>
+        {% endif %}
       </div>
     </div>
   </div>
-  {% endfor %}
-</div>
+{% endmacro %}
 
+{% macro project_grid(items) %}
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
+  {% for p in items %}{{ project_card(p) }}{% endfor %}
+</div>
+{% endmacro %}
+
+{% if projects %}
+{{ project_grid(projects) }}
 {% else %}
 <div class="card">
   <div class="empty">
@@ -63,6 +72,20 @@
     <p>No projects yet. Create one to get started.</p>
   </div>
 </div>
+{% endif %}
+
+{% if shared %}
+<h2 style="font-size:13px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;margin:28px 0 10px">Shared with you</h2>
+{{ project_grid(shared) }}
+{% endif %}
+
+{% if others %}
+<details style="margin-top:28px">
+  <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text-secondary)">
+    Other users' projects ({{ others|length }}) — admins can view these
+  </summary>
+  <div style="margin-top:10px">{{ project_grid(others) }}</div>
+</details>
 {% endif %}
 
 <!-- New project modal -->

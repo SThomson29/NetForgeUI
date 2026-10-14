@@ -6,13 +6,13 @@ import uuid
 import threading
 
 from flask import (Blueprint, render_template, redirect, url_for,
-                   request, flash, current_app, jsonify, send_file, abort)
+                   request, flash, current_app, jsonify, send_file, abort, g)
 from flask_login import login_required, current_user
 
 from .project import (
     sync_allocations as _sync_allocations,
     list_projects, create_project, delete_project,
-    get_project_config, save_project_config,
+    get_project_config,
     add_pool, remove_pool, update_pool, convert_supernet_to_mixed,
     PoolOverlapError,
     get_available_ips, allocate_unique, release_unique,
@@ -20,21 +20,26 @@ from .project import (
     get_carved_subnets, assign_vlan_subnet, release_vlan_subnet,
     sort_by_address,
     carve_supernet_block, remove_supernet_block, suggest_free_block,
-    is_manual_supernet, _block_depth, _safe_network,
+    _block_depth, _safe_network,
     get_common, save_common,
     get_conventions, save_conventions,
     get_all_allocations,
     project_generated_configs_dir,
+    dismiss_check, restore_check, record_generated_from,
+    project_dir, project_lock, record_host_save, project_summary,
 )
 from .transfer import (
     export_project, import_project, read_manifest, TransferError,
 )
 
+from . import audit, checks, sharing
+from .api import json_body
+from .jobs import prune_finished, mark_finished
 from .security import job_tag, visible_job
 from .utils import (
-    read_project_hosts, add_project_host, remove_project_host,
+    read_project_hosts, add_project_host, add_project_hosts, remove_project_host,
     list_project_generated_configs,
-    project_hosts_ini_path, project_host_vars_dir,
+    project_host_vars_dir,
     reconcile_host_vars,
     HOSTVARS_FILES,
 )
@@ -59,12 +64,104 @@ _SAFE_URL_VALUES = {
 }
 
 
+_SAFE_URL_VALUES['owner'] = _SAFE_URL_VALUES['project_name']
+
+
 @projects_bp.url_value_preprocessor
 def _reject_unsafe_url_values(endpoint, values):
     for key, value in (values or {}).items():
         pattern = _SAFE_URL_VALUES.get(key)
         if pattern is not None and not pattern.match(str(value)):
             abort(404)
+
+
+# ---------------------------------------------------------------------------
+# Whose project, and what the caller may do in it
+# ---------------------------------------------------------------------------
+#
+# Project URLs are /projects/<owner>/<project_name>/..., and the files live
+# under the owner. The owner is taken off the URL here, before any view
+# runs, so views keep their (project_name, ...) signatures and read the
+# owner with _owner(). Access is checked once for every project route:
+# reads need view, writes need edit, anything that touches a switch needs
+# deploy, and deleting or sharing needs the owner.
+
+_REQUIRED = {
+    'projects.delete':              sharing.OWNER,
+    'projects.share_project':       sharing.OWNER,
+    'projects.unshare_project':     sharing.OWNER,
+    'projects.transfer_project':    sharing.OWNER,
+    'projects.deploy_dryrun':       sharing.DEPLOY,
+    'projects.deploy_push':         sharing.DEPLOY,
+    'projects.firmware_run':        sharing.DEPLOY,
+    'projects.reachability':        sharing.DEPLOY,
+    # A GET that writes the mapping.
+    'projects.deploy_auto_populate': sharing.EDIT,
+}
+
+
+def required_level(endpoint, method):
+    if endpoint in _REQUIRED:
+        return _REQUIRED[endpoint]
+    return sharing.VIEW if method in ('GET', 'HEAD', 'OPTIONS') else sharing.EDIT
+
+
+@projects_bp.url_value_preprocessor
+def _take_owner(endpoint, values):
+    if values and 'owner' in values:
+        g.project_owner = values.pop('owner')
+
+
+@projects_bp.url_defaults
+def _fill_owner(endpoint, values):
+    """url_for(..., project_name=x) inside a project means this owner's x."""
+    if 'project_name' in values and 'owner' not in values and 'project_owner' in g:
+        values['owner'] = g.project_owner
+
+
+@projects_bp.before_request
+def _check_project_access():
+    if 'project_owner' not in g or not current_user.is_authenticated:
+        return None     # not a project route, or login_required will answer
+    app = current_app._get_current_object()
+    owner, project = g.project_owner, request.view_args.get('project_name')
+    level = sharing.level_for(app, current_user, owner, project)
+    # Someone else's project that doesn't exist looks the same as one they
+    # can't see. The owner's own routes behave as they always have.
+    if level != sharing.OWNER and (
+            level is None or not os.path.isdir(project_dir(app, owner, project))):
+        abort(404)
+    wanted = required_level(request.endpoint, request.method)
+    if not sharing.at_least(level, wanted) and not (
+            request.endpoint == 'projects.transfer_project' and current_user.is_admin):
+        if request.is_json:
+            return jsonify({'ok': False, 'error': 'You have %s access to this project; '
+                            'this needs %s.' % (sharing.LEVEL_LABELS[level].lower(),
+                                                sharing.LEVEL_LABELS[wanted].lower())}), 403
+        abort(403)
+    g.project_level = level
+
+
+@projects_bp.app_context_processor
+def _project_context():
+    if 'project_owner' not in g:
+        return {}
+    project = (request.view_args or {}).get('project_name', '')
+    return {
+        'project_owner': g.project_owner,
+        'project_level': g.get('project_level'),
+        'project_base': '/projects/%s/%s' % (g.project_owner, project),
+        'is_own_project': g.project_owner == current_user.username,
+    }
+
+
+def _owner():
+    return g.project_owner
+
+
+def _project_key(project_name):
+    """Identifies a project across owners, for job ownership."""
+    return '%s/%s' % (_owner(), project_name)
 
 # In-memory job store shared with generate
 _jobs = {}
@@ -79,18 +176,34 @@ _jobs_lock = threading.Lock()
 @projects_bp.route('/projects')
 @login_required
 def projects_page():
+    from .models import User
     app = current_app._get_current_object()
     projects = list_projects(app, current_user.username)
-    return render_template('projects.html', projects=projects)
+    shared = []
+    for s in sharing.shared_with(app, current_user):
+        if os.path.isdir(project_dir(app, s['owner'], s['project'])):
+            shared.append(dict(project_summary(app, s['owner'], s['project']),
+                               level=s['level']))
+    # Admins can open any project read-only; list the ones not already above.
+    others = []
+    if current_user.is_admin:
+        seen = {(p['owner'], p['name']) for p in shared}
+        for u in User.all_users(app):
+            if u.username == current_user.username:
+                continue
+            others += [dict(p, level=sharing.VIEW) for p in list_projects(app, u.username)
+                       if (u.username, p['name']) not in seen]
+    return render_template('projects.html', projects=projects, shared=shared,
+                           others=others, level_labels=sharing.LEVEL_LABELS)
 
 
-@projects_bp.route('/projects/<project_name>/export')
+@projects_bp.route('/projects/<owner>/<project_name>/export')
 @login_required
 def export_project_route(project_name):
     """Download a project as a portable zip archive."""
     app = current_app._get_current_object()
     try:
-        data, manifest = export_project(app, current_user.username, project_name)
+        data, manifest = export_project(app, _owner(), project_name)
     except TransferError as e:
         flash(str(e), 'error')
         return redirect(url_for('projects.projects_page'))
@@ -149,21 +262,22 @@ def new_project():
     return redirect(url_for('projects.projects_page'))
 
 
-@projects_bp.route('/projects/<project_name>/delete', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/delete', methods=['POST'])
 @login_required
 def delete(project_name):
     app = current_app._get_current_object()
-    delete_project(app, current_user.username, project_name)
+    delete_project(app, _owner(), project_name)
+    sharing.forget_project(app, _owner(), project_name)
     flash(f'Project {project_name} deleted.', 'success')
     return redirect(url_for('projects.projects_page'))
 
 
-@projects_bp.route('/projects/<project_name>/download_all')
+@projects_bp.route('/projects/<owner>/<project_name>/download_all')
 @login_required
 def download_all(project_name):
     app   = current_app._get_current_object()
-    gcdir = project_generated_configs_dir(app, current_user.username, project_name)
-    files = list_project_generated_configs(app, current_user.username, project_name)
+    gcdir = project_generated_configs_dir(app, _owner(), project_name)
+    files = list_project_generated_configs(app, _owner(), project_name)
     if not files:
         abort(404)
     buf = io.BytesIO()
@@ -180,16 +294,16 @@ def download_all(project_name):
 # Hosts
 # ---------------------------------------------------------------------------
 
-@projects_bp.route('/projects/<project_name>/hosts')
+@projects_bp.route('/projects/<owner>/<project_name>/hosts')
 @login_required
 def hosts_page(project_name):
     app   = current_app._get_current_object()
-    hosts = read_project_hosts(app, current_user.username, project_name)
+    hosts = read_project_hosts(app, _owner(), project_name)
     return render_template('project_hosts.html',
                            project_name=project_name, hosts=hosts)
 
 
-@projects_bp.route('/projects/<project_name>/hosts/add', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/hosts/add', methods=['POST'])
 @login_required
 def add_host(project_name):
     import re
@@ -206,24 +320,76 @@ def add_host(project_name):
         return redirect(url_for('projects.hosts_page', project_name=project_name))
 
     existing = [h['hostname'].lower() for h in
-                read_project_hosts(app, current_user.username, project_name)]
+                read_project_hosts(app, _owner(), project_name)]
     if hostname.lower() in existing:
         flash(f'{hostname} already exists.', 'error')
         return redirect(url_for('projects.hosts_page', project_name=project_name))
 
     try:
-        add_project_host(app, current_user.username, project_name, hostname, stacking)
+        add_project_host(app, _owner(), project_name, hostname, stacking)
         flash(f'{hostname} added.', 'success')
     except RuntimeError as e:
         flash(str(e), 'error')
     return redirect(url_for('projects.hosts_page', project_name=project_name))
 
 
-@projects_bp.route('/projects/<project_name>/hosts/delete/<hostname>', methods=['POST'])
+def _bulk_plan(app, project_name):
+    """Shared by preview and add: (stacking, plan) or a 400 response."""
+    from .bulk_hosts import plan, BulkError
+    from .utils import STACKING_TO_GROUP
+    body = json_body('text')
+    stacking = str(body.get('stacking') or 'none')
+    if stacking not in STACKING_TO_GROUP:
+        return None, (jsonify(ok=False, error='Unknown stacking type.'), 400)
+    existing = [h['hostname'] for h in
+                read_project_hosts(app, _owner(), project_name)]
+    try:
+        return (stacking, plan(str(body['text']), existing)), None
+    except BulkError as e:
+        return None, (jsonify(ok=False, error=str(e)), 400)
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/hosts/bulk/preview', methods=['POST'])
+@login_required
+def bulk_hosts_preview(project_name):
+    """What a bulk add would do, without doing it."""
+    result, error = _bulk_plan(current_app._get_current_object(), project_name)
+    if error:
+        return error
+    _stacking, items = result
+    return jsonify(ok=True, items=items,
+                   add_count=sum(1 for i in items if i['add']))
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/hosts/bulk', methods=['POST'])
+@login_required
+def bulk_hosts_add(project_name):
+    """Add every name the text expands to that is valid and new.
+
+    The text is expanded again here rather than trusting a list from the
+    page, so exactly the previewed rules apply.
+    """
+    app = current_app._get_current_object()
+    result, error = _bulk_plan(app, project_name)
+    if error:
+        return error
+    stacking, items = result
+    names = [i['name'] for i in items if i['add']]
+    if names:
+        try:
+            add_project_hosts(app, _owner(), project_name,
+                              names, stacking)
+        except RuntimeError as e:
+            return jsonify(ok=False, error=str(e)), 400
+    return jsonify(ok=True, added=names,
+                   skipped=[i for i in items if not i['add']])
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/hosts/delete/<hostname>', methods=['POST'])
 @login_required
 def delete_host(project_name, hostname):
     app = current_app._get_current_object()
-    remove_project_host(app, current_user.username, project_name, hostname)
+    remove_project_host(app, _owner(), project_name, hostname)
     flash(f'{hostname} removed.', 'success')
     return redirect(url_for('projects.hosts_page', project_name=project_name))
 
@@ -232,13 +398,13 @@ def delete_host(project_name, hostname):
 # Editor
 # ---------------------------------------------------------------------------
 
-@projects_bp.route('/projects/<project_name>/editor')
+@projects_bp.route('/projects/<owner>/<project_name>/editor')
 @login_required
 def editor(project_name):
     app    = current_app._get_current_object()
-    hosts  = read_project_hosts(app, current_user.username, project_name)
-    cfg    = get_project_config(app, current_user.username, project_name)
-    allocs = get_all_allocations(app, current_user.username, project_name)
+    hosts  = read_project_hosts(app, _owner(), project_name)
+    cfg    = get_project_config(app, _owner(), project_name)
+    allocs = get_all_allocations(app, _owner(), project_name)
     selected = request.args.get('host', '')
     return render_template('project_editor.html',
                            project_name=project_name,
@@ -248,21 +414,24 @@ def editor(project_name):
                            allocations=allocs)
 
 
-@projects_bp.route('/projects/<project_name>/api/hostvars/<hostname>/state')
+@projects_bp.route('/projects/<owner>/<project_name>/api/hostvars/<hostname>/state')
 @login_required
 def get_state(project_name, hostname):
     from .hostvars import _parse_state
     app   = current_app._get_current_object()
     hvdir = os.path.join(
-        project_host_vars_dir(app, current_user.username, project_name),
+        project_host_vars_dir(app, _owner(), project_name),
         hostname
     )
     if not os.path.isdir(hvdir):
         return jsonify({'error': 'Host not found'}), 404
-    return jsonify(_parse_state(hvdir))
+    res = jsonify(_parse_state(hvdir))
+    # What the editor loaded, so a save can tell if someone else saved since.
+    res.headers['X-Hostvars-Fingerprint'] = checks.hostvars_fingerprint(hvdir) or ''
+    return res
 
 
-@projects_bp.route('/projects/<project_name>/api/reconcile', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/reconcile', methods=['POST'])
 @login_required
 def reconcile_project(project_name):
     """Add skeleton files existing hosts are missing.
@@ -271,10 +440,11 @@ def reconcile_project(project_name):
     POST {"apply": true}   -> write the files
     """
     app  = current_app._get_current_object()
-    body = request.json or {}
+    body = request.get_json(silent=True)
+    body = body if isinstance(body, dict) else {}
     try:
         result = reconcile_host_vars(
-            app, current_user.username, project_name,
+            app, _owner(), project_name,
             dry_run=not body.get('apply', False),
         )
     except Exception as e:
@@ -282,74 +452,141 @@ def reconcile_project(project_name):
     return jsonify({'ok': True, **result})
 
 
-@projects_bp.route('/projects/<project_name>/api/hostvars/<hostname>/save_all',
+@projects_bp.route('/projects/<owner>/<project_name>/api/hostvars/<hostname>/save_all',
                    methods=['POST'])
 @login_required
 def save_all_hostvars(project_name, hostname):
-    app   = current_app._get_current_object()
-    files = request.json or []
-    hvdir = project_host_vars_dir(app, current_user.username, project_name)
-    errors = []
-    for item in files:
-        try:
-            fname    = item['filename']
-            fcontent = item['content']
-            if fname not in HOSTVARS_FILES:
-                raise ValueError(f'Unknown file: {fname}')
-            dest = os.path.join(hvdir, hostname)
-            os.makedirs(dest, exist_ok=True)
-            with open(os.path.join(dest, fname), 'w') as f:
-                f.write(fcontent)
-        except (ValueError, KeyError) as e:
-            errors.append(str(e))
-    if errors:
-        return jsonify({'ok': False, 'errors': errors}), 400
+    """Write a switch's host_vars.
 
-    # Sync IP allocations from saved host_vars
-    try:
-        _sync_allocations(app, current_user.username, project_name, hostname)
-    except Exception as e:
-        pass  # Don't fail the save if allocation sync errors
+    With an X-Base-Fingerprint header (the editor sends the one it loaded),
+    the save is refused if the switch was saved by anyone since, rather
+    than silently overwriting their changes. Checking and writing happen
+    under the project lock, so two saves can't both pass the check.
+    """
+    app   = current_app._get_current_object()
+    files = json_body(kind=list)
+    hvdir = project_host_vars_dir(app, _owner(), project_name)
+    dest  = os.path.join(hvdir, hostname)
+    base  = request.headers.get('X-Base-Fingerprint')
+    errors = []
+    with project_lock(app, _owner(), project_name):
+        current = checks.hostvars_fingerprint(dest)
+        if base is not None and current is not None and base != current:
+            last = (get_project_config(app, _owner(), project_name)
+                    .get('host_saves') or {}).get(hostname) or {}
+            who = ' by %s at %s' % (last['by'], last['at'].replace('T', ' ').replace('Z', ' UTC')) \
+                if last.get('by') else ''
+            return jsonify({'ok': False, 'conflict': True, 'error':
+                            '%s was changed%s since you opened it. Reload to see '
+                            'their changes; saving now would overwrite them.'
+                            % (hostname, who)}), 409
+        for item in files:
+            try:
+                if not isinstance(item, dict):
+                    raise ValueError('Each file must be an object')
+                fname    = item['filename']
+                fcontent = item['content']
+                if fname not in HOSTVARS_FILES:
+                    raise ValueError(f'Unknown file: {fname}')
+                os.makedirs(dest, exist_ok=True)
+                with open(os.path.join(dest, fname), 'w') as f:
+                    f.write(fcontent)
+            except KeyError as e:
+                errors.append('Missing field: %s' % e)
+            except ValueError as e:
+                errors.append(str(e))
+        if errors:
+            return jsonify({'ok': False, 'errors': errors}), 400
+        record_host_save(app, _owner(), project_name, hostname, current_user.username)
+
+        # Sync IP allocations from saved host_vars
+        try:
+            _sync_allocations(app, _owner(), project_name, hostname)
+        except Exception:
+            pass  # Don't fail the save if allocation sync errors
+        fingerprint = checks.hostvars_fingerprint(dest)
 
     # Return updated allocations so the frontend can refresh pool pickers
-    allocs = get_all_allocations(app, current_user.username, project_name)
-    return jsonify({'ok': True, 'saved': len(files), 'allocations': allocs})
+    allocs = get_all_allocations(app, _owner(), project_name)
+    res = jsonify({'ok': True, 'saved': len(files), 'allocations': allocs})
+    res.headers['X-Hostvars-Fingerprint'] = fingerprint or ''
+    return res
 
 
 # ---------------------------------------------------------------------------
 # Generate
 # ---------------------------------------------------------------------------
 
-@projects_bp.route('/projects/<project_name>/generate')
+@projects_bp.route('/projects/<owner>/<project_name>/generate')
 @login_required
 def generate_page(project_name):
     app     = current_app._get_current_object()
-    hosts   = read_project_hosts(app, current_user.username, project_name)
-    configs = list_project_generated_configs(app, current_user.username, project_name)
+    hosts   = read_project_hosts(app, _owner(), project_name)
+    configs = list_project_generated_configs(app, _owner(), project_name)
     return render_template('project_generate.html',
                            project_name=project_name,
                            hosts=hosts,
-                           configs=configs)
+                           configs=configs,
+                           checks_summary=checks.summary(
+                               app, _owner(), project_name))
 
 
-@projects_bp.route('/projects/<project_name>/generate/run', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/generate/run', methods=['POST'])
 @login_required
 def run_generate(project_name):
     from .docker_runner import run_generate as docker_run_generate
 
     app   = current_app._get_current_object()
-    limit = request.json.get('limit', '').strip()
-    tags  = request.json.get('tags', '').strip()
+    body  = json_body()
+    limit = str(body.get('limit') or '').strip()
+    tags  = str(body.get('tags') or '').strip()
 
-    out_dir = project_generated_configs_dir(app, current_user.username, project_name)
+    out_dir = project_generated_configs_dir(app, _owner(), project_name)
     os.makedirs(out_dir, exist_ok=True)
 
-    username = current_user.username  # capture before thread starts — request context won't exist inside thread
+    # Captured before the thread starts — the request context won't exist
+    # inside it. username is whose project (and so whose files); actor is
+    # who pressed the button.
+    username = _owner()
+    actor = current_user.username
+    key = _project_key(project_name)
 
+    prune_finished(_jobs, _jobs_lock)
     job_id = str(uuid.uuid4())
     with _jobs_lock:
+        # Two runs at once would each mirror their output over the other's.
+        running = next((j for j in _jobs.values()
+                        if j.get('_project') == key and j.get('_finished_at') is None), None)
+        if running:
+            return jsonify({'ok': False, 'error':
+                            'A generation is already running for this project '
+                            '(started by %s). Try again when it finishes.'
+                            % running.get('_owner')}), 409
         _jobs[job_id] = {'status': 'running', 'output': '', 'returncode': None,
-                         **job_tag(username, project_name)}
+                         **job_tag(actor, key)}
+
+    # Audit: the hosts in scope, and the configs as they stand beforehand so
+    # the entry can say which ones this run changed.
+    project_hosts = [h['hostname'] for h in
+                     read_project_hosts(app, username, project_name)]
+    named = [n for n in re.split(r'[,:\s]+', limit) if n] if limit else []
+    in_scope = [h for h in project_hosts if not named or h in named] or named
+    before = audit.config_hashes(out_dir)
+
+    # What each in-scope switch's host_vars were as the run starts, so the
+    # checks can tell later whether a config predates a change. A limit can
+    # name inventory groups as well as switches.
+    hv_base = project_host_vars_dir(app, username, project_name)
+    scope = [h['hostname'] for h in read_project_hosts(app, username, project_name)
+             if not named or h['hostname'] in named or h['group'] in named
+             or 'all' in named]
+    starting = {h: checks.hostvars_fingerprint(os.path.join(hv_base, h))
+                for h in scope if _SAFE_URL_VALUES['hostname'].match(h)}
+
+    audit_id = audit.record_start(
+        app, username=actor, owner=username, project=project_name, action='generate',
+        switch_user=None, targets=[{'hostname': h} for h in in_scope],
+        params={'limit': limit or None, 'tags': tags or None})
 
     def _run(jid):
         try:
@@ -380,39 +617,62 @@ def run_generate(project_name):
                 _jobs[jid]['output']     = str(ex)
                 _jobs[jid]['returncode'] = -1
                 _jobs[jid]['status']     = 'failed'
+        finally:
+            with _jobs_lock:
+                mark_finished(_jobs[jid])
+                final = dict(_jobs[jid])
+            after = audit.config_hashes(out_dir)
+            try:
+                final['results'] = audit.generation_results(before, after)
+                audit.record_finish(app, audit_id, final)
+            except Exception:                       # noqa: BLE001
+                pass    # never let the log take down the job's own result
+            try:
+                # A failed run may still have written some switches'
+                # configs; only those that changed are known to be new.
+                made = {}
+                for h, fp in starting.items():
+                    name = checks.generated_name(h, tags)
+                    if fp and name in after and (
+                            final.get('returncode') == 0 or before.get(name) != after[name]):
+                        made[name] = fp
+                record_generated_from(app, username, project_name, made)
+            except Exception:                       # noqa: BLE001
+                pass
 
     threading.Thread(target=_run, args=(job_id,), daemon=True).start()
 
     return jsonify({'job_id': job_id})
 
 
-@projects_bp.route('/projects/<project_name>/generate/status/<job_id>')
+@projects_bp.route('/projects/<owner>/<project_name>/generate/status/<job_id>')
 @login_required
 def generate_status(project_name, job_id):
     with _jobs_lock:
-        job = visible_job(_jobs.get(job_id), current_user.username, project_name)
+        job = visible_job(_jobs.get(job_id), current_user.username,
+                          _project_key(project_name))
     if not job:
         abort(404)
     return jsonify(job)
 
 
-@projects_bp.route('/projects/<project_name>/generate/download/<filename>')
+@projects_bp.route('/projects/<owner>/<project_name>/generate/download/<filename>')
 @login_required
 def download_config(project_name, filename):
     app   = current_app._get_current_object()
-    gcdir = project_generated_configs_dir(app, current_user.username, project_name)
+    gcdir = project_generated_configs_dir(app, _owner(), project_name)
     fpath = os.path.join(gcdir, filename)
     if not os.path.isfile(fpath):
         abort(404)
     return send_file(fpath, as_attachment=True, download_name=filename)
 
 
-@projects_bp.route('/projects/<project_name>/generate/delete/<filename>',
+@projects_bp.route('/projects/<owner>/<project_name>/generate/delete/<filename>',
                    methods=['POST'])
 @login_required
 def delete_config(project_name, filename):
     app   = current_app._get_current_object()
-    gcdir = project_generated_configs_dir(app, current_user.username, project_name)
+    gcdir = project_generated_configs_dir(app, _owner(), project_name)
     fpath = os.path.join(gcdir, filename)
     if os.path.isfile(fpath):
         os.remove(fpath)
@@ -420,16 +680,135 @@ def delete_config(project_name, filename):
 
 
 # ---------------------------------------------------------------------------
+# History — deploys and firmware runs against this project's switches
+# ---------------------------------------------------------------------------
+
+@projects_bp.route('/projects/<owner>/<project_name>/history')
+@login_required
+def project_history(project_name):
+    app = current_app._get_current_object()
+    show_gen = request.args.get('generations', '1') != '0'
+    return render_template(
+        'project_history.html', project_name=project_name,
+        show_generations=show_gen, detail_days=audit.AUDIT_DETAIL_DAYS,
+        entries=audit.entries(app, owner=_owner(),
+                              project=project_name,
+                              include_generations=show_gen))
+
+
+# ---------------------------------------------------------------------------
+# Sharing
+# ---------------------------------------------------------------------------
+
+@projects_bp.route('/projects/<owner>/<project_name>/sharing')
+@login_required
+def sharing_page(project_name):
+    from .models import User
+    from .sso import enabled as sso_enabled
+    app = current_app._get_current_object()
+    return render_template(
+        'project_sharing.html', project_name=project_name,
+        shares=sharing.shares_for(app, _owner(), project_name),
+        levels=sharing.LEVELS, level_labels=sharing.LEVEL_LABELS,
+        usernames=[u.username for u in User.all_users(app) if u.username != _owner()],
+        groups=sharing.known_groups(app), sso_enabled=sso_enabled(app))
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/sharing/add', methods=['POST'])
+@login_required
+def share_project(project_name):
+    app = current_app._get_current_object()
+    kind = request.form.get('kind', 'user')
+    principal = request.form.get('principal', '')
+    try:
+        sharing.set_share(app, _owner(), project_name, kind, principal,
+                          request.form.get('level', ''), current_user.username)
+        flash('Shared with %s %s.' % (kind, principal.strip()), 'success')
+    except sharing.SharingError as e:
+        flash(str(e), 'error')
+    return redirect(url_for('projects.sharing_page', project_name=project_name))
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/sharing/remove', methods=['POST'])
+@login_required
+def unshare_project(project_name):
+    app = current_app._get_current_object()
+    kind, principal = request.form.get('kind', ''), request.form.get('principal', '')
+    sharing.remove_share(app, _owner(), project_name, kind, principal)
+    flash('Removed %s %s.' % (kind, principal), 'success')
+    return redirect(url_for('projects.sharing_page', project_name=project_name))
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/sharing/transfer', methods=['POST'])
+@login_required
+def transfer_project(project_name):
+    """Give the project to another user. The owner or an admin can."""
+    app = current_app._get_current_object()
+    new_owner = request.form.get('new_owner', '').strip().lower()
+    try:
+        sharing.transfer(app, _owner(), project_name, new_owner, current_user.username)
+    except sharing.SharingError as e:
+        flash(str(e), 'error')
+        return redirect(url_for('projects.sharing_page', project_name=project_name))
+    flash('%s now belongs to %s.' % (project_name, new_owner), 'success')
+    return redirect(url_for('projects.sharing_page', owner=new_owner,
+                            project_name=project_name))
+
+
+# ---------------------------------------------------------------------------
+# Checks — cross-switch mistakes, warnings only
+# ---------------------------------------------------------------------------
+
+@projects_bp.route('/projects/<owner>/<project_name>/checks')
+@login_required
+def project_checks(project_name):
+    app = current_app._get_current_object()
+    username = _owner()
+    findings = checks.run(app, username, project_name)
+    dismissed = get_project_config(app, username, project_name).get('dismissed_checks') or {}
+    active, hidden = checks.split_dismissed(findings, dismissed)
+    return render_template('project_checks.html', project_name=project_name,
+                           findings=active, dismissed=hidden,
+                           categories=checks.CATEGORIES,
+                           host_count=len(read_project_hosts(app, username, project_name)))
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/checks/dismiss', methods=['POST'])
+@login_required
+def dismiss_project_check(project_name):
+    """Dismiss a finding as it currently reads. The fingerprint is taken
+    from a fresh run rather than the request, so only a real finding can be
+    dismissed, and only in the form it has now."""
+    app = current_app._get_current_object()
+    key = str(json_body('key')['key'])
+    match = next((f for f in checks.run(app, _owner(), project_name)
+                  if f['key'] == key), None)
+    if not match:
+        return jsonify({'ok': False, 'error': 'That finding no longer applies.'}), 404
+    dismiss_check(app, _owner(), project_name, key, match['fingerprint'])
+    return jsonify({'ok': True})
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/checks/restore', methods=['POST'])
+@login_required
+def restore_project_check(project_name):
+    app = current_app._get_current_object()
+    key = str(json_body('key')['key'])
+    restore_check(app, _owner(), project_name, key)
+    return jsonify({'ok': True})
+
+
+# ---------------------------------------------------------------------------
 # Resources — Pools
 # ---------------------------------------------------------------------------
 
-@projects_bp.route('/projects/<project_name>/resources')
+@projects_bp.route('/projects/<owner>/<project_name>/resources')
 @login_required
 def resources_page(project_name):
     app  = current_app._get_current_object()
-    cfg  = get_project_config(app, current_user.username, project_name)
-    allocs = get_all_allocations(app, current_user.username, project_name)
-    hosts  = read_project_hosts(app, current_user.username, project_name)
+    cfg  = get_project_config(app, _owner(), project_name)
+    allocs = get_all_allocations(app, _owner(), project_name)
+    hosts  = read_project_hosts(app, _owner(), project_name)
     # Depth per block, so the template can indent without rebuilding the
     # tree in Jinja. Derived from the addresses, not stored.
     depths = {}
@@ -449,15 +828,15 @@ def resources_page(project_name):
                            hosts=hosts)
 
 
-@projects_bp.route('/projects/<project_name>/api/pools', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/pools', methods=['POST'])
 @login_required
 def api_add_pool(project_name):
     app  = current_app._get_current_object()
-    data = request.json
+    data = json_body()
     import uuid as _uuid
     data['id'] = 'pool_' + _uuid.uuid4().hex[:8]
     try:
-        add_pool(app, current_user.username, project_name, data)
+        add_pool(app, _owner(), project_name, data)
         return jsonify({'ok': True, 'id': data['id']})
     except PoolOverlapError as e:
         return jsonify({'ok': False, 'error': str(e), 'overlap': True}), 400
@@ -465,7 +844,7 @@ def api_add_pool(project_name):
         return jsonify({'ok': False, 'error': str(e)}), 400
 
 
-@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>/carved')
+@projects_bp.route('/projects/<owner>/<project_name>/api/pools/<pool_id>/carved')
 @login_required
 def api_carved_subnets(project_name, pool_id):
     """Carved subnets of a supernet, for the delegation picker.
@@ -473,22 +852,22 @@ def api_carved_subnets(project_name, pool_id):
     Only unassigned, undelegated subnets can be taken.
     """
     app = current_app._get_current_object()
-    carved = get_carved_subnets(app, current_user.username, project_name, pool_id)
+    carved = get_carved_subnets(app, _owner(), project_name, pool_id)
     free = [s for s, v in sort_by_address(carved)
             if v.get('status') == 'carved']
     return jsonify({'ok': True, 'subnets': free})
 
 
-@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>/blocks',
+@projects_bp.route('/projects/<owner>/<project_name>/api/pools/<pool_id>/blocks',
                    methods=['POST'])
 @login_required
 def api_carve_block(project_name, pool_id):
     """Carve a block of any size from a manual supernet."""
     app  = current_app._get_current_object()
-    data = request.json or {}
+    data = json_body()
     try:
         subnet = carve_supernet_block(
-            app, current_user.username, project_name, pool_id,
+            app, _owner(), project_name, pool_id,
             (data.get('subnet') or '').strip(),
             (data.get('vlan_id') or None),
             (data.get('vlan_name') or None))
@@ -497,22 +876,22 @@ def api_carve_block(project_name, pool_id):
         return jsonify({'ok': False, 'error': str(e)}), 400
 
 
-@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>/blocks',
+@projects_bp.route('/projects/<owner>/<project_name>/api/pools/<pool_id>/blocks',
                    methods=['DELETE'])
 @login_required
 def api_remove_block(project_name, pool_id):
     """Remove a manually carved block, returning its space."""
     app  = current_app._get_current_object()
-    data = request.json or {}
+    data = json_body()
     try:
-        remove_supernet_block(app, current_user.username, project_name,
+        remove_supernet_block(app, _owner(), project_name,
                               pool_id, (data.get('subnet') or '').strip())
         return jsonify({'ok': True})
     except ValueError as e:
         return jsonify({'ok': False, 'error': str(e)}), 400
 
 
-@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>/suggest')
+@projects_bp.route('/projects/<owner>/<project_name>/api/pools/<pool_id>/suggest')
 @login_required
 def api_suggest_block(project_name, pool_id):
     """First free block of a requested size."""
@@ -523,7 +902,7 @@ def api_suggest_block(project_name, pool_id):
         return jsonify({'ok': False, 'error': 'Invalid prefix'}), 400
     if not 1 <= want <= 32:
         return jsonify({'ok': False, 'error': 'Prefix must be 1-32'}), 400
-    subnet = suggest_free_block(app, current_user.username, project_name,
+    subnet = suggest_free_block(app, _owner(), project_name,
                                 pool_id, want,
                                 within=request.args.get('within') or None)
     if not subnet:
@@ -532,7 +911,7 @@ def api_suggest_block(project_name, pool_id):
     return jsonify({'ok': True, 'subnet': subnet})
 
 
-@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>/convert',
+@projects_bp.route('/projects/<owner>/<project_name>/api/pools/<pool_id>/convert',
                    methods=['POST'])
 @login_required
 def api_convert_supernet(project_name, pool_id):
@@ -540,21 +919,21 @@ def api_convert_supernet(project_name, pool_id):
     app = current_app._get_current_object()
     try:
         kept, dropped = convert_supernet_to_mixed(
-            app, current_user.username, project_name, pool_id)
+            app, _owner(), project_name, pool_id)
         return jsonify({'ok': True, 'kept': kept, 'dropped': len(dropped)})
     except ValueError as e:
         return jsonify({'ok': False, 'error': str(e)}), 400
 
 
-@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>',
+@projects_bp.route('/projects/<owner>/<project_name>/api/pools/<pool_id>',
                    methods=['PATCH'])
 @login_required
 def api_update_pool(project_name, pool_id):
     """Change a pool's name or range without losing its allocations."""
     app  = current_app._get_current_object()
-    data = request.json or {}
+    data = json_body()
     try:
-        pool = update_pool(app, current_user.username, project_name, pool_id,
+        pool = update_pool(app, _owner(), project_name, pool_id,
                            name=(data.get('name') or None),
                            subnet=(data.get('subnet') or None),
                            prefix=data.get('prefix'))
@@ -563,80 +942,83 @@ def api_update_pool(project_name, pool_id):
         return jsonify({'ok': False, 'error': str(e)}), 400
 
 
-@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>', methods=['DELETE'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/pools/<pool_id>', methods=['DELETE'])
 @login_required
 def api_remove_pool(project_name, pool_id):
     app = current_app._get_current_object()
-    remove_pool(app, current_user.username, project_name, pool_id)
+    remove_pool(app, _owner(), project_name, pool_id)
     return jsonify({'ok': True})
 
 
-@projects_bp.route('/projects/<project_name>/api/pools/<pool_id>/available')
+@projects_bp.route('/projects/<owner>/<project_name>/api/pools/<pool_id>/available')
 @login_required
 def api_available_ips(project_name, pool_id):
     app  = current_app._get_current_object()
-    cfg  = get_project_config(app, current_user.username, project_name)
+    cfg  = get_project_config(app, _owner(), project_name)
     pool = next((p for p in cfg.get('pools', []) if p['id'] == pool_id), None)
     if not pool:
         return jsonify([])
     if pool['type'] == 'unique':
-        return jsonify(get_available_ips(app, current_user.username, project_name, pool_id))
+        return jsonify(get_available_ips(app, _owner(), project_name, pool_id))
     if pool['type'] == 'point_to_point':
-        return jsonify(get_available_ptp_pairs(app, current_user.username, project_name, pool_id))
+        return jsonify(get_available_ptp_pairs(app, _owner(), project_name, pool_id))
     if pool['type'] == 'vlan_supernet':
-        return jsonify(get_carved_subnets(app, current_user.username, project_name, pool_id))
+        return jsonify(get_carved_subnets(app, _owner(), project_name, pool_id))
     return jsonify([])
 
 
-@projects_bp.route('/projects/<project_name>/api/allocations/unique', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/allocations/unique', methods=['POST'])
 @login_required
 def api_allocate_unique(project_name):
     app  = current_app._get_current_object()
-    data = request.json
-    allocate_unique(app, current_user.username, project_name,
+    data = json_body('pool_id', 'ip', 'hostname', 'interface')
+    allocate_unique(app, _owner(), project_name,
                     data['pool_id'], data['ip'], data['hostname'], data['interface'])
     return jsonify({'ok': True})
 
 
-@projects_bp.route('/projects/<project_name>/api/allocations/unique/release', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/allocations/unique/release', methods=['POST'])
 @login_required
 def api_release_unique(project_name):
     app  = current_app._get_current_object()
-    data = request.json
-    release_unique(app, current_user.username, project_name,
-                   data['pool_id'], data['ip'])
+    data = json_body('pool_id', 'ip')
+    release_unique(app, _owner(), project_name,
+                   data['pool_id'], data['ip'], data.get('hostname') or None)
     return jsonify({'ok': True})
 
 
-@projects_bp.route('/projects/<project_name>/api/allocations/ptp', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/allocations/ptp', methods=['POST'])
 @login_required
 def api_allocate_ptp(project_name):
     app  = current_app._get_current_object()
-    data = request.json
-    peer_ip = allocate_ptp(app, current_user.username, project_name,
-                           data['pool_id'], data['ip'],
-                           data['hostname'], data['interface'],
-                           data.get('peer_note'))
+    data = json_body('pool_id', 'ip', 'hostname', 'interface')
+    try:
+        peer_ip = allocate_ptp(app, _owner(), project_name,
+                               data['pool_id'], data['ip'],
+                               data['hostname'], data['interface'],
+                               data.get('peer_note'))
+    except ValueError as e:     # not an IP address
+        return jsonify({'ok': False, 'error': str(e)}), 400
     return jsonify({'ok': True, 'peer_ip': peer_ip})
 
 
-@projects_bp.route('/projects/<project_name>/api/allocations/ptp/release', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/allocations/ptp/release', methods=['POST'])
 @login_required
 def api_release_ptp(project_name):
     app  = current_app._get_current_object()
-    data = request.json
-    release_ptp(app, current_user.username, project_name,
+    data = json_body('pool_id', 'ip')
+    release_ptp(app, _owner(), project_name,
                 data['pool_id'], data['ip'])
     return jsonify({'ok': True})
 
 
-@projects_bp.route('/projects/<project_name>/api/allocations/vlan', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/allocations/vlan', methods=['POST'])
 @login_required
 def api_assign_vlan(project_name):
     app  = current_app._get_current_object()
-    data = request.json
+    data = json_body('pool_id', 'subnet', 'vlan_id', 'vlan_name')
     try:
-        assign_vlan_subnet(app, current_user.username, project_name,
+        assign_vlan_subnet(app, _owner(), project_name,
                            data['pool_id'], data['subnet'],
                            data['vlan_id'], data['vlan_name'],
                            data.get('hostname') or None,
@@ -646,12 +1028,12 @@ def api_assign_vlan(project_name):
         return jsonify({'ok': False, 'error': str(e)}), 400
 
 
-@projects_bp.route('/projects/<project_name>/api/allocations/vlan/release', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/allocations/vlan/release', methods=['POST'])
 @login_required
 def api_release_vlan(project_name):
     app  = current_app._get_current_object()
-    data = request.json
-    release_vlan_subnet(app, current_user.username, project_name,
+    data = json_body('pool_id', 'subnet')
+    release_vlan_subnet(app, _owner(), project_name,
                         data['pool_id'], data['subnet'])
     return jsonify({'ok': True})
 
@@ -660,19 +1042,19 @@ def api_release_vlan(project_name):
 # Resources — Common infrastructure
 # ---------------------------------------------------------------------------
 
-@projects_bp.route('/projects/<project_name>/api/common', methods=['GET'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/common', methods=['GET'])
 @login_required
 def api_get_common(project_name):
     app = current_app._get_current_object()
-    return jsonify(get_common(app, current_user.username, project_name))
+    return jsonify(get_common(app, _owner(), project_name))
 
 
-@projects_bp.route('/projects/<project_name>/api/common', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/common', methods=['POST'])
 @login_required
 def api_save_common(project_name):
     app  = current_app._get_current_object()
-    data = request.json
-    save_common(app, current_user.username, project_name, data)
+    data = json_body()
+    save_common(app, _owner(), project_name, data)
     return jsonify({'ok': True})
 
 
@@ -680,19 +1062,19 @@ def api_save_common(project_name):
 # Resources — Conventions
 # ---------------------------------------------------------------------------
 
-@projects_bp.route('/projects/<project_name>/api/conventions', methods=['GET'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/conventions', methods=['GET'])
 @login_required
 def api_get_conventions(project_name):
     app = current_app._get_current_object()
-    return jsonify(get_conventions(app, current_user.username, project_name))
+    return jsonify(get_conventions(app, _owner(), project_name))
 
 
-@projects_bp.route('/projects/<project_name>/api/conventions', methods=['POST'])
+@projects_bp.route('/projects/<owner>/<project_name>/api/conventions', methods=['POST'])
 @login_required
 def api_save_conventions(project_name):
     app  = current_app._get_current_object()
-    data = request.json
-    save_conventions(app, current_user.username, project_name, data)
+    data = json_body()
+    save_conventions(app, _owner(), project_name, data)
     return jsonify({'ok': True})
 
 
@@ -700,17 +1082,18 @@ def api_save_conventions(project_name):
 # Resources — Full allocations (read-only view)
 # ---------------------------------------------------------------------------
 
-@projects_bp.route('/projects/<project_name>/api/allocations')
+@projects_bp.route('/projects/<owner>/<project_name>/api/allocations')
 @login_required
 def api_get_allocations(project_name):
     app = current_app._get_current_object()
-    return jsonify(get_all_allocations(app, current_user.username, project_name))
+    return jsonify(get_all_allocations(app, _owner(), project_name))
 
 
 # ---------------------------------------------------------------------------
 # Deploy routes
 # ---------------------------------------------------------------------------
 from .deploy_routes import (
+    reachability,
     project_deploy,
     deploy_status,
     deployment_ips,
@@ -722,17 +1105,17 @@ from .deploy_routes import (
 )
 
 projects_bp.add_url_rule(
-    '/projects/<project_name>/deploy',
+    '/projects/<owner>/<project_name>/deploy',
     'project_deploy',
     project_deploy
 )
 projects_bp.add_url_rule(
-    '/projects/<project_name>/deployment-ips',
+    '/projects/<owner>/<project_name>/deployment-ips',
     'deployment_ips',
     deployment_ips
 )
 projects_bp.add_url_rule(
-    '/projects/<project_name>/deployment-ips/save',
+    '/projects/<owner>/<project_name>/deployment-ips/save',
     'deployment_ips_save',
     deployment_ips_save,
     methods=['POST']
@@ -746,52 +1129,58 @@ from .firmware_routes import (
 )
 
 projects_bp.add_url_rule(
-    '/projects/<project_name>/firmware',
+    '/projects/<owner>/<project_name>/firmware',
     'project_firmware',
     project_firmware
 )
 
 projects_bp.add_url_rule(
-    '/projects/<project_name>/firmware/images',
+    '/projects/<owner>/<project_name>/firmware/images',
     'firmware_images',
     firmware_images
 )
 projects_bp.add_url_rule(
-    '/projects/<project_name>/firmware/run',
+    '/projects/<owner>/<project_name>/firmware/run',
     'firmware_run',
     firmware_run,
     methods=['POST']
 )
 projects_bp.add_url_rule(
-    '/projects/<project_name>/firmware/status/<job_id>',
+    '/projects/<owner>/<project_name>/firmware/status/<job_id>',
     'firmware_status',
     firmware_status
 )
 projects_bp.add_url_rule(
-    '/projects/<project_name>/deploy/save-mapping',
+    '/projects/<owner>/<project_name>/deploy/save-mapping',
     'deploy_save_mapping',
     deploy_save_mapping,
     methods=['POST']
 )
 projects_bp.add_url_rule(
-    '/projects/<project_name>/deploy/auto-populate',
+    '/projects/<owner>/<project_name>/deploy/auto-populate',
     'deploy_auto_populate',
     deploy_auto_populate
 )
 projects_bp.add_url_rule(
-    '/projects/<project_name>/deploy/dryrun',
+    '/projects/<owner>/<project_name>/deploy/dryrun',
     'deploy_dryrun',
     deploy_dryrun,
     methods=['POST']
 )
 projects_bp.add_url_rule(
-    '/projects/<project_name>/deploy/push',
+    '/projects/<owner>/<project_name>/deploy/push',
     'deploy_push',
     deploy_push,
     methods=['POST']
 )
 projects_bp.add_url_rule(
-    '/projects/<project_name>/deploy/status/<job_id>',
+    '/projects/<owner>/<project_name>/reachability',
+    'reachability',
+    reachability,
+    methods=['POST']
+)
+projects_bp.add_url_rule(
+    '/projects/<owner>/<project_name>/deploy/status/<job_id>',
     'deploy_status',
     deploy_status
 )

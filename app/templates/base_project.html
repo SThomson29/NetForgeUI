@@ -55,12 +55,21 @@
 </style>
 
 <script>
+  /* Every project URL starts here: /projects/<owner>/<project>. */
+  const PROJECT_BASE = {{ project_base | tojson }};
+
   /* Inject project context and swap nav items after DOM ready */
   document.addEventListener('DOMContentLoaded', () => {
     const nav = document.querySelector('.sidebar-nav');
     if (!nav) return;
 
     const projectName = {{ project_name | tojson }};
+    {% if not is_own_project %}
+    const projectShared = '<div class="project-ctx-label" style="margin:6px 0 0;text-transform:none;letter-spacing:0">'
+      + esc({{ ('Shared by ' ~ project_owner ~ ' · ' ~ (project_level or 'view') ~ ' access') | tojson }}) + '</div>';
+    {% else %}
+    const projectShared = '';
+    {% endif %}
 
     nav.innerHTML = `
       <div class="project-ctx">
@@ -69,13 +78,14 @@
           <span class="dot"></span>
           ${esc(projectName)}
         </div>
+        ${projectShared}
       </div>
 
       <div class="sidebar-section" style="margin-top:8px">
         <div class="sidebar-label">Project</div>
       </div>
 
-      <a href="/projects/${encodeURIComponent(projectName)}/hosts"
+      <a href="${PROJECT_BASE}/hosts"
          class="nav-item ${'{{ "active" if request.endpoint == "projects.project_hosts" else "" }}'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="2" y="3" width="20" height="14" rx="2"/>
@@ -84,7 +94,7 @@
         Hosts
       </a>
 
-      <a href="/projects/${encodeURIComponent(projectName)}/editor"
+      <a href="${PROJECT_BASE}/editor"
          class="nav-item ${'{{ "active" if request.endpoint == "projects.project_editor" else "" }}'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -93,7 +103,7 @@
         Editor
       </a>
 
-      <a href="/projects/${encodeURIComponent(projectName)}/resources"
+      <a href="${PROJECT_BASE}/resources"
          class="nav-item ${'{{ "active" if request.endpoint == "projects.project_resources" else "" }}'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10"/>
@@ -102,7 +112,7 @@
         Resources
       </a>
 
-      <a href="/projects/${encodeURIComponent(projectName)}/generate"
+      <a href="${PROJECT_BASE}/generate"
          class="nav-item ${'{{ "active" if request.endpoint == "projects.project_generate" else "" }}'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polygon points="5 3 19 12 5 21 5 3"/>
@@ -110,7 +120,16 @@
         Generate
       </a>
 
-      <a href="/projects/${encodeURIComponent(projectName)}/deployment-ips"
+      <a href="${PROJECT_BASE}/checks"
+         class="nav-item ${'{{ "active" if request.endpoint == "projects.project_checks" else "" }}'}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 11l3 3L22 4"/>
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+        Checks
+      </a>
+
+      <a href="${PROJECT_BASE}/deployment-ips"
          class="nav-item ${'{{ "active" if request.endpoint == "projects.deployment_ips" else "" }}'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="2" y="6" width="20" height="12" rx="2"/>
@@ -120,7 +139,7 @@
         Deployment IPs
       </a>
 
-      <a href="/projects/${encodeURIComponent(projectName)}/deploy"
+      <a href="${PROJECT_BASE}/deploy"
          class="nav-item ${'{{ "active" if request.endpoint == "projects.project_deploy" else "" }}'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -130,7 +149,7 @@
         Deploy
       </a>
 
-      <a href="/projects/${encodeURIComponent(projectName)}/firmware"
+      <a href="${PROJECT_BASE}/firmware"
          class="nav-item ${'{{ "active" if request.endpoint == "projects.project_firmware" else "" }}'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="4" y="4" width="16" height="16" rx="2"/>
@@ -141,6 +160,25 @@
           <line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>
         </svg>
         Firmware
+      </a>
+
+      <a href="${PROJECT_BASE}/history"
+         class="nav-item ${'{{ "active" if request.endpoint == "projects.project_history" else "" }}'}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9"/>
+          <polyline points="12 7 12 12 15 14"/>
+        </svg>
+        History
+      </a>
+
+      <a href="${PROJECT_BASE}/sharing"
+         class="nav-item ${'{{ "active" if request.endpoint == "projects.sharing_page" else "" }}'}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="9" cy="8" r="3.5"/>
+          <path d="M2.5 20a6.5 6.5 0 0 1 13 0"/>
+          <path d="M16 4.5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"/>
+        </svg>
+        Sharing
       </a>
 
       <div class="sidebar-divider"></div>

@@ -90,10 +90,10 @@ class TestProjectsPage:
     def test_delete_project(self, auth_client):
         auth_client.post('/projects/new', data={'name': 'to-delete'},
                          follow_redirects=True)
-        res = auth_client.post('/projects/to-delete/delete', follow_redirects=True)
+        res = auth_client.post('/projects/admin/to-delete/delete', follow_redirects=True)
         assert res.status_code == 200
         # Project should not appear as a card link — flash message may contain the name
-        assert b'href="/projects/to-delete' not in res.data
+        assert b'href="/projects/admin/to-delete' not in res.data
 
 
 # ---------------------------------------------------------------------------
@@ -134,12 +134,12 @@ class TestProjectHosts:
 
     def test_hosts_page_loads(self, app, auth_client):
         self.setup_project(auth_client, app)
-        res = auth_client.get('/projects/test-proj/hosts')
+        res = auth_client.get('/projects/admin/test-proj/hosts')
         assert res.status_code == 200
 
     def test_add_host(self, app, auth_client):
         self.setup_project(auth_client, app)
-        res = auth_client.post('/projects/test-proj/hosts/add',
+        res = auth_client.post('/projects/admin/test-proj/hosts/add',
                                data={'hostname': 'Core-01', 'stacking': 'none'},
                                follow_redirects=True)
         assert res.status_code == 200
@@ -147,7 +147,7 @@ class TestProjectHosts:
 
     def test_add_host_invalid_name(self, app, auth_client):
         self.setup_project(auth_client, app)
-        res = auth_client.post('/projects/test-proj/hosts/add',
+        res = auth_client.post('/projects/admin/test-proj/hosts/add',
                                data={'hostname': 'bad host!', 'stacking': 'none'},
                                follow_redirects=True)
         assert res.status_code == 200
@@ -155,10 +155,10 @@ class TestProjectHosts:
 
     def test_add_duplicate_host(self, app, auth_client):
         self.setup_project(auth_client, app)
-        auth_client.post('/projects/test-proj/hosts/add',
+        auth_client.post('/projects/admin/test-proj/hosts/add',
                          data={'hostname': 'Core-01', 'stacking': 'none'},
                          follow_redirects=True)
-        res = auth_client.post('/projects/test-proj/hosts/add',
+        res = auth_client.post('/projects/admin/test-proj/hosts/add',
                                data={'hostname': 'Core-01', 'stacking': 'none'},
                                follow_redirects=True)
         assert res.status_code == 200
@@ -166,10 +166,10 @@ class TestProjectHosts:
 
     def test_delete_host(self, app, auth_client):
         self.setup_project(auth_client, app)
-        auth_client.post('/projects/test-proj/hosts/add',
+        auth_client.post('/projects/admin/test-proj/hosts/add',
                          data={'hostname': 'Core-01', 'stacking': 'none'},
                          follow_redirects=True)
-        res = auth_client.post('/projects/test-proj/hosts/delete/Core-01',
+        res = auth_client.post('/projects/admin/test-proj/hosts/delete/Core-01',
                                follow_redirects=True)
         assert res.status_code == 200
         # Host should not appear in the switch table — flash message may contain the name
@@ -181,7 +181,7 @@ class TestProjectHosts:
         skel = os.path.join(app.config['SKELETON_DIR'], 'aoscx')
         with open(os.path.join(skel, 'vsx.yml'), 'w') as f:
             f.write('vsx:\n  enabled: false\n  role: primary\n')
-        auth_client.post('/projects/test-proj/hosts/add',
+        auth_client.post('/projects/admin/test-proj/hosts/add',
                          data={'hostname': 'VSX-01', 'stacking': 'vsx'},
                          follow_redirects=True)
         from app.project import project_host_vars_dir
@@ -192,7 +192,7 @@ class TestProjectHosts:
 
     def test_hostname_substituted_in_general_yml(self, app, auth_client):
         self.setup_project(auth_client, app)
-        auth_client.post('/projects/test-proj/hosts/add',
+        auth_client.post('/projects/admin/test-proj/hosts/add',
                          data={'hostname': 'Core-99', 'stacking': 'none'},
                          follow_redirects=True)
         from app.project import project_host_vars_dir
@@ -238,7 +238,7 @@ class TestHostvarsAPI:
         for fname, content in files.items():
             with open(os.path.join(skel, fname), 'w') as f:
                 f.write(content)
-        auth_client.post(f'/projects/{project}/hosts/add',
+        auth_client.post(f'/projects/admin/{project}/hosts/add',
                          data={'hostname': hostname, 'stacking': 'none'},
                          follow_redirects=True)
         from app.project import project_host_vars_dir
@@ -246,7 +246,7 @@ class TestHostvarsAPI:
 
     def test_get_state_returns_json(self, app, auth_client):
         self.setup_host(app, auth_client)
-        res = auth_client.get('/projects/test-proj/api/hostvars/Core-01/state')
+        res = auth_client.get('/projects/admin/test-proj/api/hostvars/Core-01/state')
         assert res.status_code == 200
         data = json.loads(res.data)
         assert 'hostname' in data
@@ -254,7 +254,7 @@ class TestHostvarsAPI:
 
     def test_get_state_404_for_missing_host(self, app, auth_client):
         auth_client.post('/projects/new', data={'name': 'test-proj'}, follow_redirects=True)
-        res = auth_client.get('/projects/test-proj/api/hostvars/NoSuchHost/state')
+        res = auth_client.get('/projects/admin/test-proj/api/hostvars/NoSuchHost/state')
         assert res.status_code == 404
 
     def test_save_all_hostvars(self, app, auth_client):
@@ -267,7 +267,7 @@ class TestHostvarsAPI:
                         'dns:\n  domain_name: test.local\n  name_servers: []\n'},
         ]
         res = auth_client.post(
-            '/projects/test-proj/api/hostvars/Core-01/save_all',
+            '/projects/admin/test-proj/api/hostvars/Core-01/save_all',
             json=payload,
             content_type='application/json',
         )
@@ -284,7 +284,7 @@ class TestHostvarsAPI:
         self.setup_host(app, auth_client)
         payload = [{'filename': '../../etc/passwd', 'content': 'bad'}]
         res = auth_client.post(
-            '/projects/test-proj/api/hostvars/Core-01/save_all',
+            '/projects/admin/test-proj/api/hostvars/Core-01/save_all',
             json=payload,
             content_type='application/json',
         )
@@ -299,11 +299,11 @@ class TestHostvarsAPI:
                        '    disabled: true\ndns:\n  domain_name: mynet.local\n'
                        '  name_servers:\n    - 1.1.1.1\n')
         auth_client.post(
-            '/projects/test-proj/api/hostvars/Core-01/save_all',
+            '/projects/admin/test-proj/api/hostvars/Core-01/save_all',
             json=[{'filename': 'general.yml', 'content': new_content}],
             content_type='application/json',
         )
-        res = auth_client.get('/projects/test-proj/api/hostvars/Core-01/state')
+        res = auth_client.get('/projects/admin/test-proj/api/hostvars/Core-01/state')
         state = json.loads(res.data)
         assert state['timezone'] == 'Europe/Paris'
         assert state['ntpServers'] == ['10.0.0.1', '10.0.0.2']
@@ -322,7 +322,7 @@ class TestResourcesAPI:
     def test_add_unique_pool(self, auth_client):
         self.setup_project(auth_client)
         res = auth_client.post(
-            '/projects/res-proj/api/pools',
+            '/projects/admin/res-proj/api/pools',
             json={'name': 'Loopbacks', 'type': 'unique',
                   'subnet': '10.255.0.0/24', 'prefix': 32},
             content_type='application/json',
@@ -335,7 +335,7 @@ class TestResourcesAPI:
     def test_add_vlan_supernet_pool(self, auth_client):
         self.setup_project(auth_client)
         res = auth_client.post(
-            '/projects/res-proj/api/pools',
+            '/projects/admin/res-proj/api/pools',
             json={'name': 'Core VLANs', 'type': 'vlan_supernet',
                   'subnet': '10.100.0.0/16', 'carve_prefix': 24},
             content_type='application/json',
@@ -346,44 +346,44 @@ class TestResourcesAPI:
     def test_remove_pool(self, auth_client):
         self.setup_project(auth_client)
         res = auth_client.post(
-            '/projects/res-proj/api/pools',
+            '/projects/admin/res-proj/api/pools',
             json={'name': 'Loopbacks', 'type': 'unique',
                   'subnet': '10.255.0.0/24', 'prefix': 32},
             content_type='application/json',
         )
         pool_id = json.loads(res.data)['id']
-        res = auth_client.delete(f'/projects/res-proj/api/pools/{pool_id}')
+        res = auth_client.delete(f'/projects/admin/res-proj/api/pools/{pool_id}')
         assert res.status_code == 200
         assert json.loads(res.data)['ok'] is True
 
     def test_save_conventions(self, auth_client):
         self.setup_project(auth_client)
         res = auth_client.post(
-            '/projects/res-proj/api/conventions',
+            '/projects/admin/res-proj/api/conventions',
             json={'svi': {'gateway_offset': 2, 'active_gateway_offset': 253,
                           'reserved_from_start': 5}},
             content_type='application/json',
         )
         assert res.status_code == 200
-        res2 = auth_client.get('/projects/res-proj/api/conventions')
+        res2 = auth_client.get('/projects/admin/res-proj/api/conventions')
         conv = json.loads(res2.data)
         assert conv['svi']['gateway_offset'] == 2
 
     def test_save_and_get_common(self, auth_client):
         self.setup_project(auth_client)
         auth_client.post(
-            '/projects/res-proj/api/common',
+            '/projects/admin/res-proj/api/common',
             json={'dns_servers': ['10.0.0.53'], 'ntp_servers': ['10.0.0.1'],
                   'dhcp_servers': [], 'radius_servers': [], 'syslog_servers': []},
             content_type='application/json',
         )
-        res = auth_client.get('/projects/res-proj/api/common')
+        res = auth_client.get('/projects/admin/res-proj/api/common')
         common = json.loads(res.data)
         assert common['dns_servers'] == ['10.0.0.53']
 
     def test_allocations_endpoint(self, auth_client):
         self.setup_project(auth_client)
-        res = auth_client.get('/projects/res-proj/api/allocations')
+        res = auth_client.get('/projects/admin/res-proj/api/allocations')
         assert res.status_code == 200
         data = json.loads(res.data)
         assert 'unique' in data
@@ -418,20 +418,20 @@ class TestGenerate:
             if not os.path.exists(fpath):
                 with open(fpath, 'w') as f:
                     f.write('')
-        auth_client.post('/projects/gen-proj/hosts/add',
+        auth_client.post('/projects/admin/gen-proj/hosts/add',
                          data={'hostname': 'Core-01', 'stacking': 'none'},
                          follow_redirects=True)
 
     def test_generate_page_loads(self, app, auth_client):
         self.setup_project_with_host(app, auth_client)
-        res = auth_client.get('/projects/gen-proj/generate')
+        res = auth_client.get('/projects/admin/gen-proj/generate')
         assert res.status_code == 200
 
     def test_run_generate_returns_job_id(self, app, auth_client):
         self.setup_project_with_host(app, auth_client)
         with patch('app.docker_runner.run_generate', return_value=(0, 'Playbook complete.\n')):
             res = auth_client.post(
-                '/projects/gen-proj/generate/run',
+                '/projects/admin/gen-proj/generate/run',
                 json={'limit': '', 'tags': ''},
                 content_type='application/json',
             )
@@ -443,7 +443,7 @@ class TestGenerate:
         self.setup_project_with_host(app, auth_client)
         with patch('app.docker_runner.run_generate', return_value=(0, 'Done\n')):
             run_res = auth_client.post(
-                '/projects/gen-proj/generate/run',
+                '/projects/admin/gen-proj/generate/run',
                 json={'limit': 'Core-01', 'tags': ''},
                 content_type='application/json',
             )
@@ -452,19 +452,19 @@ class TestGenerate:
         import time
         time.sleep(0.2)  # Give the thread a moment to complete
 
-        status_res = auth_client.get(f'/projects/gen-proj/generate/status/{job_id}')
+        status_res = auth_client.get(f'/projects/admin/gen-proj/generate/status/{job_id}')
         assert status_res.status_code == 200
         status = json.loads(status_res.data)
         assert status['status'] in ('running', 'done', 'failed')
 
     def test_generate_status_404_for_unknown_job(self, app, auth_client):
         self.setup_project_with_host(app, auth_client)
-        res = auth_client.get('/projects/gen-proj/generate/status/no-such-job')
+        res = auth_client.get('/projects/admin/gen-proj/generate/status/no-such-job')
         assert res.status_code == 404
 
     def test_download_all_404_when_no_configs(self, app, auth_client):
         self.setup_project_with_host(app, auth_client)
-        res = auth_client.get('/projects/gen-proj/download_all')
+        res = auth_client.get('/projects/admin/gen-proj/download_all')
         assert res.status_code == 404
 
     def test_download_all_returns_zip(self, app, auth_client):
@@ -474,7 +474,7 @@ class TestGenerate:
         os.makedirs(gcdir, exist_ok=True)
         with open(os.path.join(gcdir, 'Core-01_FULL.ios'), 'w') as f:
             f.write('! config\nhostname Core-01\n')
-        res = auth_client.get('/projects/gen-proj/download_all')
+        res = auth_client.get('/projects/admin/gen-proj/download_all')
         assert res.status_code == 200
         assert res.content_type == 'application/zip'
 
@@ -486,6 +486,6 @@ class TestGenerate:
         fname = 'Core-01_FULL.ios'
         with open(os.path.join(gcdir, fname), 'w') as f:
             f.write('! config\n')
-        res = auth_client.post(f'/projects/gen-proj/generate/delete/{fname}')
+        res = auth_client.post(f'/projects/admin/gen-proj/generate/delete/{fname}')
         assert res.status_code == 200
         assert not os.path.exists(os.path.join(gcdir, fname))

@@ -1,0 +1,128 @@
+{% extends "base_project.html" %}
+{% block title %}Sharing — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}Sharing{% endblock %}
+
+{% block project_extra_head %}
+<style>
+.share-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+             border-bottom: 1px solid var(--border-subtle); font-size: 13px; }
+.share-row:last-child { border-bottom: none; }
+.share-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.share-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+.share-form .fld { margin: 0; }
+.level-help { font-size: 12px; color: var(--text-secondary); margin: 0 0 16px; line-height: 1.6; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% set can_manage = project_level == 'owner' %}
+
+<p class="level-help">
+  <strong>View</strong> reads everything and downloads configs.
+  <strong>Edit</strong> also saves switches, changes Resources and generates.
+  <strong>Deploy</strong> also runs dry runs, pushes, firmware and reachability checks.
+  Only the owner can share, transfer or delete the project.
+</p>
+
+<div class="card mb-4">
+  <div class="card-header">Who has access</div>
+  <div class="share-row">
+    <span class="share-name"><strong>{{ project_owner }}</strong></span>
+    <span class="badge badge-blue">Owner</span>
+  </div>
+  {% for s in shares %}
+  <div class="share-row">
+    <span class="share-name">
+      {% if s.kind == 'group' %}<span class="badge badge-none">group</span>{% endif %}
+      {{ s.principal }}
+    </span>
+    {% if can_manage %}
+    <form method="post" action="{{ url_for('projects.share_project', project_name=project_name) }}" style="display:flex;gap:6px">
+      <input type="hidden" name="kind" value="{{ s.kind }}">
+      <input type="hidden" name="principal" value="{{ s.principal }}">
+      <select class="form-select" name="level" onchange="this.form.submit()" style="height:28px;font-size:12px">
+        {% for lv in levels %}<option value="{{ lv }}" {{ 'selected' if lv == s.level }}>{{ level_labels[lv] }}</option>{% endfor %}
+      </select>
+    </form>
+    <form method="post" action="{{ url_for('projects.unshare_project', project_name=project_name) }}">
+      <input type="hidden" name="kind" value="{{ s.kind }}">
+      <input type="hidden" name="principal" value="{{ s.principal }}">
+      <button class="btn btn-sm btn-ghost">Remove</button>
+    </form>
+    {% else %}
+    <span class="badge badge-neutral">{{ level_labels[s.level] }}</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% if not shares %}
+  <div class="share-row text-secondary">Not shared with anyone.</div>
+  {% endif %}
+</div>
+
+{% if can_manage %}
+<div class="card mb-4">
+  <div class="card-header">Share</div>
+  <form method="post" action="{{ url_for('projects.share_project', project_name=project_name) }}" class="share-form">
+    {% if sso_enabled %}
+    <div class="fld">
+      <label class="lbl">With</label>
+      <select class="form-select" name="kind" id="share-kind" onchange="pickList()">
+        <option value="user">User</option>
+        <option value="group">SSO group</option>
+      </select>
+    </div>
+    {% else %}
+    <input type="hidden" name="kind" value="user">
+    {% endif %}
+    <div class="fld" style="flex:1;min-width:200px">
+      <label class="lbl" id="principal-label">Username</label>
+      <input class="form-input" name="principal" id="principal" list="user-list" required autocomplete="off">
+    </div>
+    <div class="fld">
+      <label class="lbl">Access</label>
+      <select class="form-select" name="level">
+        {% for lv in levels %}<option value="{{ lv }}">{{ level_labels[lv] }}</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn btn-primary">Share</button>
+  </form>
+  {% if sso_enabled %}
+  <p class="text-sm text-secondary" style="margin-top:10px">
+    Groups are matched against what the identity provider sent at each person's
+    last SSO sign-in. Entra ID sends group Object IDs.
+  </p>
+  {% endif %}
+  <datalist id="user-list">{% for u in usernames %}<option value="{{ u }}">{% endfor %}</datalist>
+  <datalist id="group-list">{% for gname in groups %}<option value="{{ gname }}">{% endfor %}</datalist>
+</div>
+{% endif %}
+
+{% if can_manage or current_user.is_admin %}
+<div class="card">
+  <div class="card-header">Transfer ownership</div>
+  <p class="text-sm text-secondary" style="margin-bottom:10px">
+    Moves the project, its shares and its history to another user.
+    {% if project_owner == current_user.username %}You keep edit access.{% else %}{{ project_owner }} keeps edit access.{% endif %}
+  </p>
+  <form method="post" action="{{ url_for('projects.transfer_project', project_name=project_name) }}" class="share-form"
+        onsubmit='return confirm("Transfer " + {{ project_name|tojson }} + " to " + this.new_owner.value + "?")'>
+    <div class="fld" style="flex:1;min-width:200px">
+      <label class="lbl">New owner</label>
+      <input class="form-input" name="new_owner" list="user-list" required autocomplete="off">
+    </div>
+    <button class="btn">Transfer</button>
+  </form>
+  {% if not can_manage %}
+  <datalist id="user-list">{% for u in usernames %}<option value="{{ u }}">{% endfor %}</datalist>
+  {% endif %}
+</div>
+{% endif %}
+
+<script>
+function pickList() {
+  const group = document.getElementById('share-kind').value === 'group';
+  document.getElementById('principal').setAttribute('list', group ? 'group-list' : 'user-list');
+  document.getElementById('principal-label').textContent = group ? 'Group' : 'Username';
+}
+</script>
+{% endblock %}

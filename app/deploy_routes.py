@@ -7,22 +7,20 @@ Handles:
   - Config push with checkpoint + rollback
 """
 
-import json
 import os
 import re
 import uuid
 import threading
-import subprocess
-import tempfile
-import glob
 import yaml
 
-from .ansible_safe import dump_unsafe, validate_targets
+from .ansible_safe import validate_targets
+from . import audit, checks
+from .api import json_body, bad_request
+from .jobs import run_ansible_job, prune_finished, mark_finished, busy_hosts
 from .security import job_tag, visible_job
-from datetime import datetime
 from flask import (
-    render_template, request, jsonify,
-    current_app, abort
+    render_template, jsonify,
+    current_app, abort, g
 )
 from flask_login import login_required, current_user
 
@@ -163,93 +161,31 @@ def _run_playbook_job(job_id, playbook_name, repo_dir, ansible_bin,
                       inventory_dict, extra_vars, limit_hosts=None):
     """Run a deploy playbook, streaming output into the job store.
 
-    Runs in a worker thread, so every config value it needs is passed in —
-    there is no application context here.
+    The dry run adds --check --diff: the playbook itself is the same shape
+    as a push, and check mode is what keeps it from changing the switch.
     """
-    def _set(**kw):
-        with _deploy_jobs_lock:
-            _deploy_jobs[job_id].update(kw)
-
-    def _append(line):
-        with _deploy_jobs_lock:
-            _deploy_jobs[job_id]['output'] += line
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        inv_path = os.path.join(tmpdir, 'inventory.yml')
-        with open(inv_path, 'w') as f:
-            dump_unsafe(inventory_dict, f)
-
-        results_dir = os.path.join(tmpdir, 'results')
-        os.makedirs(results_dir, exist_ok=True)
-        extra_vars = dict(extra_vars)
-        extra_vars['results_file'] = results_dir
-
-        vars_path = os.path.join(tmpdir, 'extra_vars.yml')
-        with open(vars_path, 'w') as f:
-            dump_unsafe(extra_vars, f)
-
-        playbook_path = os.path.join(repo_dir, 'playbooks', playbook_name)
-        if not os.path.isfile(playbook_path):
-            _set(status='failed', returncode=-1,
-                 output='Playbook not found: %s' % playbook_path)
-            return
-
-        cmd = [ansible_bin, playbook_path, '-i', inv_path, '-e', '@' + vars_path]
-        if limit_hosts:
-            cmd.extend(['--limit', ','.join(limit_hosts)])
-        if 'dryrun' in playbook_name:
-            cmd.extend(['--check', '--diff'])
-
-        env = os.environ.copy()
-        env['ANSIBLE_HOST_KEY_CHECKING'] = 'False'
-        env['ANSIBLE_NOCOLOR'] = '1'
-        env['PYTHONUNBUFFERED'] = '1'
-
-        _set(status='running')
-
-        try:
-            proc = subprocess.Popen(
-                cmd, cwd=repo_dir, env=env,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
-            )
-        except FileNotFoundError:
-            _set(status='failed', returncode=-1,
-                 output='ansible-playbook not found. Is ansible-core '
-                        'installed in this image?')
-            return
-
-        timer = threading.Timer(DEPLOY_TIMEOUT_SECS, proc.kill)
-        timer.start()
-        try:
-            for line in proc.stdout:
-                _append(line)
-            proc.wait()
-        finally:
-            timer.cancel()
-
-        results = []
-        for rf in sorted(glob.glob(os.path.join(results_dir, '*.json'))):
-            try:
-                with open(rf) as f:
-                    results.append(json.load(f))
-            except (json.JSONDecodeError, IOError):
-                pass
-
-        rc = proc.returncode
-        _set(status='done' if rc == 0 else 'failed',
-             returncode=rc, results=results)
+    run_ansible_job(
+        _deploy_jobs, _deploy_jobs_lock, job_id,
+        playbook_path=os.path.join(repo_dir, 'playbooks', playbook_name),
+        repo_dir=repo_dir, ansible_bin=ansible_bin,
+        inventory=inventory_dict, extra_vars=extra_vars,
+        limit_hosts=limit_hosts,
+        extra_args=['--check', '--diff'] if 'dryrun' in playbook_name else [],
+        timeout_secs=DEPLOY_TIMEOUT_SECS,
+    )
 
 
 def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts,
-                      owner=None, project_name=None):
+                      owner=None, project_name=None, audit_id=None):
     """Kick off a playbook in the background. Returns the job id."""
+    prune_finished(_deploy_jobs, _deploy_jobs_lock)
     job_id = str(uuid.uuid4())
     with _deploy_jobs_lock:
         _deploy_jobs[job_id] = {
             'status': 'starting', 'output': '',
             'returncode': None, 'results': [],
             'playbook': playbook_name,
+            '_hosts': list(limit_hosts or ()),
             **job_tag(owner, project_name),
         }
 
@@ -265,92 +201,35 @@ def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts,
                 _deploy_jobs[job_id]['status'] = 'failed'
                 _deploy_jobs[job_id]['returncode'] = -1
                 _deploy_jobs[job_id]['output'] += '\n%s\n' % ex
+        finally:
+            with _deploy_jobs_lock:
+                mark_finished(_deploy_jobs[job_id])
+                final = dict(_deploy_jobs[job_id])
+            try:
+                audit.record_finish(app, audit_id, final)
+            except Exception:                       # noqa: BLE001
+                pass    # never let the log take down the job's own result
 
     threading.Thread(target=_worker, daemon=True).start()
     return job_id
 
 
-def _run_playbook(playbook_name, inventory_dict, extra_vars, limit_hosts=None):
-    """
-    Run an Ansible playbook.
+def _project_key(project_name):
+    return '%s/%s' % (g.project_owner, project_name)
 
-    Returns (success: bool, output: str, results: list[dict])
-    """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Write inventory
-        inv_path = os.path.join(tmpdir, 'inventory.yml')
-        with open(inv_path, 'w') as f:
-            dump_unsafe(inventory_dict, f)
 
-        # Write extra vars
-        extra_vars['results_file'] = os.path.join(tmpdir, 'results')
-        os.makedirs(extra_vars['results_file'], exist_ok=True)
-
-        vars_path = os.path.join(tmpdir, 'extra_vars.yml')
-        with open(vars_path, 'w') as f:
-            dump_unsafe(extra_vars, f)
-
-        # Locate playbook. The config key is CONFIGGEN_REPO — CONFIGGEN_DIR
-        # has never existed, so this silently fell back to the relative string
-        # 'configgen', which only resolves if the process happens to be running
-        # from /app/service. Under gunicorn it does not.
-        repo_dir = current_app.config['CONFIGGEN_REPO']
-        playbook_path = os.path.join(repo_dir, 'playbooks', playbook_name)
-
-        if not os.path.exists(playbook_path):
-            return False, f'Playbook not found: {playbook_path}', []
-
-        # Build command
-        cmd = [
-            'ansible-playbook',
-            playbook_path,
-            '-i', inv_path,
-            '-e', f'@{vars_path}',
-        ]
-        if limit_hosts:
-            cmd.extend(['--limit', ','.join(limit_hosts)])
-
-        # For dry run playbook, add check+diff flags
-        if 'dryrun' in playbook_name:
-            cmd.extend(['--check', '--diff'])
-
-        env = os.environ.copy()
-        env['ANSIBLE_HOST_KEY_CHECKING'] = 'False'
-        env['ANSIBLE_NOCOLOR'] = '1'
-        # Deliberately the default stdout callback. The 'json' callback lives
-        # in ansible.posix, not ansible-core, so requesting it fails to load;
-        # and nothing here parses stdout anyway — structured per-host data
-        # comes from the result files written by the playbook. The default
-        # callback also gives a readable log rather than a wall of JSON.
-
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300,
-                env=env,
-                cwd=repo_dir
-            )
-        except subprocess.TimeoutExpired:
-            return False, 'Playbook execution timed out (5 min limit)', []
-
-        # Collect per-host result files
-        results = []
-        result_files = glob.glob(os.path.join(
-            extra_vars['results_file'], '*.json'
-        ))
-        for rf in result_files:
-            try:
-                with open(rf) as f:
-                    results.append(json.load(f))
-            except (json.JSONDecodeError, IOError):
-                pass
-
-        success = proc.returncode == 0
-        output = proc.stdout + proc.stderr
-
-        return success, output, results
+def switches_in_use(project_key, hostnames):
+    """A message naming any of hostnames a push or firmware upgrade in
+    this project is still working on, or None. Two at once against one
+    switch would fight over its checkpoint and rollback."""
+    from .firmware_routes import _fw_jobs, _fw_jobs_lock
+    busy = busy_hosts(_deploy_jobs, _deploy_jobs_lock, project_key, hostnames,
+                      lambda job: job.get('playbook') == 'deploy_push.yml')
+    busy.update(busy_hosts(_fw_jobs, _fw_jobs_lock, project_key, hostnames))
+    if not busy:
+        return None
+    return 'Already being changed: %s. Try again when that finishes.' % ', '.join(
+        '%s (started by %s)' % (h, who) for h, who in sorted(busy.items()))
 
 
 # ── Routes ─────────────────────────────────────────────────
@@ -359,7 +238,7 @@ def _run_playbook(playbook_name, inventory_dict, extra_vars, limit_hosts=None):
 def project_deploy(project_name):
     """Render the deploy tab."""
     app = current_app._get_current_object()
-    username = current_user.username
+    username = g.project_owner
     mapping = _load_mapping(app, username, project_name)
     config_dir = project_generated_configs_dir(app, username, project_name)
 
@@ -379,7 +258,8 @@ def project_deploy(project_name):
         'project_deploy.html',
         project_name=project_name,
         mappings=enriched,
-        settings=mapping.get('settings', {})
+        settings=mapping.get('settings', {}),
+        checks_summary=checks.summary(app, username, project_name),
     )
 
 
@@ -392,7 +272,7 @@ def deployment_ips(project_name):
     the same mapping.
     """
     app = current_app._get_current_object()
-    mapping = _load_mapping(app, current_user.username, project_name)
+    mapping = _load_mapping(app, g.project_owner, project_name)
     return render_template(
         'project_deployment_ips.html',
         project_name=project_name,
@@ -404,15 +284,17 @@ def deployment_ips(project_name):
 def deployment_ips_save(project_name):
     """Persist the mapping, leaving other settings untouched."""
     app = current_app._get_current_object()
-    username = current_user.username
-    body = request.json or {}
+    username = g.project_owner
+    body = json_body()
 
     rows = body.get('mappings') or []
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        bad_request('mappings must be a list of objects.')
     cleaned = []
     seen = set()
     for r in rows:
-        name = (r.get('hostname') or '').strip()
-        ip = (r.get('mgmt_ip') or '').strip()
+        name = str(r.get('hostname') or '').strip()
+        ip = str(r.get('mgmt_ip') or '').strip()
         if not name or name in seen:
             continue
         seen.add(name)
@@ -432,9 +314,7 @@ def deployment_ips_save(project_name):
 @login_required
 def deploy_save_mapping(project_name):
     """Save the mapping table."""
-    data = request.get_json()
-    if not data:
-        return jsonify(ok=False, error='No data'), 400
+    data = json_body()
 
     rows = data.get('mappings', [])
     problems = validate_targets(rows)
@@ -445,7 +325,7 @@ def deploy_save_mapping(project_name):
         return jsonify(ok=False, error=_ROLLBACK_ERROR), 400
 
     app = current_app._get_current_object()
-    username = current_user.username
+    username = g.project_owner
     mapping_data = {
         # Only the fields the mapping holds — nothing else from the request.
         'hosts': [{'hostname': str(r.get('hostname')),
@@ -464,7 +344,7 @@ def deploy_auto_populate(project_name):
     from .utils import read_project_hosts
 
     app = current_app._get_current_object()
-    username = current_user.username
+    username = g.project_owner
 
     try:
         hosts = read_project_hosts(app, username, project_name)
@@ -489,9 +369,7 @@ def deploy_auto_populate(project_name):
 @login_required
 def deploy_dryrun(project_name):
     """Run dry-run playbook — returns diffs per host."""
-    data = request.get_json()
-    if not data:
-        return jsonify(ok=False, error='No data'), 400
+    data = json_body()
 
     hosts = data.get('hosts', [])
     username = data.get('username', '')
@@ -506,7 +384,7 @@ def deploy_dryrun(project_name):
 
     app = current_app._get_current_object()
     config_dir = project_generated_configs_dir(
-        app, current_user.username, project_name
+        app, g.project_owner, project_name
     )
     hosts, problems = _resolve_config_files(hosts, config_dir)
     if problems:
@@ -519,12 +397,40 @@ def deploy_dryrun(project_name):
         'deploy_password': password,
     }
 
+    audit_id = audit.record_start(
+        app, username=current_user.username, owner=g.project_owner,
+        project=project_name,
+        action='deploy_dryrun', switch_user=username,
+        targets=audit.deploy_targets(hosts, config_dir), params={})
     job_id = _start_deploy_job(
         app, 'deploy_dryrun.yml', inventory, extra_vars,
         limit_hosts=[h['hostname'] for h in hosts],
-        owner=current_user.username, project_name=project_name,
+        owner=current_user.username, project_name=_project_key(project_name),
+        audit_id=audit_id,
     )
     return jsonify(ok=True, job_id=job_id)
+
+
+@login_required
+def reachability(project_name):
+    """TCP-probe the mapped switches on the ports deploy and firmware use.
+
+    POST {"hosts": [hostname, ...]}; omitted or empty means every mapped
+    switch. Addresses are looked up in the saved mapping — the request
+    names switches, never addresses.
+    """
+    from . import reachability as reach
+    body = json_body()
+    wanted = body.get('hosts') or []
+    if not isinstance(wanted, list):
+        bad_request('hosts must be a list of hostnames.')
+    mapping = _load_mapping(current_app._get_current_object(),
+                            g.project_owner, project_name)
+    hosts = [h for h in mapping.get('hosts', [])
+             if isinstance(h, dict) and (not wanted or h.get('hostname') in wanted)]
+    # The mapping may predate validation.
+    hosts = [h for h in hosts if not validate_targets([h])]
+    return jsonify(ok=True, results=reach.check(hosts))
 
 
 @login_required
@@ -532,7 +438,7 @@ def deploy_status(project_name, job_id):
     """Poll a running or finished deploy job."""
     with _deploy_jobs_lock:
         snapshot = visible_job(_deploy_jobs.get(job_id),
-                               current_user.username, project_name)
+                               current_user.username, _project_key(project_name))
     if not snapshot:
         abort(404)
     return jsonify(snapshot)
@@ -541,9 +447,7 @@ def deploy_status(project_name, job_id):
 @login_required
 def deploy_push(project_name):
     """Run deploy playbook — checkpoint, push, verify, confirm."""
-    data = request.get_json()
-    if not data:
-        return jsonify(ok=False, error='No data'), 400
+    data = json_body()
 
     hosts = data.get('hosts', [])
     username = data.get('username', '')
@@ -561,11 +465,14 @@ def deploy_push(project_name):
 
     app = current_app._get_current_object()
     config_dir = project_generated_configs_dir(
-        app, current_user.username, project_name
+        app, g.project_owner, project_name
     )
     hosts, problems = _resolve_config_files(hosts, config_dir)
     if problems:
         return jsonify(ok=False, error='; '.join(problems)), 400
+    busy = switches_in_use(_project_key(project_name), [h['hostname'] for h in hosts])
+    if busy:
+        return jsonify(ok=False, error=busy), 409
     inventory = _build_inventory(hosts, username, password)
 
     extra_vars = {
@@ -575,9 +482,16 @@ def deploy_push(project_name):
         'rollback_timeout': rollback_timeout,
     }
 
+    audit_id = audit.record_start(
+        app, username=current_user.username, owner=g.project_owner,
+        project=project_name,
+        action='deploy_push', switch_user=username,
+        targets=audit.deploy_targets(hosts, config_dir),
+        params={'rollback_timeout': rollback_timeout})
     job_id = _start_deploy_job(
         app, 'deploy_push.yml', inventory, extra_vars,
         limit_hosts=[h['hostname'] for h in hosts],
-        owner=current_user.username, project_name=project_name,
+        owner=current_user.username, project_name=_project_key(project_name),
+        audit_id=audit_id,
     )
     return jsonify(ok=True, job_id=job_id)

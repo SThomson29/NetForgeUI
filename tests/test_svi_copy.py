@@ -24,7 +24,7 @@ def page(app, auth_client):
         base = project_host_vars_dir(app, 'admin', 'xs')
         for host in ('CTY-Core-01', 'RIV-Core-01'):
             os.makedirs(os.path.join(base, host), exist_ok=True)
-    return auth_client.get('/projects/xs/editor?host=RIV-Core-01').data.decode()
+    return auth_client.get('/projects/admin/xs/editor?host=RIV-Core-01').data.decode()
 
 
 def _function(body, name):

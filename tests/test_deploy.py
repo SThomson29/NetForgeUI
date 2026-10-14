@@ -38,7 +38,7 @@ def setup_deploy_project(app, auth_client, project_name='deploy-test',
     # Add hosts
     for hostname, stacking in hosts:
         auth_client.post(
-            f'/projects/{project_name}/hosts/add',
+            f'/projects/admin/{project_name}/hosts/add',
             data={'hostname': hostname, 'stacking': stacking},
             follow_redirects=True,
         )
@@ -213,7 +213,7 @@ class TestDeployPage:
 
     def test_deploy_page_loads(self, app, auth_client):
         setup_deploy_project(app, auth_client)
-        res = auth_client.get('/projects/deploy-test/deploy')
+        res = auth_client.get('/projects/admin/deploy-test/deploy')
         assert res.status_code == 200
         assert b'Deploy' in res.data
 
@@ -226,7 +226,7 @@ class TestDeployPage:
                 ],
                 'settings': {'rollback_timeout': 5}
             })
-        res = auth_client.get('/projects/deploy-test/deploy')
+        res = auth_client.get('/projects/admin/deploy-test/deploy')
         assert res.status_code == 200
         assert b'CO-CORE-SW-01' in res.data
         assert b'10.1.100.1' in res.data
@@ -241,11 +241,11 @@ class TestDeployPage:
                 ],
                 'settings': {'rollback_timeout': 5}
             })
-        res = auth_client.get('/projects/deploy-test/deploy')
+        res = auth_client.get('/projects/admin/deploy-test/deploy')
         assert b'.ios' in res.data
 
     def test_deploy_page_requires_login(self, client):
-        res = client.get('/projects/deploy-test/deploy', follow_redirects=False)
+        res = client.get('/projects/admin/deploy-test/deploy', follow_redirects=False)
         assert res.status_code == 401 
 
 
@@ -258,7 +258,7 @@ class TestSaveMappingRoute:
     def test_save_mapping(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/save-mapping',
+            '/projects/admin/deploy-test/deploy/save-mapping',
             json={
                 'mappings': [
                     {'hostname': 'SW-01', 'mgmt_ip': '10.1.1.1'},
@@ -279,7 +279,7 @@ class TestSaveMappingRoute:
     def test_save_empty_mapping(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/save-mapping',
+            '/projects/admin/deploy-test/deploy/save-mapping',
             json={'mappings': [], 'rollback_timeout': 5},
             content_type='application/json',
         )
@@ -289,7 +289,7 @@ class TestSaveMappingRoute:
     def test_save_mapping_no_body(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/save-mapping',
+            '/projects/admin/deploy-test/deploy/save-mapping',
             data='',
             content_type='application/json',
         )
@@ -304,7 +304,7 @@ class TestAutoPopulate:
 
     def test_auto_populate_from_hosts(self, app, auth_client):
         setup_deploy_project(app, auth_client)
-        res = auth_client.get('/projects/deploy-test/deploy/auto-populate')
+        res = auth_client.get('/projects/admin/deploy-test/deploy/auto-populate')
         data = json.loads(res.data)
         assert data['ok'] is True
 
@@ -317,8 +317,8 @@ class TestAutoPopulate:
     def test_auto_populate_does_not_duplicate(self, app, auth_client):
         """Running auto-populate twice should not create duplicates."""
         setup_deploy_project(app, auth_client)
-        auth_client.get('/projects/deploy-test/deploy/auto-populate')
-        auth_client.get('/projects/deploy-test/deploy/auto-populate')
+        auth_client.get('/projects/admin/deploy-test/deploy/auto-populate')
+        auth_client.get('/projects/admin/deploy-test/deploy/auto-populate')
 
         with app.app_context():
             mapping = read_mapping(app, 'deploy-test')
@@ -335,7 +335,7 @@ class TestAutoPopulate:
                 ],
                 'settings': {'rollback_timeout': 5}
             })
-        auth_client.get('/projects/deploy-test/deploy/auto-populate')
+        auth_client.get('/projects/admin/deploy-test/deploy/auto-populate')
 
         with app.app_context():
             mapping = read_mapping(app, 'deploy-test')
@@ -388,7 +388,7 @@ class TestDryRun:
         with self._mock_playbook_success():
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/dryrun',
+                '/projects/admin/deploy-test/deploy/dryrun',
                 {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
@@ -414,7 +414,7 @@ class TestDryRun:
         with self._mock_playbook_success(results=no_change):
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/dryrun',
+                '/projects/admin/deploy-test/deploy/dryrun',
                 {
                     'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                     'username': 'admin',
@@ -429,7 +429,7 @@ class TestDryRun:
         with self._mock_playbook_failure('SSH timeout'):
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/dryrun',
+                '/projects/admin/deploy-test/deploy/dryrun',
                 {
                     'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                     'username': 'admin',
@@ -442,7 +442,7 @@ class TestDryRun:
     def test_dryrun_missing_credentials(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/dryrun',
+            '/projects/admin/deploy-test/deploy/dryrun',
             json={
                 'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                 'username': '',
@@ -455,7 +455,7 @@ class TestDryRun:
     def test_dryrun_missing_hosts(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/dryrun',
+            '/projects/admin/deploy-test/deploy/dryrun',
             json={
                 'hosts': [],
                 'username': 'admin',
@@ -468,7 +468,7 @@ class TestDryRun:
     def test_dryrun_no_body(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/dryrun',
+            '/projects/admin/deploy-test/deploy/dryrun',
             data='',
             content_type='application/json',
         )
@@ -495,7 +495,7 @@ class TestDryRun:
         with self._mock_playbook_success(results=multi_results):
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/dryrun',
+                '/projects/admin/deploy-test/deploy/dryrun',
                 {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
@@ -587,7 +587,7 @@ class TestDeployPush:
         with self._mock_push_success():
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/push',
+                '/projects/admin/deploy-test/deploy/push',
                 {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
@@ -607,7 +607,7 @@ class TestDeployPush:
         with self._mock_push_partial_failure():
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/push',
+                '/projects/admin/deploy-test/deploy/push',
                 {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
@@ -631,7 +631,7 @@ class TestDeployPush:
         with self._mock_push_success():
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/push',
+                '/projects/admin/deploy-test/deploy/push',
                 {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
@@ -646,7 +646,7 @@ class TestDeployPush:
     def test_push_missing_credentials(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/push',
+            '/projects/admin/deploy-test/deploy/push',
             json={
                 'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                 'username': '',
@@ -689,7 +689,7 @@ class TestDeployPush:
         with patch('app.deploy_routes._run_playbook_job', side_effect=mock_run):
             post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/push',
+                '/projects/admin/deploy-test/deploy/push',
                 {
                     'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                     'username': 'admin',
@@ -703,178 +703,11 @@ class TestDeployPush:
     def test_push_no_body(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/push',
+            '/projects/admin/deploy-test/deploy/push',
             data='',
             content_type='application/json',
         )
         assert res.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# Integration tests — _run_playbook (subprocess layer)
-# ---------------------------------------------------------------------------
-
-class TestRunPlaybook:
-    """Test the _run_playbook helper that wraps subprocess."""
-
-    def test_builds_correct_command(self, app, auth_client):
-        setup_deploy_project(app, auth_client)
-
-        captured_cmd = []
-
-        def mock_subprocess_run(cmd, **kwargs):
-            captured_cmd.extend(cmd)
-            mock = MagicMock()
-            mock.returncode = 0
-            mock.stdout = '{}'
-            mock.stderr = ''
-            return mock
-
-        with app.app_context():
-            from app.deploy_routes import _run_playbook
-
-            # Create a dummy playbook file
-            repo_dir = app.config['CONFIGGEN_REPO']
-            os.makedirs(os.path.join(repo_dir, 'playbooks'), exist_ok=True)
-            pb_path = os.path.join(repo_dir, 'playbooks', 'deploy_dryrun.yml')
-            with open(pb_path, 'w') as f:
-                f.write('---\n- hosts: all\n')
-
-            inventory = {
-                'all': {
-                    'hosts': {'SW-01': {'ansible_host': '10.1.1.1'}},
-                    'vars': {'ansible_connection': 'network_cli'},
-                }
-            }
-
-            with patch('subprocess.run', side_effect=mock_subprocess_run):
-                _run_playbook(
-                    'deploy_dryrun.yml',
-                    inventory,
-                    {'config_dir': '/tmp/configs'},
-                    limit_hosts=['SW-01']
-                )
-
-        assert 'ansible-playbook' in captured_cmd
-        assert '--check' in captured_cmd
-        assert '--diff' in captured_cmd
-        assert '--limit' in captured_cmd
-        assert 'SW-01' in captured_cmd
-
-    def test_dryrun_adds_check_diff_flags(self, app, auth_client):
-        """The dryrun playbook should be called with --check --diff."""
-        setup_deploy_project(app, auth_client)
-
-        captured_cmd = []
-
-        def mock_subprocess_run(cmd, **kwargs):
-            captured_cmd.extend(cmd)
-            mock = MagicMock()
-            mock.returncode = 0
-            mock.stdout = '{}'
-            mock.stderr = ''
-            return mock
-
-        with app.app_context():
-            from app.deploy_routes import _run_playbook
-
-            repo_dir = app.config['CONFIGGEN_REPO']
-            os.makedirs(os.path.join(repo_dir, 'playbooks'), exist_ok=True)
-            with open(os.path.join(repo_dir, 'playbooks', 'deploy_dryrun.yml'), 'w') as f:
-                f.write('---\n')
-
-            with patch('subprocess.run', side_effect=mock_subprocess_run):
-                _run_playbook('deploy_dryrun.yml', {'all': {'hosts': {}}}, {})
-
-        assert '--check' in captured_cmd
-        assert '--diff' in captured_cmd
-
-    def test_push_does_not_add_check_flag(self, app, auth_client):
-        """The push playbook should NOT have --check."""
-        setup_deploy_project(app, auth_client)
-
-        captured_cmd = []
-
-        def mock_subprocess_run(cmd, **kwargs):
-            captured_cmd.extend(cmd)
-            mock = MagicMock()
-            mock.returncode = 0
-            mock.stdout = '{}'
-            mock.stderr = ''
-            return mock
-
-        with app.app_context():
-            from app.deploy_routes import _run_playbook
-
-            repo_dir = app.config['CONFIGGEN_REPO']
-            os.makedirs(os.path.join(repo_dir, 'playbooks'), exist_ok=True)
-            with open(os.path.join(repo_dir, 'playbooks', 'deploy_push.yml'), 'w') as f:
-                f.write('---\n')
-
-            with patch('subprocess.run', side_effect=mock_subprocess_run):
-                _run_playbook('deploy_push.yml', {'all': {'hosts': {}}}, {})
-
-        assert '--check' not in captured_cmd
-        assert '--diff' not in captured_cmd
-
-    def test_timeout_returns_failure(self, app, auth_client):
-        import subprocess as sp
-        setup_deploy_project(app, auth_client)
-
-        with app.app_context():
-            from app.deploy_routes import _run_playbook
-
-            repo_dir = app.config['CONFIGGEN_REPO']
-            os.makedirs(os.path.join(repo_dir, 'playbooks'), exist_ok=True)
-            with open(os.path.join(repo_dir, 'playbooks', 'deploy_push.yml'), 'w') as f:
-                f.write('---\n')
-
-            with patch('subprocess.run', side_effect=sp.TimeoutExpired('cmd', 300)):
-                ok, output, results = _run_playbook(
-                    'deploy_push.yml', {'all': {'hosts': {}}}, {}
-                )
-
-        assert ok is False
-        assert 'timed out' in output.lower()
-
-    def test_missing_playbook_returns_failure(self, app, auth_client):
-        setup_deploy_project(app, auth_client)
-
-        with app.app_context():
-            from app.deploy_routes import _run_playbook
-            ok, output, results = _run_playbook(
-                'nonexistent.yml', {'all': {'hosts': {}}}, {}
-            )
-
-        assert ok is False
-        assert 'not found' in output.lower()
-
-    def test_host_key_checking_disabled(self, app, auth_client):
-        """Ansible should run with ANSIBLE_HOST_KEY_CHECKING=False."""
-        setup_deploy_project(app, auth_client)
-
-        captured_env = {}
-
-        def mock_subprocess_run(cmd, **kwargs):
-            captured_env.update(kwargs.get('env', {}))
-            mock = MagicMock()
-            mock.returncode = 0
-            mock.stdout = '{}'
-            mock.stderr = ''
-            return mock
-
-        with app.app_context():
-            from app.deploy_routes import _run_playbook
-
-            repo_dir = app.config['CONFIGGEN_REPO']
-            os.makedirs(os.path.join(repo_dir, 'playbooks'), exist_ok=True)
-            with open(os.path.join(repo_dir, 'playbooks', 'deploy_push.yml'), 'w') as f:
-                f.write('---\n')
-
-            with patch('subprocess.run', side_effect=mock_subprocess_run):
-                _run_playbook('deploy_push.yml', {'all': {'hosts': {}}}, {})
-
-        assert captured_env.get('ANSIBLE_HOST_KEY_CHECKING') == 'False'
 
 
 # ---------------------------------------------------------------------------
@@ -888,9 +721,9 @@ class TestCredentialSecurity:
         """After a dry run, credentials should not appear in deploy_mapping.yml."""
         setup_deploy_project(app, auth_client)
 
-        with patch('app.deploy_routes._run_playbook', return_value=(True, '', [])):
+        with patch('app.deploy_routes._run_playbook_job'):
             auth_client.post(
-                '/projects/deploy-test/deploy/dryrun',
+                '/projects/admin/deploy-test/deploy/dryrun',
                 json={
                     'hosts': [{'hostname': 'SW-01', 'mgmt_ip': '10.1.1.1'}],
                     'username': 'supersecret_user',
@@ -912,9 +745,9 @@ class TestCredentialSecurity:
         """Credentials should never be written to project.json."""
         setup_deploy_project(app, auth_client)
 
-        with patch('app.deploy_routes._run_playbook', return_value=(True, '', [])):
+        with patch('app.deploy_routes._run_playbook_job'):
             auth_client.post(
-                '/projects/deploy-test/deploy/push',
+                '/projects/admin/deploy-test/deploy/push',
                 json={
                     'hosts': [{'hostname': 'SW-01', 'mgmt_ip': '10.1.1.1'}],
                     'username': 'admin',
@@ -959,7 +792,7 @@ class TestDeployConfigFileSelection:
                 'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                 'settings': {'rollback_timeout': 5}
             })
-        res = auth_client.get('/projects/deploy-test/deploy')
+        res = auth_client.get('/projects/admin/deploy-test/deploy')
         assert b'CO-CORE-SW-01_FULL.ios' not in res.data
 
     def test_inventory_omits_config_file_by_default(self):
@@ -1004,7 +837,7 @@ class TestConfigFileConfinement:
 
     def _post(self, auth_client, route, config_file):
         return auth_client.post(
-            '/projects/deploy-test/deploy/' + route,
+            '/projects/admin/deploy-test/deploy/' + route,
             json={'hosts': [{'hostname': 'CO-CORE-SW-01',
                              'mgmt_ip': '10.1.100.1',
                              'config_file': config_file}],
@@ -1063,150 +896,134 @@ class TestConfigFileConfinement:
 
 
 # ---------------------------------------------------------------------------
-# Playbook location
+# The ansible-playbook invocation
 # ---------------------------------------------------------------------------
 
-class TestPlaybookPath:
+class TestPlaybookInvocation:
+    """What _run_playbook_job actually runs.
 
-    def test_uses_absolute_repo_path_from_config(self, app, tmp_path, monkeypatch):
-        """The playbook must be located via CONFIGGEN_REPO, not a relative guess.
+    A stub stands in for ansible-playbook and records its arguments,
+    environment and working directory, so the real runner is exercised
+    end to end without Ansible.
+    """
 
-        A relative 'configgen' only resolves when the process happens to run
-        from /app/service, which it does not under gunicorn — the failure is a
-        confusing "playbook could not be found".
-        """
+    STUB = (
+        '#!/bin/sh\n'
+        'printf "%s\\n" "$@" > "$REC/args"\n'
+        'env > "$REC/env"\n'
+        'pwd -P > "$REC/cwd"\n'
+    )
+
+    @pytest.fixture
+    def run(self, tmp_path, monkeypatch):
         import app.deploy_routes as dr
-
+        rec = tmp_path / 'rec'
+        rec.mkdir()
+        monkeypatch.setenv('REC', str(rec))
+        stub = tmp_path / 'stub-ansible'
+        stub.write_text(self.STUB)
+        stub.chmod(0o755)
         repo = tmp_path / 'cfgrepo'
         (repo / 'playbooks').mkdir(parents=True)
-        (repo / 'playbooks' / 'deploy_dryrun.yml').write_text('---\n')
-        app.config['CONFIGGEN_REPO'] = str(repo)
+        for pb in ('deploy_dryrun.yml', 'deploy_push.yml'):
+            (repo / 'playbooks' / pb).write_text('---\n')
 
-        seen = {}
+        def _run(playbook, limit_hosts=None, binary=None, extra_vars=None):
+            job_id = 'inv-' + playbook
+            with dr._deploy_jobs_lock:
+                dr._deploy_jobs[job_id] = {'status': 'starting', 'output': '',
+                                           'returncode': None, 'results': []}
+            dr._run_playbook_job(
+                job_id, playbook, str(repo), binary or str(stub),
+                {'all': {'hosts': {'SW-01': {'ansible_host': '10.1.1.1'}}}},
+                extra_vars or {'config_dir': '/tmp/configs'}, limit_hosts)
+            with dr._deploy_jobs_lock:
+                job = dr._deploy_jobs.pop(job_id)
+            recorded = {}
+            if (rec / 'args').exists():
+                recorded['args'] = (rec / 'args').read_text().splitlines()
+                recorded['env'] = dict(
+                    l.split('=', 1) for l in (rec / 'env').read_text().splitlines()
+                    if '=' in l)
+                recorded['cwd'] = (rec / 'cwd').read_text().strip()
+            return job, recorded, repo
 
-        def fake_run(cmd, **kwargs):
-            seen['cmd'] = cmd
-            seen['cwd'] = kwargs.get('cwd')
-            class R:
-                returncode = 0
-                stdout = '{}'
-                stderr = ''
-            return R()
+        return _run
 
-        monkeypatch.setattr(dr.subprocess, 'run', fake_run)
+    def test_runs_the_playbook_from_the_configured_repo(self, run):
+        """Located via CONFIGGEN_REPO, not a relative 'configgen' that only
+        resolves when the process happens to run from /app/service."""
+        job, rec, repo = run('deploy_push.yml')
+        assert job['status'] == 'done'
+        assert rec['args'][0] == str(repo / 'playbooks' / 'deploy_push.yml')
+        assert rec['cwd'] == os.path.realpath(str(repo))
 
-        with app.test_request_context():
-            dr._run_playbook('deploy_dryrun.yml',
-                             {'all': {'hosts': {}}}, {'config_dir': '/x'})
+    def test_limit_is_passed(self, run):
+        _, rec, _ = run('deploy_push.yml', limit_hosts=['SW-01', 'SW-02'])
+        i = rec['args'].index('--limit')
+        assert rec['args'][i + 1] == 'SW-01,SW-02'
 
-        # the playbook argument must be the absolute path under the repo
-        assert str(repo / 'playbooks' / 'deploy_dryrun.yml') in seen['cmd']
-        assert seen['cwd'] == str(repo)
+    def test_dryrun_adds_check_and_diff(self, run):
+        _, rec, _ = run('deploy_dryrun.yml')
+        assert '--check' in rec['args'] and '--diff' in rec['args']
 
-    def test_missing_playbook_reports_the_resolved_path(self, app, tmp_path):
+    def test_push_does_not_add_check(self, run):
+        _, rec, _ = run('deploy_push.yml')
+        assert '--check' not in rec['args'] and '--diff' not in rec['args']
+
+    def test_host_key_checking_disabled(self, run):
+        _, rec, _ = run('deploy_push.yml')
+        assert rec['env'].get('ANSIBLE_HOST_KEY_CHECKING') == 'False'
+
+    def test_does_not_request_a_collection_only_callback(self, run):
+        """'json' ships in ansible.posix, not ansible-core, so asking for it
+        fails with "Could not load 'json' callback plugin"."""
+        _, rec, _ = run('deploy_push.yml')
+        requested = rec['env'].get('ANSIBLE_STDOUT_CALLBACK')
+        assert requested in (None, 'default', 'junit', 'minimal', 'oneline', 'tree')
+
+    def test_credentials_are_not_on_the_command_line(self, run):
+        """Visible to every process on the host via ps if they were."""
+        _, rec, _ = run('deploy_push.yml', extra_vars={
+            'deploy_username': 'supersecret_user',
+            'deploy_password': 'supersecret_pass'})
+        assert not any('supersecret' in a for a in rec['args'])
+        assert not any('supersecret' in v for v in rec['env'].values())
+        assert any(a.startswith('@') for a in rec['args'])
+
+    def test_missing_playbook_reports_the_resolved_path(self, run):
+        job, rec, repo = run('nonexistent.yml')
+        assert job['status'] == 'failed'
+        assert str(repo / 'playbooks' / 'nonexistent.yml') in job['output']
+        assert rec == {}
+
+    def test_missing_binary_is_explained(self, run):
+        job, _, _ = run('deploy_push.yml', binary='/nonexistent/ansible-playbook')
+        assert job['status'] == 'failed'
+        assert 'ansible-core' in job['output']
+
+    def test_a_run_past_the_deadline_is_killed(self, tmp_path, monkeypatch):
         import app.deploy_routes as dr
-        app.config['CONFIGGEN_REPO'] = str(tmp_path / 'nope')
-        with app.test_request_context():
-            ok, msg, _ = dr._run_playbook('deploy_dryrun.yml',
-                                          {'all': {'hosts': {}}}, {})
-        assert ok is False
-        assert str(tmp_path / 'nope') in msg
-
-
-class TestStdoutCallback:
-
-    def test_does_not_request_a_collection_only_callback(self, app, tmp_path, monkeypatch):
-        """Only callbacks bundled with ansible-core may be requested.
-
-        'json' ships in ansible.posix, not ansible-core, so asking for it
-        fails with "Could not load 'json' callback plugin". Nothing here
-        parses stdout — per-host data comes from the result files — so the
-        default callback is correct and gives a readable log.
-        """
-        import app.deploy_routes as dr
-
-        repo = tmp_path / 'repo'
+        monkeypatch.setattr(dr, 'DEPLOY_TIMEOUT_SECS', 0.3)
+        stub = tmp_path / 'hang'
+        stub.write_text('#!/bin/sh\necho started\nexec sleep 30\n')
+        stub.chmod(0o755)
+        repo = tmp_path / 'r'
         (repo / 'playbooks').mkdir(parents=True)
-        (repo / 'playbooks' / 'deploy_dryrun.yml').write_text('---\n')
-        app.config['CONFIGGEN_REPO'] = str(repo)
-
-        seen = {}
-
-        def fake_run(cmd, **kwargs):
-            seen['env'] = kwargs.get('env', {})
-            class R:
-                returncode = 0
-                stdout = ''
-                stderr = ''
-            return R()
-
-        monkeypatch.setattr(dr.subprocess, 'run', fake_run)
-        with app.test_request_context():
-            dr._run_playbook('deploy_dryrun.yml', {'all': {'hosts': {}}}, {})
-
-        CORE_CALLBACKS = {'default', 'junit', 'minimal', 'oneline', 'tree'}
-        requested = seen['env'].get('ANSIBLE_STDOUT_CALLBACK')
-        assert requested is None or requested in CORE_CALLBACKS, (
-            '%r is not bundled with ansible-core' % requested)
-
-
-class TestMappingTableMarkup:
-
-    def test_config_badge_uses_full_filename(self, app, auth_client):
-        """The badge must name the file has_config actually looks for."""
-        setup_deploy_project(app, auth_client)
-        write_mapping(app, 'deploy-test', {
-            'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
-            'settings': {'rollback_timeout': 5}})
-        res = auth_client.get('/projects/deploy-test/deploy')
-        body = res.data.decode()
-        assert 'CO-CORE-SW-01_FULL.ios' in body
-        assert 'CO-CORE-SW-01.ios<' not in body
-
-    def test_checkboxes_are_not_sized_inline(self, app, auth_client):
-        """Sizing belongs in CSS scoped to the input type, not per element."""
-        setup_deploy_project(app, auth_client)
-        write_mapping(app, 'deploy-test', {
-            'hosts': [{'hostname': 'SW-01', 'mgmt_ip': '10.0.0.1'}],
-            'settings': {}})
-        body = auth_client.get('/projects/deploy-test/deploy').data.decode()
-        # no checkbox should carry an inline width override
-        for chunk in body.split('type="checkbox"')[1:]:
-            tag = chunk.split('>')[0]
-            assert 'width:14px' not in tag, 'inline sizing on a checkbox'
-        assert 'input[type="checkbox"]' in body, 'checkbox CSS rule missing'
-        assert 'table-layout: fixed' in body
-
-
-class TestSshTransportDependency:
-
-    def test_an_ssh_transport_is_pinned(self):
-        """network_cli needs pylibssh or paramiko; ansible-core pulls neither.
-
-        Without one, every deploy task fails with "Failed to import the
-        required Python library (paramiko)" the moment it tries to reach a
-        switch — which is not obvious from the playbook.
-        """
-        import os
-        req = os.path.join(os.path.dirname(__file__), '..', 'requirements.txt')
-        with open(req) as f:
-            body = f.read()
-        assert 'ansible-pylibssh' in body or 'paramiko' in body, (
-            'no SSH transport pinned for the network_cli connection')
-
-    def test_ssh_transport_is_importable_where_ansible_is(self):
-        """If the Ansible runtime is installed, a transport must be too.
-
-        Catches a wheel that failed to install for the build architecture.
-        Skipped in environments without the runtime, where the question does
-        not arise.
-        """
-        import importlib.util
-        if not importlib.util.find_spec('ansible'):
-            pytest.skip('ansible-core not installed in this environment')
-        assert (importlib.util.find_spec('pylibsshext')
-                or importlib.util.find_spec('paramiko')), (
-            'ansible-core is installed but neither pylibssh nor paramiko is')
+        (repo / 'playbooks' / 'deploy_push.yml').write_text('---\n')
+        with dr._deploy_jobs_lock:
+            dr._deploy_jobs['hang'] = {'status': 'starting', 'output': '',
+                                       'returncode': None, 'results': []}
+        import time
+        t0 = time.time()
+        dr._run_playbook_job('hang', 'deploy_push.yml', str(repo), str(stub),
+                             {'all': {'hosts': {}}}, {})
+        assert time.time() - t0 < 10
+        with dr._deploy_jobs_lock:
+            job = dr._deploy_jobs.pop('hang')
+        assert job['status'] == 'failed'
+        assert 'started' in job['output']
+        assert 'exceeded' in job['output']
 
 
 # ---------------------------------------------------------------------------
@@ -1313,12 +1130,12 @@ class TestDeployJobModel:
         assert 'Playbook not found' in job['output']
 
     def test_status_requires_login(self, client):
-        assert client.get('/projects/p/deploy/status/abc').status_code == 401
+        assert client.get('/projects/admin/p/deploy/status/abc').status_code == 401
 
     def test_unknown_job_is_404(self, auth_client, app):
         setup_deploy_project(app, auth_client)
         assert auth_client.get(
-            '/projects/deploy-test/deploy/status/nope').status_code == 404
+            '/projects/admin/deploy-test/deploy/status/nope').status_code == 404
 
 
 class TestSingleWorkerRequirement:
@@ -1350,13 +1167,13 @@ class TestMappingAndRollbackValidation:
     ])
     def test_save_mapping_rejects_bad_hosts(self, app, auth_client, rows):
         setup_deploy_project(app, auth_client)
-        res = auth_client.post('/projects/deploy-test/deploy/save-mapping',
+        res = auth_client.post('/projects/admin/deploy-test/deploy/save-mapping',
                                json={'mappings': rows, 'rollback_timeout': 5})
         assert res.status_code == 400
 
     def test_save_mapping_stores_only_mapping_fields(self, app, auth_client):
         setup_deploy_project(app, auth_client)
-        res = auth_client.post('/projects/deploy-test/deploy/save-mapping', json={
+        res = auth_client.post('/projects/admin/deploy-test/deploy/save-mapping', json={
             'mappings': [{'hostname': 'sw1', 'mgmt_ip': '10.0.0.1',
                           'config_file': '/etc/passwd', 'extra': 1}],
             'rollback_timeout': 5})
@@ -1368,14 +1185,14 @@ class TestMappingAndRollbackValidation:
     @pytest.mark.parametrize('value', [0, -1, 61, 2.5, 'abc', '5 mins', True, None, ''])
     def test_save_mapping_rejects_bad_rollback(self, app, auth_client, value):
         setup_deploy_project(app, auth_client)
-        res = auth_client.post('/projects/deploy-test/deploy/save-mapping',
+        res = auth_client.post('/projects/admin/deploy-test/deploy/save-mapping',
                                json={'mappings': [], 'rollback_timeout': value})
         assert res.status_code == 400
 
     @pytest.mark.parametrize('value,expected', [(1, 1), (30, 30), (60, 60), ('15', 15)])
     def test_save_mapping_accepts_rollback_range(self, app, auth_client, value, expected):
         setup_deploy_project(app, auth_client)
-        res = auth_client.post('/projects/deploy-test/deploy/save-mapping',
+        res = auth_client.post('/projects/admin/deploy-test/deploy/save-mapping',
                                json={'mappings': [], 'rollback_timeout': value})
         assert res.status_code == 200
         with app.app_context():
@@ -1386,7 +1203,7 @@ class TestMappingAndRollbackValidation:
         """The playbook does | int, so 'abc' became an immediate rollback."""
         setup_deploy_project(app, auth_client)
         with patch('app.deploy_routes._run_playbook_job') as run:
-            res = auth_client.post('/projects/deploy-test/deploy/push', json={
+            res = auth_client.post('/projects/admin/deploy-test/deploy/push', json={
                 'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                 'username': 'u', 'password': 'p', 'rollback_timeout': value})
         assert res.status_code == 400

@@ -122,7 +122,7 @@ function addRow(hostname, ip) {
 async function autoPopulate() {
   setStatus('Checking project hosts…');
   try {
-    const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/auto-populate`);
+    const res = await fetch(`${PROJECT_BASE}/deploy/auto-populate`);
     const data = await res.json();
     if (!data.ok) { setStatus(data.error || 'Could not read project hosts', true); return; }
     location.reload();
@@ -167,7 +167,7 @@ async function saveIps() {
 
   setStatus('Saving…');
   try {
-    const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deployment-ips/save`, {
+    const res = await fetch(`${PROJECT_BASE}/deployment-ips/save`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ mappings })

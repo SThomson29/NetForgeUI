@@ -3,6 +3,17 @@
 {% block page_title %}Account{% endblock %}
 
 {% block content %}
+{% if current_user.oidc_sub %}
+<div class="card" style="max-width:420px">
+  <div class="card-header">Single sign-on</div>
+  <p class="text-sm text-secondary">
+    Signed in through your organisation's identity provider{% if current_user.email %} as
+    <strong>{{ current_user.email }}</strong>{% endif %}.
+    {% if current_user.sso_admin %}Admin through the identity provider's admin group.{% endif %}
+  </p>
+</div>
+{% endif %}
+{% if current_user.has_password %}
 <div class="card" style="max-width:420px">
   <div class="card-header">Change password</div>
   <form method="POST">
@@ -21,4 +32,5 @@
     <button type="submit" class="btn btn-primary">Update password</button>
   </form>
 </div>
+{% endif %}
 {% endblock %}

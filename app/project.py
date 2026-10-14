@@ -1,7 +1,12 @@
+import contextlib
+import fcntl
+import functools
 import os
 import json
 import ipaddress
 import shutil
+import tempfile
+import threading
 from datetime import date
 
 
@@ -32,33 +37,110 @@ def project_generated_configs_dir(app, username, project_name):
 
 
 # ---------------------------------------------------------------------------
+# Concurrency
+# ---------------------------------------------------------------------------
+#
+# config.json and allocations.json are read, changed and written back by
+# every pool and allocation call. The editor fires several of those at once
+# (changing an IP releases the old one and allocates the new one together)
+# and gunicorn serves them on parallel threads, so without a lock one
+# request's write silently discards another's. Writes are also atomic, so a
+# reader never sees a half-written file.
+#
+# The lock is an flock on a file beside the project rather than a thread
+# lock, so it still holds if gunicorn ever runs more than one worker. It is
+# kept outside the project directory so taking it never creates a project.
+
+_held_locks = threading.local()
+
+
+def _project_lock_path(app, username, project_name):
+    return os.path.join(projects_dir(app, username), '.%s.lock' % project_name)
+
+
+@contextlib.contextmanager
+def project_lock(app, username, project_name):
+    """Exclusive lock on one project's JSON files. Re-entrant per thread,
+    since locked functions call each other."""
+    path = _project_lock_path(app, username, project_name)
+    held = getattr(_held_locks, 'counts', None)
+    if held is None:
+        held = _held_locks.counts = {}
+    if held.get(path):
+        held[path] += 1
+        try:
+            yield
+        finally:
+            held[path] -= 1
+        return
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'a') as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        held[path] = 1
+        try:
+            yield
+        finally:
+            held.pop(path, None)
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _locked(fn):
+    """Run fn(app, username, project_name, ...) holding the project lock."""
+    @functools.wraps(fn)
+    def wrapper(app, username, project_name, *args, **kwargs):
+        with project_lock(app, username, project_name):
+            return fn(app, username, project_name, *args, **kwargs)
+    return wrapper
+
+
+def _write_json_atomic(path, data):
+    """Write to a temporary file and rename it over the target, so the
+    file is always either the old or the new content, never a mix."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix='.tmp-', suffix='.json')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
+
+
+# ---------------------------------------------------------------------------
 # Project CRUD
 # ---------------------------------------------------------------------------
+
+def project_summary(app, username, name):
+    """What the projects list shows for one project."""
+    cfg = _load_config(app, username, name)
+    gcdir = project_generated_configs_dir(app, username, name)
+    config_count = len([
+        f for f in os.listdir(gcdir)
+        if f.endswith('.ios')
+    ]) if os.path.isdir(gcdir) else 0
+    return {
+        'name':         name,
+        'owner':        username,
+        'display_name': cfg.get('name', name),
+        'created':      cfg.get('created', ''),
+        'host_count':   _count_hosts(app, username, name),
+        'config_count': config_count,
+    }
+
 
 def list_projects(app, username):
     """Return list of project metadata dicts sorted by name."""
     pdir = projects_dir(app, username)
     os.makedirs(pdir, exist_ok=True)
-    result = []
-    for name in sorted(os.listdir(pdir)):
-        full = os.path.join(pdir, name)
-        if not os.path.isdir(full):
-            continue
-        cfg = _load_config(app, username, name)
-        gcdir = project_generated_configs_dir(app, username, name)
-        config_count = len([
-            f for f in os.listdir(gcdir)
-            if f.endswith('.ios')
-        ]) if os.path.isdir(gcdir) else 0
-        host_count = _count_hosts(app, username, name)
-        result.append({
-            'name':         name,
-            'display_name': cfg.get('name', name),
-            'created':      cfg.get('created', ''),
-            'host_count':   host_count,
-            'config_count': config_count,
-        })
-    return result
+    return [project_summary(app, username, name) for name in sorted(os.listdir(pdir))
+            if os.path.isdir(os.path.join(pdir, name))]
 
 
 def create_project(app, username, project_name):
@@ -111,14 +193,18 @@ def create_project(app, username, project_name):
 def delete_project(app, username, project_name):
     """Delete a project and all its data."""
     pdir = project_dir(app, username, project_name)
-    if os.path.isdir(pdir):
-        shutil.rmtree(pdir)
+    with project_lock(app, username, project_name):
+        if os.path.isdir(pdir):
+            shutil.rmtree(pdir)
+    with contextlib.suppress(OSError):
+        os.remove(_project_lock_path(app, username, project_name))
 
 
 def get_project_config(app, username, project_name):
     return _load_config(app, username, project_name)
 
 
+@_locked
 def save_project_config(app, username, project_name, config):
     _save_config(app, username, project_name, config)
 
@@ -173,6 +259,7 @@ def _overlapping_pool(cfg, subnet, ignore_id=None):
     return None
 
 
+@_locked
 def add_pool(app, username, project_name, pool):
     """Add a pool to the project config and pre-carve if vlan_supernet.
 
@@ -261,6 +348,7 @@ def _validate_delegation(cfg, pool, parent_id):
             % (pool['subnet'], clash.get('name', clash['id']), clash['subnet']))
 
 
+@_locked
 def _mark_subnet_delegated(app, username, project_name,
                            parent_id, subnet, child_pool_id):
     """Flag a block as delegated so it is not offered for a VLAN.
@@ -285,6 +373,7 @@ def _mark_subnet_delegated(app, username, project_name,
     _save_allocations(app, username, project_name, allocs)
 
 
+@_locked
 def _release_delegated_subnet(app, username, project_name, pool):
     """Return a delegated subnet to the parent supernet as carved."""
     parent_id = pool.get('parent_pool_id')
@@ -318,6 +407,7 @@ def _release_delegated_subnet(app, username, project_name, pool):
     _save_allocations(app, username, project_name, allocs)
 
 
+@_locked
 def convert_supernet_to_mixed(app, username, project_name, pool_id):
     """Turn a fixed-carve supernet into a mixed-size one.
 
@@ -364,6 +454,7 @@ def convert_supernet_to_mixed(app, username, project_name, pool_id):
     return sorted(kept), sorted(dropped)
 
 
+@_locked
 def update_pool(app, username, project_name, pool_id, name=None, subnet=None,
                 prefix=None):
     """Change a pool's name or address range, keeping its allocations.
@@ -464,6 +555,7 @@ def update_pool(app, username, project_name, pool_id, name=None, subnet=None,
     return pool
 
 
+@_locked
 def remove_pool(app, username, project_name, pool_id):
     """Remove a pool and its allocations.
 
@@ -645,6 +737,7 @@ def _direct_children(parent, blocks):
     return kids
 
 
+@_locked
 def carve_supernet_block(app, username, project_name, pool_id, subnet,
                          vlan_id=None, vlan_name=None):
     """Carve a block of any size out of a manual supernet.
@@ -737,6 +830,7 @@ def carve_supernet_block(app, username, project_name, pool_id, subnet,
     return str(block)
 
 
+@_locked
 def remove_supernet_block(app, username, project_name, pool_id, subnet):
     """Remove a manually carved block, returning its space to the supernet."""
     allocs = _load_allocations(app, username, project_name)
@@ -767,6 +861,7 @@ def remove_supernet_block(app, username, project_name, pool_id, subnet):
     _save_allocations(app, username, project_name, allocs)
 
 
+@_locked
 def _precarve_supernet(app, username, project_name, pool):
     """Pre-carve all subnets from a vlan_supernet pool."""
     allocs = _load_allocations(app, username, project_name)
@@ -816,22 +911,77 @@ def get_available_ips(app, username, project_name, pool_id):
     return available
 
 
+def _claim_unique(pool_allocs, ip, hostname, interface, shared=False):
+    """Record hostname/interface against a unique-pool address.
+
+    `shared` is for an anycast VTEP, which both members of a VSX pair
+    carry: one record names the latest holder in hostname and the other in
+    shared_with. Shared by the save-time sync and the editor's instant
+    allocation — the instant one used to overwrite, dropping the first
+    switch and the shared flag until the second switch was saved.
+    """
+    entry = {'hostname': hostname, 'interface': interface}
+    existing = pool_allocs.get(ip)
+    if shared:
+        entry['shared'] = True
+        # The other holder's interface is kept too, so handing the address
+        # back to it restores its own interface, not this one's.
+        if existing and existing.get('hostname') not in (None, hostname):
+            entry['shared_with'] = existing['hostname']
+            entry['shared_with_interface'] = existing.get('interface', '')
+        elif existing and existing.get('shared_with'):
+            entry['shared_with'] = existing['shared_with']
+            entry['shared_with_interface'] = existing.get('shared_with_interface', '')
+    pool_allocs[ip] = entry
+
+
+def _release_unique(pool_allocs, ip, hostname=None):
+    """Drop hostname's claim on a unique-pool address.
+
+    On a shared address only that switch's half goes: the other holder
+    keeps it. Without a hostname, or on an unshared address, the record is
+    removed outright, as it always was.
+    """
+    entry = pool_allocs.get(ip)
+    if not entry:
+        return
+    if hostname and entry.get('shared'):
+        if entry.get('hostname') == hostname and entry.get('shared_with'):
+            pool_allocs[ip] = {
+                'hostname':  entry['shared_with'],
+                'interface': entry.get('shared_with_interface',
+                                       entry.get('interface', '')),
+                'shared':    True,
+            }
+            return
+        if entry.get('shared_with') == hostname:
+            entry.pop('shared_with', None)
+            entry.pop('shared_with_interface', None)
+            return
+    del pool_allocs[ip]
+
+
+@_locked
 def allocate_unique(app, username, project_name, pool_id, ip, hostname, interface):
-    """Allocate a unique IP."""
+    """Allocate a unique IP.
+
+    The editor cannot tell a VTEP field from any other, so an address is
+    treated as shared here only when it is already recorded as shared —
+    which only the sync does, and only for VTEPs.
+    """
     allocs = _load_allocations(app, username, project_name)
-    if pool_id not in allocs['unique']:
-        allocs['unique'][pool_id] = {}
-    allocs['unique'][pool_id][ip] = {
-        'hostname':  hostname,
-        'interface': interface,
-    }
+    pool_allocs = allocs['unique'].setdefault(pool_id, {})
+    existing = pool_allocs.get(ip)
+    _claim_unique(pool_allocs, ip, hostname, interface,
+                  shared=bool(existing and existing.get('shared')))
     _save_allocations(app, username, project_name, allocs)
 
 
-def release_unique(app, username, project_name, pool_id, ip):
-    """Release a unique IP allocation."""
+@_locked
+def release_unique(app, username, project_name, pool_id, ip, hostname=None):
+    """Release a unique IP allocation (only hostname's half, if shared)."""
     allocs = _load_allocations(app, username, project_name)
-    allocs['unique'].get(pool_id, {}).pop(ip, None)
+    _release_unique(allocs['unique'].get(pool_id, {}), ip, hostname)
     _save_allocations(app, username, project_name, allocs)
 
 
@@ -891,47 +1041,44 @@ def get_available_ptp_pairs(app, username, project_name, pool_id):
     return result
 
 
-def allocate_ptp(app, username, project_name, pool_id, ip, hostname, interface, peer_note=None):
-    """Allocate one end of a /31. Automatically reserves the peer end."""
-    allocs = _load_allocations(app, username, project_name)
-    if pool_id not in allocs['point_to_point']:
-        allocs['point_to_point'][pool_id] = {}
+def _ptp_peer(ip):
+    """The other address of ip's /31."""
+    addr = ipaddress.ip_address(ip)
+    return str(addr + 1) if int(addr) % 2 == 0 else str(addr - 1)
 
-    # Determine peer IP
-    host_obj = ipaddress.ip_address(ip)
-    if int(host_obj) % 2 == 0:
-        peer_ip = str(host_obj + 1)
-    else:
-        peer_ip = str(host_obj - 1)
 
-    existing_peer = allocs['point_to_point'][pool_id].get(peer_ip)
+def _claim_ptp_end(pool_allocs, ip, hostname, interface, peer_note=None):
+    """Record hostname/interface on one end of a /31. Returns the peer IP.
 
-    # Record this end
-    allocs['point_to_point'][pool_id][ip] = {
+    The other end is in one of two states:
+      - owned by a switch: left alone; both ends are linked to each other.
+      - free or only reserved: reserved for whoever connects to this end.
+
+    Shared by the editor's instant allocation and the save-time sync. They
+    used to be separate copies, and the instant one lacked the owned case —
+    so taking the second end of a /31 overwrote the first switch's address
+    with a reservation, and the editor then offered it as free.
+    """
+    peer_ip = _ptp_peer(ip)
+    peer = pool_allocs.get(peer_ip)
+    peer_owned = bool(peer and peer.get('hostname')
+                      and peer.get('status') != 'reserved_for_peer')
+
+    pool_allocs[ip] = {
         'hostname':       hostname,
         'interface':      interface,
         'peer_ip':        peer_ip,
-        'peer_hostname':  existing_peer['hostname'] if existing_peer else None,
-        'peer_interface': existing_peer['interface'] if existing_peer else None,
+        'peer_hostname':  peer.get('hostname') if peer_owned else None,
+        'peer_interface': peer.get('interface') if peer_owned else None,
         'peer_note':      peer_note,
     }
 
-    if existing_peer and existing_peer.get('status') == 'reserved_for_peer':
-        # Complete the link — update the peer record
-        allocs['point_to_point'][pool_id][peer_ip] = {
-            'hostname':       hostname,
-            'interface':      interface,
-            'peer_ip':        ip,
-            'peer_hostname':  hostname,
-            'peer_interface': interface,
-            'peer_note':      existing_peer.get('peer_note'),
-        }
-        # Now update this end with peer details
-        allocs['point_to_point'][pool_id][ip]['peer_hostname']  = existing_peer.get('hostname') or ''
-        allocs['point_to_point'][pool_id][ip]['peer_interface'] = existing_peer.get('interface') or ''
+    if peer_owned:
+        peer['peer_ip'] = ip
+        peer['peer_hostname'] = hostname
+        peer['peer_interface'] = interface
     else:
-        # Reserve the peer end
-        allocs['point_to_point'][pool_id][peer_ip] = {
+        pool_allocs[peer_ip] = {
             'hostname':       None,
             'interface':      None,
             'peer_ip':        ip,
@@ -940,22 +1087,54 @@ def allocate_ptp(app, username, project_name, pool_id, ip, hostname, interface, 
             'peer_note':      peer_note,
             'status':         'reserved_for_peer',
         }
+    return peer_ip
 
+
+def _release_ptp_end(pool_allocs, ip):
+    """Free one end of a /31, the inverse of _claim_ptp_end.
+
+    If the other end is only a reservation it goes too. If another switch
+    holds it, this end becomes a reservation for that switch again, and
+    that switch no longer has a partner.
+    """
+    entry = pool_allocs.pop(ip, None)
+    if not entry:
+        return
+    peer_ip = entry.get('peer_ip')
+    peer = pool_allocs.get(peer_ip) if peer_ip else None
+    if not peer:
+        return
+    if peer.get('status') == 'reserved_for_peer':
+        pool_allocs.pop(peer_ip, None)
+    elif peer.get('hostname'):
+        peer['peer_hostname'] = None
+        peer['peer_interface'] = None
+        pool_allocs[ip] = {
+            'hostname':       None,
+            'interface':      None,
+            'peer_ip':        peer_ip,
+            'peer_hostname':  peer['hostname'],
+            'peer_interface': peer.get('interface'),
+            'peer_note':      peer.get('peer_note'),
+            'status':         'reserved_for_peer',
+        }
+
+
+@_locked
+def allocate_ptp(app, username, project_name, pool_id, ip, hostname, interface, peer_note=None):
+    """Allocate one end of a /31. Automatically reserves the peer end."""
+    allocs = _load_allocations(app, username, project_name)
+    pool_allocs = allocs['point_to_point'].setdefault(pool_id, {})
+    peer_ip = _claim_ptp_end(pool_allocs, ip, hostname, interface, peer_note)
     _save_allocations(app, username, project_name, allocs)
     return peer_ip
 
 
+@_locked
 def release_ptp(app, username, project_name, pool_id, ip):
     """Release one end of a /31. If peer is reserved_for_peer, release that too."""
     allocs = _load_allocations(app, username, project_name)
-    pool_allocs = allocs['point_to_point'].get(pool_id, {})
-    entry = pool_allocs.pop(ip, None)
-    if entry:
-        peer_ip = entry.get('peer_ip')
-        if peer_ip:
-            peer = pool_allocs.get(peer_ip)
-            if peer and peer.get('status') == 'reserved_for_peer':
-                pool_allocs.pop(peer_ip, None)
+    _release_ptp_end(allocs['point_to_point'].get(pool_id, {}), ip)
     _save_allocations(app, username, project_name, allocs)
 
 
@@ -989,6 +1168,7 @@ def _repair_block_statuses(blocks):
     return changed
 
 
+@_locked
 def get_carved_subnets(app, username, project_name, pool_id):
     """Return all carved subnets for a supernet pool."""
     allocs = _load_allocations(app, username, project_name)
@@ -998,6 +1178,7 @@ def get_carved_subnets(app, username, project_name, pool_id):
     return blocks
 
 
+@_locked
 def assign_vlan_subnet(app, username, project_name, pool_id, subnet, vlan_id,
                        vlan_name, hostname=None, peer_hostname=None):
     """Assign a carved subnet to a VLAN.
@@ -1065,6 +1246,7 @@ def assign_vlan_subnet(app, username, project_name, pool_id, subnet, vlan_id,
     _save_allocations(app, username, project_name, allocs)
 
 
+@_locked
 def release_vlan_subnet(app, username, project_name, pool_id, subnet):
     """Release a VLAN subnet assignment and remove derived SVI allocations."""
     allocs = _load_allocations(app, username, project_name)
@@ -1097,6 +1279,7 @@ def get_common(app, username, project_name):
     return cfg.get('common', {})
 
 
+@_locked
 def save_common(app, username, project_name, common):
     cfg = _load_config(app, username, project_name)
     cfg['common'] = common
@@ -1112,9 +1295,53 @@ def get_conventions(app, username, project_name):
     return cfg.get('conventions', {})
 
 
+@_locked
 def save_conventions(app, username, project_name, conventions):
     cfg = _load_config(app, username, project_name)
     cfg['conventions'] = conventions
+    _save_config(app, username, project_name, cfg)
+
+
+# ---------------------------------------------------------------------------
+# Project checks — dismissals and what each config was generated from
+# ---------------------------------------------------------------------------
+
+@_locked
+def dismiss_check(app, username, project_name, key, fingerprint):
+    cfg = _load_config(app, username, project_name)
+    cfg.setdefault('dismissed_checks', {})[key] = fingerprint
+    _save_config(app, username, project_name, cfg)
+
+
+@_locked
+def restore_check(app, username, project_name, key):
+    cfg = _load_config(app, username, project_name)
+    cfg.get('dismissed_checks', {}).pop(key, None)
+    _save_config(app, username, project_name, cfg)
+
+
+@_locked
+def record_host_save(app, username, project_name, hostname, by):
+    """Who last saved a switch, so an editor whose save is refused for a
+    conflict can say who changed it."""
+    from datetime import datetime, timezone
+    cfg = _load_config(app, username, project_name)
+    cfg.setdefault('host_saves', {})[hostname] = {
+        'by': by, 'at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
+    _save_config(app, username, project_name, cfg)
+
+
+@_locked
+def record_generated_from(app, username, project_name, fingerprints):
+    """Remember the host_vars fingerprint each config was generated from,
+    {config file name: fingerprint}. Entries for configs that no longer
+    exist are dropped."""
+    cfg = _load_config(app, username, project_name)
+    recorded = cfg.get('generated_from') or {}
+    recorded.update(fingerprints)
+    gcdir = project_generated_configs_dir(app, username, project_name)
+    cfg['generated_from'] = {name: fp for name, fp in recorded.items()
+                             if os.path.isfile(os.path.join(gcdir, name))}
     _save_config(app, username, project_name, cfg)
 
 
@@ -1143,6 +1370,7 @@ def get_all_allocations(app, username, project_name):
 # Allocation sync from host_vars
 # ---------------------------------------------------------------------------
 
+@_locked
 def sync_allocations(app, username, project_name, hostname):
     """Scan host_vars for a hostname and update allocations.json to match."""
     import yaml as _yaml
@@ -1218,25 +1446,9 @@ def sync_allocations(app, username, project_name, hostname):
         for k in to_remove:
             # Another switch may still be sharing it, in which case the
             # address stays allocated to them rather than being freed.
-            peer = allocs['unique'][pid][k].get('shared_with')
-            if peer:
-                allocs['unique'][pid][k] = {
-                    'hostname': peer,
-                    'interface': allocs['unique'][pid][k].get('interface', ''),
-                    'shared': True,
-                }
-            else:
-                del allocs['unique'][pid][k]
+            _release_unique(allocs['unique'][pid], k, hostname)
 
-        entry = {'hostname': hostname, 'interface': interface_name}
-        existing = allocs['unique'][pid].get(ip)
-        if shared:
-            entry['shared'] = True
-            if existing and existing.get('hostname') not in (None, hostname):
-                entry['shared_with'] = existing['hostname']
-            elif existing and existing.get('shared_with'):
-                entry['shared_with'] = existing['shared_with']
-        allocs['unique'][pid][ip] = entry
+        _claim_unique(allocs['unique'][pid], ip, hostname, interface_name, shared)
  
     def register_svi(ip, interface_name, pool, role='gateway'):
         """Record an SVI address against its supernet pool.
@@ -1271,62 +1483,21 @@ def sync_allocations(app, username, project_name, hostname):
 
     def register_ptp(ip, interface_name, pool):
         pid = pool['id']
-        if pid not in allocs['point_to_point']:
-            allocs['point_to_point'][pid] = {}
- 
-        host_obj = ipaddress.ip_address(ip)
-        peer_ip  = str(host_obj + 1) if int(host_obj) % 2 == 0 else str(host_obj - 1)
- 
+        pool_allocs = allocs['point_to_point'].setdefault(pid, {})
+
         # Remove old entries for this hostname+interface
-        to_remove = [k for k, v in allocs['point_to_point'][pid].items()
+        to_remove = [k for k, v in pool_allocs.items()
                      if v.get('hostname') == hostname and v.get('interface') == interface_name]
         for k in to_remove:
-            old_entry = allocs['point_to_point'][pid].pop(k)
+            old_entry = pool_allocs.pop(k)
             # Clean up reserved peer if it was ours
             old_peer = old_entry.get('peer_ip')
-            if old_peer and old_peer in allocs['point_to_point'][pid]:
-                if allocs['point_to_point'][pid][old_peer].get('status') == 'reserved_for_peer':
-                    del allocs['point_to_point'][pid][old_peer]
- 
-        existing_peer = allocs['point_to_point'][pid].get(peer_ip)
- 
-        allocs['point_to_point'][pid][ip] = {
-            'hostname':       hostname,
-            'interface':      interface_name,
-            'peer_ip':        peer_ip,
-            'peer_hostname':  existing_peer.get('hostname') if existing_peer else None,
-            'peer_interface': existing_peer.get('interface') if existing_peer else None,
-            'peer_note':      None,
-        }
- 
-        if existing_peer and existing_peer.get('status') == 'reserved_for_peer':
-            # Complete the link — peer was reserved, now fill it in
-            allocs['point_to_point'][pid][peer_ip] = {
-                'hostname':       existing_peer.get('hostname'),
-                'interface':      existing_peer.get('interface'),
-                'peer_ip':        ip,
-                'peer_hostname':  hostname,
-                'peer_interface': interface_name,
-                'peer_note':      existing_peer.get('peer_note'),
-            }
-            allocs['point_to_point'][pid][ip]['peer_hostname']  = existing_peer.get('hostname')
-            allocs['point_to_point'][pid][ip]['peer_interface'] = existing_peer.get('interface')
-        elif existing_peer and existing_peer.get('hostname'):
-            # Peer already has a real allocation — just update our peer info, don't overwrite theirs
-            allocs['point_to_point'][pid][ip]['peer_hostname']  = existing_peer.get('hostname')
-            allocs['point_to_point'][pid][ip]['peer_interface'] = existing_peer.get('interface')
-        else:
-            # No peer allocation yet — reserve the peer end
-            allocs['point_to_point'][pid][peer_ip] = {
-                'hostname':       None,
-                'interface':      None,
-                'peer_ip':        ip,
-                'peer_hostname':  hostname,
-                'peer_interface': interface_name,
-                'peer_note':      None,
-                'status':         'reserved_for_peer',
-            }
- 
+            if old_peer and old_peer in pool_allocs:
+                if pool_allocs[old_peer].get('status') == 'reserved_for_peer':
+                    del pool_allocs[old_peer]
+
+        _claim_ptp_end(pool_allocs, ip, hostname, interface_name)
+
     def strip_prefix(ip_str):
         """Remove CIDR prefix length if present: '10.0.0.20/31' -> '10.0.0.20'"""
         s = str(ip_str).strip()
@@ -1387,43 +1558,25 @@ def sync_allocations(app, username, project_name, hostname):
     # Clear all existing allocations for this hostname before re-scanning
     # This ensures deleted or renamed interfaces don't leave stale reservations
     for pid in list(allocs['unique'].keys()):
-        for ip in list(allocs['unique'][pid].keys()):
-            entry = allocs['unique'][pid][ip]
-            if entry.get('hostname') == hostname:
-                # A shared anycast VTEP belongs to both members of a pair.
-                # Clearing it outright would erase the peer's claim too, so
-                # hand it back to them instead.
-                peer = entry.get('shared_with')
-                if peer:
-                    allocs['unique'][pid][ip] = {
-                        'hostname': peer,
-                        'interface': entry.get('interface', ''),
-                        'shared': True,
-                    }
-                else:
-                    del allocs['unique'][pid][ip]
-            elif entry.get('shared_with') == hostname:
-                # We were the peer on someone else's shared address; drop
-                # only our half of it.
-                entry.pop('shared_with', None)
+        pool_allocs = allocs['unique'][pid]
+        # A shared anycast VTEP belongs to both members of a pair, so only
+        # this host's half is dropped and the peer keeps it.
+        for ip in [k for k, v in pool_allocs.items()
+                   if hostname in (v.get('hostname'), v.get('shared_with'))]:
+            _release_unique(pool_allocs, ip, hostname)
  
     for pid in list(allocs['point_to_point'].keys()):
-        # Collect all IPs to remove first, then delete — avoids mutation during iteration
-        to_delete = set()
         pool_allocs = allocs['point_to_point'][pid]
-        for ip, entry in list(pool_allocs.items()):
-            if entry.get('hostname') == hostname:
-                to_delete.add(ip)
-                # Also queue the reserved peer end for deletion
-                peer_ip = entry.get('peer_ip')
-                if peer_ip and peer_ip in pool_allocs:
-                    peer = pool_allocs[peer_ip]
-                    if peer.get('status') == 'reserved_for_peer' and peer.get('peer_hostname') == hostname:
-                        to_delete.add(peer_ip)
-            elif entry.get('status') == 'reserved_for_peer' and entry.get('peer_hostname') == hostname:
-                to_delete.add(ip)
-        for ip in to_delete:
-            pool_allocs.pop(ip, None)
+        # Release each end this host holds the same way the editor does, so
+        # a partner switch's end is handed back to it rather than orphaned.
+        for ip in [k for k, v in pool_allocs.items()
+                   if v.get('hostname') == hostname]:
+            _release_ptp_end(pool_allocs, ip)
+        # And any reservation still held for this host.
+        for ip in [k for k, v in pool_allocs.items()
+                   if v.get('status') == 'reserved_for_peer'
+                   and v.get('peer_hostname') == hostname]:
+            del pool_allocs[ip]
  
     # Scan all interface types — only process explicitly set valid IPs
     for lo in (interfaces.get('loopback_interfaces') or []):
@@ -1479,10 +1632,7 @@ def _load_config(app, username, project_name):
 
 
 def _save_config(app, username, project_name, config):
-    path = project_config_path(app, username, project_name)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        json.dump(config, f, indent=2)
+    _write_json_atomic(project_config_path(app, username, project_name), config)
 
 
 def _load_allocations(app, username, project_name):
@@ -1494,10 +1644,8 @@ def _load_allocations(app, username, project_name):
 
 
 def _save_allocations(app, username, project_name, allocations):
-    path = project_allocations_path(app, username, project_name)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        json.dump(allocations, f, indent=2)
+    _write_json_atomic(project_allocations_path(app, username, project_name),
+                       allocations)
 
 
 def _find_pool(config, pool_id):

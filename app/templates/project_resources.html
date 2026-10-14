@@ -449,7 +449,7 @@ async function loadCarvedSubnets() {
   if (!parentId) return;
   sel.innerHTML = '<option value="">Loading…</option>';
   try {
-    const res  = await fetch('/projects/' + PROJECT + '/api/pools/' + parentId + '/carved');
+    const res  = await fetch(PROJECT_BASE + '/api/pools/' + parentId + '/carved');
     const data = await res.json();
     const free = data.subnets || [];
     if (!free.length) {
@@ -504,7 +504,7 @@ async function addPool() {
     payload.parent_pool_id = parentId;
   }
 
-  const res  = await fetch('/projects/' + PROJECT + '/api/pools', {
+  const res  = await fetch(PROJECT_BASE + '/api/pools', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(payload)
@@ -516,7 +516,7 @@ async function addPool() {
 
 async function removePool(poolId, poolName) {
   if (!confirm('Remove pool ' + poolName + ' and all its allocations?')) return;
-  const res  = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId, { method: 'DELETE' });
+  const res  = await fetch(PROJECT_BASE + '/api/pools/' + poolId, { method: 'DELETE' });
   const data = await res.json();
   if (data.ok) location.reload();
 }
@@ -529,7 +529,7 @@ async function saveConventions() {
       reserved_from_start:   parseInt(document.getElementById('conv-res').value),
     }
   };
-  const res  = await fetch('/projects/' + PROJECT + '/api/conventions', {
+  const res  = await fetch(PROJECT_BASE + '/api/conventions', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(conv)
@@ -570,7 +570,7 @@ async function saveCommon() {
     if (!common[k]) common[k] = [];
   });
 
-  const res  = await fetch('/projects/' + PROJECT + '/api/common', {
+  const res  = await fetch(PROJECT_BASE + '/api/common', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(common)
@@ -583,7 +583,7 @@ async function saveCommon() {
 
 async function releaseUnique(poolId, ip) {
   if (!confirm('Release ' + ip + '?')) return;
-  await fetch('/projects/' + PROJECT + '/api/allocations/unique/release', {
+  await fetch(PROJECT_BASE + '/api/allocations/unique/release', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({pool_id: poolId, ip})
@@ -593,7 +593,7 @@ async function releaseUnique(poolId, ip) {
 
 async function releasePtp(poolId, ip) {
   if (!confirm('Release ' + ip + ' and its reserved peer end?')) return;
-  await fetch('/projects/' + PROJECT + '/api/allocations/ptp/release', {
+  await fetch(PROJECT_BASE + '/api/allocations/ptp/release', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({pool_id: poolId, ip})
@@ -659,7 +659,7 @@ async function submitVlanAssign() {
   if (peer && !host) { vlanError('Choose a switch before setting a peer.'); return; }
 
   vlanError('');
-  const res = await fetch('/projects/' + PROJECT + '/api/allocations/vlan', {
+  const res = await fetch(PROJECT_BASE + '/api/allocations/vlan', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -684,7 +684,7 @@ async function convertSupernet(poolId, name, carvePrefix) {
     'space can be carved at other sizes.\n\nContinue?');
   if (!ok) return;
 
-  const res = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId + '/convert',
+  const res = await fetch(PROJECT_BASE + '/api/pools/' + poolId + '/convert',
                           {method: 'POST'});
   const data = await res.json();
   if (data.ok) location.reload();
@@ -722,7 +722,7 @@ async function submitEditPool() {
     return;
   }
 
-  const res = await fetch('/projects/' + PROJECT + '/api/pools/' + m.dataset.poolId, {
+  const res = await fetch(PROJECT_BASE + '/api/pools/' + m.dataset.poolId, {
     method: 'PATCH',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({name, subnet})
@@ -788,7 +788,7 @@ async function suggestBlock(poolId) {
   blockError(poolId, '');
   const within = carveScope[poolId]
     ? '&within=' + encodeURIComponent(carveScope[poolId]) : '';
-  const res = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId
+  const res = await fetch(PROJECT_BASE + '/api/pools/' + poolId
                           + '/suggest?prefix=' + encodeURIComponent(want) + within);
   const data = await res.json();
   if (data.ok) document.getElementById('blk-subnet-' + poolId).value = data.subnet;
@@ -806,7 +806,7 @@ async function carveBlock(poolId) {
   }
   blockError(poolId, '');
 
-  const res = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId + '/blocks', {
+  const res = await fetch(PROJECT_BASE + '/api/pools/' + poolId + '/blocks', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({subnet, vlan_id: vlanId || null, vlan_name: name || null})
@@ -818,7 +818,7 @@ async function carveBlock(poolId) {
 
 async function removeBlock(poolId, subnet) {
   if (!confirm('Remove ' + subnet + '? Its space returns to the supernet.')) return;
-  const res = await fetch('/projects/' + PROJECT + '/api/pools/' + poolId + '/blocks', {
+  const res = await fetch(PROJECT_BASE + '/api/pools/' + poolId + '/blocks', {
     method: 'DELETE',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({subnet})
@@ -830,7 +830,7 @@ async function removeBlock(poolId, subnet) {
 
 async function releaseVlan(poolId, subnet) {
   if (!confirm('Release ' + subnet + '? This will also remove the derived SVI allocations.')) return;
-  await fetch('/projects/' + PROJECT + '/api/allocations/vlan/release', {
+  await fetch(PROJECT_BASE + '/api/allocations/vlan/release', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({pool_id: poolId, subnet})

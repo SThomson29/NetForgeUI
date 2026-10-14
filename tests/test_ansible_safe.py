@@ -127,7 +127,7 @@ class TestRoutes:
 
     def test_deploy_refuses_a_crafted_hostname(self, app, auth_client):
         proj = self._deploy_project(app)
-        res = auth_client.post('/projects/%s/deploy/dryrun' % proj, json={
+        res = auth_client.post('/projects/admin/%s/deploy/dryrun' % proj, json={
             'hosts': [{'hostname': 'sw1,all', 'mgmt_ip': '10.0.0.1'}],
             'username': 'admin', 'password': 'pw'})
         assert res.status_code == 400
@@ -135,7 +135,7 @@ class TestRoutes:
 
     def test_mapping_save_refuses_a_crafted_hostname(self, app, auth_client):
         proj = self._deploy_project(app)
-        res = auth_client.post('/projects/%s/deployment-ips/save' % proj, json={
+        res = auth_client.post('/projects/admin/%s/deployment-ips/save' % proj, json={
             'mappings': [{'hostname': '{{ x }}', 'mgmt_ip': '10.0.0.1'}]})
         assert res.status_code == 400
 
@@ -154,7 +154,7 @@ class TestRoutes:
 
         monkeypatch.setattr(dr, '_run_playbook_job', capture)
         proj = self._deploy_project(app)
-        res = auth_client.post('/projects/%s/deploy/dryrun' % proj, json={
+        res = auth_client.post('/projects/admin/%s/deploy/dryrun' % proj, json={
             'hosts': [{'hostname': 'sw1', 'mgmt_ip': '10.0.0.1'}],
             'username': 'admin', 'password': '{{ 7 * 7 }}'})
         assert res.status_code == 200
@@ -170,8 +170,11 @@ class TestRoutes:
         import inspect
         import app.deploy_routes as dr
         import app.firmware_routes as fr
-        for fn in (dr._run_playbook_job, dr._run_playbook,
-                   fr._run_firmware_playbook):
-            src = inspect.getsource(fn)
-            assert 'dump_unsafe(' in src, fn.__name__
-            assert 'yaml.dump(' not in src, fn.__name__
+        import app.jobs as jobs
+        # Deploy and firmware both hand their vars to the shared runner,
+        # which is the only place they are written out.
+        for fn in (dr._run_playbook_job, fr._run_firmware_playbook):
+            assert 'run_ansible_job(' in inspect.getsource(fn), fn.__name__
+        src = inspect.getsource(jobs.run_ansible_job)
+        assert src.count('dump_unsafe(') == 2
+        assert 'yaml.dump(' not in src

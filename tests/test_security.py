@@ -132,7 +132,7 @@ class TestOriginCheckOnRequests:
 
     def test_cross_site_delete_is_refused(self, app, guarded_client):
         self._project(app)
-        res = guarded_client.post('/projects/csrf/delete',
+        res = guarded_client.post('/projects/admin/csrf/delete',
                                   headers={'Origin': 'https://evil.example'})
         assert res.status_code == 403
         from app.project import project_dir
@@ -141,13 +141,13 @@ class TestOriginCheckOnRequests:
 
     def test_same_site_delete_still_works(self, app, guarded_client):
         self._project(app)
-        res = guarded_client.post('/projects/csrf/delete',
+        res = guarded_client.post('/projects/admin/csrf/delete',
                                   headers={'Origin': 'http://localhost'})
         assert res.status_code in (200, 302)
 
     def test_cross_site_json_write_is_refused(self, app, guarded_client):
         self._project(app)
-        res = guarded_client.post('/projects/csrf/api/pools',
+        res = guarded_client.post('/projects/admin/csrf/api/pools',
                                   json={'name': 'x', 'type': 'unique',
                                         'subnet': '10.9.0.0/24', 'prefix': '32'},
                                   headers={'Origin': 'https://evil.example'})
@@ -155,7 +155,7 @@ class TestOriginCheckOnRequests:
 
     def test_reads_are_not_affected(self, app, guarded_client):
         self._project(app)
-        res = guarded_client.get('/projects/csrf/hosts',
+        res = guarded_client.get('/projects/admin/csrf/hosts',
                                  headers={'Origin': 'https://evil.example'})
         assert res.status_code == 200
 
