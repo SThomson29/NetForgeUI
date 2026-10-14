@@ -28,6 +28,7 @@ import shlex
 import yaml
 
 from .ansible_safe import dump_unsafe, validate_targets
+from .security import job_tag, visible_job
 import tempfile
 import threading
 import subprocess
@@ -306,6 +307,7 @@ def firmware_run(project_name):
             'image': image,
             'partition': partition,
             'allow_unsafe': allow,
+            **job_tag(username, project_name),
         }
 
     ansible_bin = app.config.get('ANSIBLE_BIN', 'ansible-playbook')
@@ -332,8 +334,8 @@ def firmware_run(project_name):
 def firmware_status(project_name, job_id):
     """Poll a running or finished firmware job."""
     with _fw_jobs_lock:
-        job = _fw_jobs.get(job_id)
-        snapshot = dict(job) if job else None
+        snapshot = visible_job(_fw_jobs.get(job_id),
+                               current_user.username, project_name)
     if not snapshot:
         abort(404)
     return jsonify(snapshot)

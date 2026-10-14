@@ -30,6 +30,7 @@ from .transfer import (
     export_project, import_project, read_manifest, TransferError,
 )
 
+from .security import job_tag, visible_job
 from .utils import (
     read_project_hosts, add_project_host, remove_project_host,
     list_project_generated_configs,
@@ -347,7 +348,8 @@ def run_generate(project_name):
 
     job_id = str(uuid.uuid4())
     with _jobs_lock:
-        _jobs[job_id] = {'status': 'running', 'output': '', 'returncode': None}
+        _jobs[job_id] = {'status': 'running', 'output': '', 'returncode': None,
+                         **job_tag(username, project_name)}
 
     def _run(jid):
         try:
@@ -388,7 +390,7 @@ def run_generate(project_name):
 @login_required
 def generate_status(project_name, job_id):
     with _jobs_lock:
-        job = _jobs.get(job_id)
+        job = visible_job(_jobs.get(job_id), current_user.username, project_name)
     if not job:
         abort(404)
     return jsonify(job)

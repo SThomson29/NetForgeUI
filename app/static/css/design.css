@@ -169,6 +169,14 @@ a:hover { color: var(--accent-hover); }
   text-decoration: none;
   position: relative;
 }
+/* A nav-item that has to be a <button> (logout posts a form). */
+button.nav-button {
+  width: 100%;
+  background: none;
+  border: 0;
+  font-family: inherit;
+  text-align: left;
+}
 .nav-item:hover {
   background: var(--bg-hover);
   color: var(--text-primary);

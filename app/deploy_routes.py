@@ -18,6 +18,7 @@ import glob
 import yaml
 
 from .ansible_safe import dump_unsafe, validate_targets
+from .security import job_tag, visible_job
 from datetime import datetime
 from flask import (
     render_template, request, jsonify,
@@ -122,6 +123,28 @@ def _resolve_config_files(hosts, config_dir):
     return resolved, problems
 
 
+# The playbook does rollback_timeout | int, so anything that is not a number
+# becomes 0 and the rollback fires immediately after the push.
+MAX_ROLLBACK_MINUTES = 60
+
+
+def _rollback_minutes(value):
+    """Whole minutes between 1 and MAX_ROLLBACK_MINUTES, or None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        mins = int(value)
+    except (TypeError, ValueError):
+        return None
+    if mins != value and str(mins) != str(value).strip():
+        return None     # 2.5, '5 mins'
+    return mins if 1 <= mins <= MAX_ROLLBACK_MINUTES else None
+
+
+_ROLLBACK_ERROR = ('Rollback timeout must be a whole number of minutes '
+                   'between 1 and %d.' % MAX_ROLLBACK_MINUTES)
+
+
 # ── Job store ──────────────────────────────────────────────
 #
 # Deploy runs can take minutes — an SSH connect to an unreachable switch
@@ -218,7 +241,8 @@ def _run_playbook_job(job_id, playbook_name, repo_dir, ansible_bin,
              returncode=rc, results=results)
 
 
-def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts):
+def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts,
+                      owner=None, project_name=None):
     """Kick off a playbook in the background. Returns the job id."""
     job_id = str(uuid.uuid4())
     with _deploy_jobs_lock:
@@ -226,6 +250,7 @@ def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts):
             'status': 'starting', 'output': '',
             'returncode': None, 'results': [],
             'playbook': playbook_name,
+            **job_tag(owner, project_name),
         }
 
     repo_dir = app.config['CONFIGGEN_REPO']
@@ -411,12 +436,22 @@ def deploy_save_mapping(project_name):
     if not data:
         return jsonify(ok=False, error='No data'), 400
 
+    rows = data.get('mappings', [])
+    problems = validate_targets(rows)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
+    rollback = _rollback_minutes(data.get('rollback_timeout', 5))
+    if rollback is None:
+        return jsonify(ok=False, error=_ROLLBACK_ERROR), 400
+
     app = current_app._get_current_object()
     username = current_user.username
     mapping_data = {
-        'hosts': data.get('mappings', []),
+        # Only the fields the mapping holds — nothing else from the request.
+        'hosts': [{'hostname': str(r.get('hostname')),
+                   'mgmt_ip': str(r.get('mgmt_ip') or '')} for r in rows],
         'settings': {
-            'rollback_timeout': data.get('rollback_timeout', 5)
+            'rollback_timeout': rollback
         }
     }
     _save_mapping(app, username, project_name, mapping_data)
@@ -486,7 +521,8 @@ def deploy_dryrun(project_name):
 
     job_id = _start_deploy_job(
         app, 'deploy_dryrun.yml', inventory, extra_vars,
-        limit_hosts=[h['hostname'] for h in hosts]
+        limit_hosts=[h['hostname'] for h in hosts],
+        owner=current_user.username, project_name=project_name,
     )
     return jsonify(ok=True, job_id=job_id)
 
@@ -495,8 +531,8 @@ def deploy_dryrun(project_name):
 def deploy_status(project_name, job_id):
     """Poll a running or finished deploy job."""
     with _deploy_jobs_lock:
-        job = _deploy_jobs.get(job_id)
-        snapshot = dict(job) if job else None
+        snapshot = visible_job(_deploy_jobs.get(job_id),
+                               current_user.username, project_name)
     if not snapshot:
         abort(404)
     return jsonify(snapshot)
@@ -512,7 +548,9 @@ def deploy_push(project_name):
     hosts = data.get('hosts', [])
     username = data.get('username', '')
     password = data.get('password', '')
-    rollback_timeout = data.get('rollback_timeout', 5)
+    rollback_timeout = _rollback_minutes(data.get('rollback_timeout', 5))
+    if rollback_timeout is None:
+        return jsonify(ok=False, error=_ROLLBACK_ERROR), 400
 
     if not hosts or not username or not password:
         return jsonify(ok=False, error='Missing hosts or credentials'), 400
@@ -539,6 +577,7 @@ def deploy_push(project_name):
 
     job_id = _start_deploy_job(
         app, 'deploy_push.yml', inventory, extra_vars,
-        limit_hosts=[h['hostname'] for h in hosts]
+        limit_hosts=[h['hostname'] for h in hosts],
+        owner=current_user.username, project_name=project_name,
     )
     return jsonify(ok=True, job_id=job_id)

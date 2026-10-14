@@ -53,7 +53,7 @@ def _login_throttle():
     return app.extensions['login_throttle']
 
 
-@auth_bp.route('/logout')
+@auth_bp.route('/logout', methods=['POST'])
 @login_required
 def logout():
     logout_user()
@@ -78,6 +78,10 @@ def account():
             flash('Password must be at least 8 characters.', 'error')
         else:
             User.change_password(current_user.id, new_pw, app)
-            flash('Password changed successfully.', 'success')
+            # The change ends every existing session, this one included;
+            # re-issue this one so the user is not logged out mid-page.
+            login_user(User.get(current_user.id, app))
+            flash('Password changed successfully. Other sessions have been '
+                  'signed out.', 'success')
 
     return render_template('account.html')

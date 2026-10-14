@@ -1338,3 +1338,56 @@ class TestSingleWorkerRequirement:
         assert cmd, 'no CMD line found'
         assert '--workers 1' in cmd[0], (
             'gunicorn must run a single worker until job state is shared')
+
+
+class TestMappingAndRollbackValidation:
+
+    @pytest.mark.parametrize('rows', [
+        [{'hostname': '../../x', 'mgmt_ip': '10.0.0.1'}],
+        [{'hostname': 'sw1,sw2', 'mgmt_ip': '10.0.0.1'}],
+        [{'hostname': 'sw1', 'mgmt_ip': '10.0.0.1; reboot'}],
+        'not a list',
+    ])
+    def test_save_mapping_rejects_bad_hosts(self, app, auth_client, rows):
+        setup_deploy_project(app, auth_client)
+        res = auth_client.post('/projects/deploy-test/deploy/save-mapping',
+                               json={'mappings': rows, 'rollback_timeout': 5})
+        assert res.status_code == 400
+
+    def test_save_mapping_stores_only_mapping_fields(self, app, auth_client):
+        setup_deploy_project(app, auth_client)
+        res = auth_client.post('/projects/deploy-test/deploy/save-mapping', json={
+            'mappings': [{'hostname': 'sw1', 'mgmt_ip': '10.0.0.1',
+                          'config_file': '/etc/passwd', 'extra': 1}],
+            'rollback_timeout': 5})
+        assert res.status_code == 200
+        with app.app_context():
+            saved = read_mapping(app, 'deploy-test')
+        assert saved['hosts'] == [{'hostname': 'sw1', 'mgmt_ip': '10.0.0.1'}]
+
+    @pytest.mark.parametrize('value', [0, -1, 61, 2.5, 'abc', '5 mins', True, None, ''])
+    def test_save_mapping_rejects_bad_rollback(self, app, auth_client, value):
+        setup_deploy_project(app, auth_client)
+        res = auth_client.post('/projects/deploy-test/deploy/save-mapping',
+                               json={'mappings': [], 'rollback_timeout': value})
+        assert res.status_code == 400
+
+    @pytest.mark.parametrize('value,expected', [(1, 1), (30, 30), (60, 60), ('15', 15)])
+    def test_save_mapping_accepts_rollback_range(self, app, auth_client, value, expected):
+        setup_deploy_project(app, auth_client)
+        res = auth_client.post('/projects/deploy-test/deploy/save-mapping',
+                               json={'mappings': [], 'rollback_timeout': value})
+        assert res.status_code == 200
+        with app.app_context():
+            assert read_mapping(app, 'deploy-test')['settings']['rollback_timeout'] == expected
+
+    @pytest.mark.parametrize('value', [0, 61, 'abc', 2.5])
+    def test_push_rejects_bad_rollback(self, app, auth_client, value):
+        """The playbook does | int, so 'abc' became an immediate rollback."""
+        setup_deploy_project(app, auth_client)
+        with patch('app.deploy_routes._run_playbook_job') as run:
+            res = auth_client.post('/projects/deploy-test/deploy/push', json={
+                'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
+                'username': 'u', 'password': 'p', 'rollback_timeout': value})
+        assert res.status_code == 400
+        run.assert_not_called()

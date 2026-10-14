@@ -38,7 +38,7 @@ def create_app():
 
     @login_manager.user_loader
     def load_user(user_id):
-        return User.get(int(user_id), app)
+        return User.from_session_id(user_id, app)
 
     init_db(app)
 
