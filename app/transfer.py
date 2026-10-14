@@ -62,14 +62,23 @@ SECRET_FIELDS = {
 # Only these paths are accepted from an uploaded archive. Anything else —
 # absolute paths, traversal, unexpected files — is rejected rather than
 # sanitised, so a malformed archive fails loudly instead of partially applying.
-_NAME_RE = r'[A-Za-z0-9_.\-]+'
+#
+# Host directories use the same pattern as host names everywhere else in the
+# app, so '..' cannot be a host. File names may contain dots but not start
+# with one.
+_HOST_RE = r'[A-Za-z0-9_\-]{1,64}'
+_FILE_RE = r'[A-Za-z0-9_\-][A-Za-z0-9_.\-]*'
 _ALLOWED_PATTERNS = [
     re.compile(r'^manifest\.json$'),
     re.compile(r'^config\.json$'),
     re.compile(r'^allocations\.json$'),
     re.compile(r'^hosts\.ini$'),
-    re.compile(r'^host_vars/' + _NAME_RE + r'/' + _NAME_RE + r'\.yml$'),
+    re.compile(r'^host_vars/' + _HOST_RE + r'/' + _FILE_RE + r'\.yml$'),
 ]
+
+# Every entry in hosts.ini — host or child group — is joined into paths and
+# used as an inventory name, so it must be a plain name.
+_INVENTORY_NAME = re.compile(r'^' + _HOST_RE + r'$')
 
 # Guards against a zip bomb: refuse archives whose uncompressed size is
 # implausible for a project.
@@ -171,6 +180,40 @@ def export_project(app, username, project_name):
 # Import
 # ---------------------------------------------------------------------------
 
+def _validate_hosts_ini(data):
+    """Reject a hosts.ini holding anything NetForgeUI would not write itself.
+
+    Host names from it are joined into filesystem paths (host_vars/<host>),
+    so a name like ../../other-user/... would reach outside the project.
+    Inline variables (sw1 ansible_host=...) are refused too: the app never
+    writes them, and they would change how Ansible treats the host.
+    """
+    import configparser
+
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        raise TransferError('hosts.ini is not valid UTF-8.')
+
+    cp = configparser.ConfigParser(allow_no_value=True, strict=False,
+                                   interpolation=None)
+    cp.optionxform = str
+    try:
+        cp.read_string(text)
+    except configparser.Error:
+        raise TransferError('hosts.ini could not be parsed.')
+
+    for section in cp.sections():
+        for name, value in cp.items(section, raw=True):
+            if not _INVENTORY_NAME.match(name):
+                raise TransferError(
+                    'hosts.ini contains an invalid host name: %r' % name[:64])
+            if value is not None:
+                raise TransferError(
+                    'hosts.ini sets variables on %s; only plain host names '
+                    'are supported.' % name)
+
+
 def _open_archive(fileobj):
     try:
         zf = zipfile.ZipFile(fileobj)
@@ -250,6 +293,8 @@ def import_project(app, username, target_name, fileobj):
                 json.loads(data)
             except ValueError:
                 raise TransferError('%s is not valid JSON.' % info.filename)
+        elif info.filename == 'hosts.ini':
+            _validate_hosts_ini(data)
         elif info.filename.endswith('.yml'):
             try:
                 yaml.safe_load(data)

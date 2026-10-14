@@ -9,6 +9,7 @@ Handles:
 
 import json
 import os
+import re
 import uuid
 import threading
 import subprocess
@@ -86,6 +87,39 @@ def _build_inventory(hosts, username, password):
             hostvars['deploy_config_file'] = h['config_file']
         inventory['all']['hosts'][h['hostname']] = hostvars
     return inventory
+
+
+# A generated config name, as the download route accepts it: no separators,
+# and no leading dot, so neither '..' nor hidden files can be named.
+_CONFIG_NAME = re.compile(r'^[A-Za-z0-9_\-][A-Za-z0-9_.\-]{0,127}\.ios$')
+
+
+def _resolve_config_files(hosts, config_dir):
+    """Turn each host's config_file name into a path inside config_dir.
+
+    The playbook treats deploy_config_file as a full path on this machine and
+    sends whatever it names to the switch. Taking a path from the request
+    let a user name any file in the container — users.db, other users'
+    projects, the git key — and have it sent to an address they chose. So
+    only a bare file name is accepted, and it must be one of this project's
+    generated configs; the path itself is built here.
+
+    Returns (hosts_with_paths, problems).
+    """
+    resolved, problems = [], []
+    for h in hosts:
+        h = dict(h)
+        name = h.get('config_file')
+        if name:
+            name = str(name)
+            path = os.path.join(config_dir, name)
+            if (not _CONFIG_NAME.match(name) or os.path.islink(path)
+                    or not os.path.isfile(path)):
+                problems.append('unknown config file for %s' % h['hostname'])
+            else:
+                h['config_file'] = path
+        resolved.append(h)
+    return resolved, problems
 
 
 # ── Job store ──────────────────────────────────────────────
@@ -439,6 +473,9 @@ def deploy_dryrun(project_name):
     config_dir = project_generated_configs_dir(
         app, current_user.username, project_name
     )
+    hosts, problems = _resolve_config_files(hosts, config_dir)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
     inventory = _build_inventory(hosts, username, password)
 
     extra_vars = {
@@ -488,6 +525,9 @@ def deploy_push(project_name):
     config_dir = project_generated_configs_dir(
         app, current_user.username, project_name
     )
+    hosts, problems = _resolve_config_files(hosts, config_dir)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
     inventory = _build_inventory(hosts, username, password)
 
     extra_vars = {

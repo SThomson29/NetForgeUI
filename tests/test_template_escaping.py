@@ -119,3 +119,39 @@ def test_esc_is_available_on_every_page():
         src = open(path).read()
         if 'esc(' in src and path != 'app/templates/base.html':
             assert ('{% extends "base' in src or "{% extends 'base" in src), path
+
+
+# ---------------------------------------------------------------------------
+# HTML built in JavaScript from server data
+# ---------------------------------------------------------------------------
+#
+# The import preview renders manifest.json from an uploaded archive, so a
+# crafted export could run script in whoever previews it. Lines that build
+# markup from that data must pass every value through esc().
+
+def _markup_lines(body, needle):
+    """Lines that concatenate into an html string and mention needle."""
+    return [line for line in body.splitlines()
+            if needle in line and re.search(r"html\s*\+?=|innerHTML\s*=", line)]
+
+
+def test_import_preview_escapes_manifest_values(auth_client):
+    body = auth_client.get('/projects').data.decode()
+    lines = _markup_lines(body, 'm.') + _markup_lines(body, 'hosts')
+    assert lines, 'import preview markup not found'
+    for line in lines:
+        for ref in re.findall(r"\bm\.(source_project|exported)\b", line):
+            assert re.search(r"esc\(m\.%s\b" % ref, line), line
+        assert 'm.hosts.join' not in line, line
+    assert any('hosts.map(esc)' in line for line in lines)
+
+
+def test_reconcile_output_escapes_host_names(app, auth_client):
+    from app.project import create_project
+    with app.app_context():
+        create_project(app, 'admin', 'recon')
+    body = auth_client.get('/projects/recon/hosts').data.decode()
+    lines = _markup_lines(body, 'host')
+    assert any("esc(host)" in line for line in lines)
+    assert any("data.hosts[host].map(esc)" in line for line in lines)
+    assert any("esc(data.error" in line for line in body.splitlines())

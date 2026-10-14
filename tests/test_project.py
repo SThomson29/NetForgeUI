@@ -722,6 +722,21 @@ class TestReconcileHostVars:
         assert second['total'] == 0
         assert second['hosts'] == {}
 
+    def test_traversal_hostname_is_skipped(self, legacy, tmp_path, monkeypatch):
+        """A hosts.ini from before import validation may hold a name like
+        ../victim; it must not be joined into a path and written to."""
+        import app.utils as U
+        from app.utils import reconcile_host_vars
+        app, _ = legacy
+        victim = tmp_path / 'victim'
+        victim.mkdir()
+        monkeypatch.setattr(U, 'read_project_hosts', lambda a, u, p: [
+            {'hostname': '../victim', 'group': 'cx', 'stacking': 'None'},
+        ])
+        r = reconcile_host_vars(app, 'sam', 'p', dry_run=False)
+        assert r['total'] == 0
+        assert os.listdir(victim) == []
+
 
 class TestSviAllocationSync:
     """SVI addresses chosen in the editor were never recorded.

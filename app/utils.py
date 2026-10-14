@@ -1,4 +1,5 @@
 import os
+import re
 import configparser
 import shutil
 
@@ -6,6 +7,9 @@ import shutil
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+# A host name as accepted everywhere else in the app.
+_HOSTNAME_RE = re.compile(r'^[A-Za-z0-9_\-]{1,64}$')
 
 STACKING_GROUPS = {
     'cx_vsx': 'VSX',
@@ -152,6 +156,10 @@ def reconcile_host_vars(app, username, project_name, dry_run=True):
 
     for host in hosts:
         hostname = host['hostname']
+        # hosts.ini may predate import validation, and the name is joined
+        # into a path below — skip anything that is not a plain host name.
+        if not _HOSTNAME_RE.match(hostname):
+            continue
         # read_project_hosts() returns the resolved inventory group directly;
         # host['stacking'] is a display label ('VSX'), not a STACKING_TO_GROUP key.
         group    = host.get('group') or STACKING_TO_GROUP.get(

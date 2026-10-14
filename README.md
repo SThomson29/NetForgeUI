@@ -180,6 +180,9 @@ up by their bare names.
 | `ANSIBLE_IMAGE` | No | `cytopia/ansible:latest` | Image used for the ephemeral generation container |
 | `REPO_VOLUME_NAME` | No | `netforgeui_repo` | Name of the repo volume to mount into the Ansible container |
 | `DATA_VOLUME_NAME` | No | `netforgeui_data` | Name of the data volume to mount into the Ansible container |
+| `GENERATE_TIMEOUT_SECS` | No | `1800` | A generation run longer than this is killed and reported as failed |
+| `GENERATE_MEM_LIMIT` | No | `2g` | Memory cap for the generation container (Docker size syntax) |
+| `GENERATE_PIDS_LIMIT` | No | `512` | Process cap for the generation container |
 | `SSH_KEY_PATH` | No | `/root/.ssh/id_rsa` | Deploy key used for git over SSH |
 | `FIRMWARE_DIR` | No | `<app>/firmware` | Where `.swi` images are read from |
 | `PORT` | No | `5000` | Port the Flask app listens on inside the container |

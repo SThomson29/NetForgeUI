@@ -983,6 +983,85 @@ class TestDeployConfigFileSelection:
         assert 'deploy_config_file' not in inv['all']['vars']
 
 
+class TestConfigFileConfinement:
+    """config_file is a name within the project's generated configs, never
+    a path. The playbook sends whatever file it names to the switch, so a
+    path would let a user send any file in the container to an address of
+    their choosing."""
+
+    def _capture(self):
+        import app.deploy_routes as dr
+        captured = {}
+
+        def _fake(job_id, playbook_name, repo_dir, ansible_bin,
+                  inventory, extra_vars, limit_hosts=None):
+            captured['inventory'] = inventory
+            with dr._deploy_jobs_lock:
+                dr._deploy_jobs[job_id].update(
+                    status='done', returncode=0, results=[], output='')
+
+        return captured, patch('app.deploy_routes._run_playbook_job', _fake)
+
+    def _post(self, auth_client, route, config_file):
+        return auth_client.post(
+            '/projects/deploy-test/deploy/' + route,
+            json={'hosts': [{'hostname': 'CO-CORE-SW-01',
+                             'mgmt_ip': '10.1.100.1',
+                             'config_file': config_file}],
+                  'username': 'admin', 'password': 'testpass'})
+
+    @pytest.mark.parametrize('route', ['dryrun', 'push'])
+    @pytest.mark.parametrize('config_file', [
+        '/app/service/data/users.db',
+        '/etc/passwd',
+        '../../../users.db',
+        '../other-project/generated_configs/CO-CORE-SW-01_FULL.ios',
+        '.hidden.ios',
+        'CO-CORE-SW-01_FULL.txt',
+        'missing_FULL.ios',
+    ])
+    def test_rejects_anything_but_a_generated_config_name(
+            self, app, auth_client, route, config_file):
+        setup_deploy_project(app, auth_client)
+        captured, patcher = self._capture()
+        with patcher:
+            res = self._post(auth_client, route, config_file)
+        assert res.status_code == 400
+        assert 'inventory' not in captured
+
+    @pytest.mark.parametrize('route', ['dryrun', 'push'])
+    def test_symlink_out_of_generated_configs_is_rejected(
+            self, app, auth_client, route):
+        setup_deploy_project(app, auth_client)
+        with app.app_context():
+            from app.project import project_generated_configs_dir
+            gcdir = project_generated_configs_dir(app, 'admin', 'deploy-test')
+        os.symlink(app.config['DATABASE'], os.path.join(gcdir, 'link.ios'))
+        captured, patcher = self._capture()
+        with patcher:
+            res = self._post(auth_client, route, 'link.ios')
+        assert res.status_code == 400
+        assert 'inventory' not in captured
+
+    @pytest.mark.parametrize('route', ['dryrun', 'push'])
+    def test_partial_config_name_resolves_inside_project(
+            self, app, auth_client, route):
+        setup_deploy_project(app, auth_client)
+        with app.app_context():
+            from app.project import project_generated_configs_dir
+            gcdir = project_generated_configs_dir(app, 'admin', 'deploy-test')
+        with open(os.path.join(gcdir, 'CO-CORE-SW-01_PARTIAL_syslog.ios'), 'w') as f:
+            f.write('! partial\n')
+        captured, patcher = self._capture()
+        with patcher:
+            res = self._post(auth_client, route,
+                             'CO-CORE-SW-01_PARTIAL_syslog.ios')
+        assert res.status_code == 200, res.data
+        host = captured['inventory']['all']['hosts']['CO-CORE-SW-01']
+        assert host['deploy_config_file'] == os.path.join(
+            gcdir, 'CO-CORE-SW-01_PARTIAL_syslog.ios')
+
+
 # ---------------------------------------------------------------------------
 # Playbook location
 # ---------------------------------------------------------------------------
