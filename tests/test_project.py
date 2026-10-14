@@ -298,7 +298,11 @@ class TestPtpAllocations:
                      '10.254.0.1', 'sw-02', '1/1/1')
         allocs = get_all_allocations(app, USERNAME, 'proj')
         pool_allocs = allocs['point_to_point']['pool_ptp']
-        # Both ends should now be fully allocated with peer info
+        # Both ends should now be fully allocated with peer info — and the
+        # first switch must still own its end.
+        assert pool_allocs['10.254.0.0']['hostname'] == 'sw-01'
+        assert pool_allocs['10.254.0.0']['interface'] == '1/1/1'
+        assert pool_allocs['10.254.0.0'].get('status') != 'reserved_for_peer'
         assert pool_allocs['10.254.0.0']['peer_hostname'] == 'sw-02'
         assert pool_allocs['10.254.0.1']['peer_hostname'] == 'sw-01'
         assert 'status' not in pool_allocs['10.254.0.1'] or \
