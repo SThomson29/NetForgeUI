@@ -14,7 +14,7 @@ import threading
 import yaml
 
 from .ansible_safe import validate_targets
-from . import audit
+from . import audit, checks
 from .api import json_body, bad_request
 from .jobs import run_ansible_job, prune_finished, mark_finished
 from .security import job_tag, visible_job
@@ -239,7 +239,8 @@ def project_deploy(project_name):
         'project_deploy.html',
         project_name=project_name,
         mappings=enriched,
-        settings=mapping.get('settings', {})
+        settings=mapping.get('settings', {}),
+        checks_summary=checks.summary(app, username, project_name),
     )
 
 

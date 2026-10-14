@@ -1303,6 +1303,38 @@ def save_conventions(app, username, project_name, conventions):
 
 
 # ---------------------------------------------------------------------------
+# Project checks — dismissals and what each config was generated from
+# ---------------------------------------------------------------------------
+
+@_locked
+def dismiss_check(app, username, project_name, key, fingerprint):
+    cfg = _load_config(app, username, project_name)
+    cfg.setdefault('dismissed_checks', {})[key] = fingerprint
+    _save_config(app, username, project_name, cfg)
+
+
+@_locked
+def restore_check(app, username, project_name, key):
+    cfg = _load_config(app, username, project_name)
+    cfg.get('dismissed_checks', {}).pop(key, None)
+    _save_config(app, username, project_name, cfg)
+
+
+@_locked
+def record_generated_from(app, username, project_name, fingerprints):
+    """Remember the host_vars fingerprint each config was generated from,
+    {config file name: fingerprint}. Entries for configs that no longer
+    exist are dropped."""
+    cfg = _load_config(app, username, project_name)
+    recorded = cfg.get('generated_from') or {}
+    recorded.update(fingerprints)
+    gcdir = project_generated_configs_dir(app, username, project_name)
+    cfg['generated_from'] = {name: fp for name, fp in recorded.items()
+                             if os.path.isfile(os.path.join(gcdir, name))}
+    _save_config(app, username, project_name, cfg)
+
+
+# ---------------------------------------------------------------------------
 # Full allocations read (for the allocations tab)
 # ---------------------------------------------------------------------------
 

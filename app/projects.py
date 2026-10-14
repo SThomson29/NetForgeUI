@@ -25,12 +25,13 @@ from .project import (
     get_conventions, save_conventions,
     get_all_allocations,
     project_generated_configs_dir,
+    dismiss_check, restore_check, record_generated_from,
 )
 from .transfer import (
     export_project, import_project, read_manifest, TransferError,
 )
 
-from . import audit
+from . import audit, checks
 from .api import json_body
 from .jobs import prune_finished, mark_finished
 from .security import job_tag, visible_job
@@ -389,7 +390,9 @@ def generate_page(project_name):
     return render_template('project_generate.html',
                            project_name=project_name,
                            hosts=hosts,
-                           configs=configs)
+                           configs=configs,
+                           checks_summary=checks.summary(
+                               app, current_user.username, project_name))
 
 
 @projects_bp.route('/projects/<project_name>/generate/run', methods=['POST'])
@@ -420,6 +423,17 @@ def run_generate(project_name):
     named = [n for n in re.split(r'[,:\s]+', limit) if n] if limit else []
     in_scope = [h for h in project_hosts if not named or h in named] or named
     before = audit.config_hashes(out_dir)
+
+    # What each in-scope switch's host_vars were as the run starts, so the
+    # checks can tell later whether a config predates a change. A limit can
+    # name inventory groups as well as switches.
+    hv_base = project_host_vars_dir(app, username, project_name)
+    scope = [h['hostname'] for h in read_project_hosts(app, username, project_name)
+             if not named or h['hostname'] in named or h['group'] in named
+             or 'all' in named]
+    starting = {h: checks.hostvars_fingerprint(os.path.join(hv_base, h))
+                for h in scope if _SAFE_URL_VALUES['hostname'].match(h)}
+
     audit_id = audit.record_start(
         app, username=username, project=project_name, action='generate',
         switch_user=None, targets=[{'hostname': h} for h in in_scope],
@@ -458,12 +472,24 @@ def run_generate(project_name):
             with _jobs_lock:
                 mark_finished(_jobs[jid])
                 final = dict(_jobs[jid])
+            after = audit.config_hashes(out_dir)
             try:
-                final['results'] = audit.generation_results(
-                    before, audit.config_hashes(out_dir))
+                final['results'] = audit.generation_results(before, after)
                 audit.record_finish(app, audit_id, final)
             except Exception:                       # noqa: BLE001
                 pass    # never let the log take down the job's own result
+            try:
+                # A failed run may still have written some switches'
+                # configs; only those that changed are known to be new.
+                made = {}
+                for h, fp in starting.items():
+                    name = checks.generated_name(h, tags)
+                    if fp and name in after and (
+                            final.get('returncode') == 0 or before.get(name) != after[name]):
+                        made[name] = fp
+                record_generated_from(app, username, project_name, made)
+            except Exception:                       # noqa: BLE001
+                pass
 
     threading.Thread(target=_run, args=(job_id,), daemon=True).start()
 
@@ -518,6 +544,49 @@ def project_history(project_name):
         entries=audit.entries(app, username=current_user.username,
                               project=project_name,
                               include_generations=show_gen))
+
+
+# ---------------------------------------------------------------------------
+# Checks — cross-switch mistakes, warnings only
+# ---------------------------------------------------------------------------
+
+@projects_bp.route('/projects/<project_name>/checks')
+@login_required
+def project_checks(project_name):
+    app = current_app._get_current_object()
+    username = current_user.username
+    findings = checks.run(app, username, project_name)
+    dismissed = get_project_config(app, username, project_name).get('dismissed_checks') or {}
+    active, hidden = checks.split_dismissed(findings, dismissed)
+    return render_template('project_checks.html', project_name=project_name,
+                           findings=active, dismissed=hidden,
+                           categories=checks.CATEGORIES,
+                           host_count=len(read_project_hosts(app, username, project_name)))
+
+
+@projects_bp.route('/projects/<project_name>/checks/dismiss', methods=['POST'])
+@login_required
+def dismiss_project_check(project_name):
+    """Dismiss a finding as it currently reads. The fingerprint is taken
+    from a fresh run rather than the request, so only a real finding can be
+    dismissed, and only in the form it has now."""
+    app = current_app._get_current_object()
+    key = str(json_body('key')['key'])
+    match = next((f for f in checks.run(app, current_user.username, project_name)
+                  if f['key'] == key), None)
+    if not match:
+        return jsonify({'ok': False, 'error': 'That finding no longer applies.'}), 404
+    dismiss_check(app, current_user.username, project_name, key, match['fingerprint'])
+    return jsonify({'ok': True})
+
+
+@projects_bp.route('/projects/<project_name>/checks/restore', methods=['POST'])
+@login_required
+def restore_project_check(project_name):
+    app = current_app._get_current_object()
+    key = str(json_body('key')['key'])
+    restore_check(app, current_user.username, project_name, key)
+    return jsonify({'ok': True})
 
 
 # ---------------------------------------------------------------------------
