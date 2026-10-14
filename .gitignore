@@ -18,3 +18,4 @@ venv/
 firmware/*
 !firmware/.gitkeep
 !firmware/README.md
+.coverage

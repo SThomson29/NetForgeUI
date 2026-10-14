@@ -18,10 +18,11 @@ import uuid
 import threading
 
 from .ansible_safe import validate_targets
+from .api import json_body
 from .jobs import run_ansible_job, prune_finished, mark_finished
 from .security import job_tag, visible_job
 
-from flask import render_template, request, jsonify, current_app, abort
+from flask import render_template, jsonify, current_app, abort
 from flask_login import login_required, current_user
 
 
@@ -154,18 +155,21 @@ def firmware_run(project_name):
     """Start a firmware upgrade as a background job."""
     app = current_app._get_current_object()
     username = current_user.username
-    body = request.json or {}
+    body = json_body()
 
-    image      = (body.get('image') or '').strip()
-    partition  = (body.get('partition') or 'secondary').strip()
+    image      = str(body.get('image') or '').strip()
+    partition  = str(body.get('partition') or 'secondary').strip()
     hosts_sel  = body.get('hosts') or []
-    sw_user    = (body.get('switch_username') or '').strip()
+    sw_user    = str(body.get('switch_username') or '').strip()
     sw_pass    = body.get('switch_password') or ''
     allow      = bool(body.get('allow_unsafe', False))
     window     = body.get('unsafe_window_mins', 30)
 
     if not sw_user or not sw_pass:
         return jsonify(ok=False, error='Switch credentials are required.'), 400
+    if not isinstance(hosts_sel, list):
+        # A string would be matched by substring: 'core' selecting core-01.
+        return jsonify(ok=False, error='hosts must be a list.'), 400
     if partition not in VALID_PARTITIONS:
         return jsonify(ok=False, error='Partition must be primary or secondary.'), 400
 

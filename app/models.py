@@ -1,13 +1,22 @@
+import contextlib
 import sqlite3
 import os
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 
 
+@contextlib.contextmanager
 def get_db(app):
+    """A connection that commits on success, rolls back on error, and is
+    always closed. sqlite3's own `with connection:` only does the first
+    two, leaving every connection open until garbage collection."""
     db = sqlite3.connect(app.config['DATABASE'])
     db.row_factory = sqlite3.Row
-    return db
+    try:
+        with db:
+            yield db
+    finally:
+        db.close()
 
 
 def init_db(app):

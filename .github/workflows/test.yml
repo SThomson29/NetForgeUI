@@ -2,9 +2,12 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main, Development]
+    branches: [main, dev]
+  # Called by release.yml so an image is never published from a commit
+  # whose tests fail.
+  workflow_call:
 
 jobs:
   test:
@@ -22,6 +25,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+
+      - name: Lint (unused imports, undefined names)
+        run: pyflakes app/ run.py config.py
 
       - name: Run unit and integration tests
         run: |

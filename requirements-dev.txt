@@ -7,5 +7,8 @@
 pytest>=8.0.0
 pytest-cov>=5.0.0
 
+# Lint, run in CI
+pyflakes>=3.2.0
+
 # Jinja2 for template smoke tests (also used by Ansible)
 jinja2>=3.1.0

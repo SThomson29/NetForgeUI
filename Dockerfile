@@ -39,6 +39,13 @@ ENV FLASK_DEBUG=false
 ENV PORT=5000
 ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
 
+# Docker marks the container unhealthy if the app stops answering — a hung
+# gunicorn otherwise looks "up" while serving nothing. python:slim has no
+# curl, so the probe is Python. The start period covers the first-boot
+# clone of the NetForge repo.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('PORT', '5000'), timeout=4)"
+
 # Run bootstrap tasks (admin user, repo sync, orphan cleanup) then start Gunicorn
 # --workers 1 is deliberate and must stay at 1.
 #

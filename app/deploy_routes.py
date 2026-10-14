@@ -14,10 +14,11 @@ import threading
 import yaml
 
 from .ansible_safe import validate_targets
+from .api import json_body, bad_request
 from .jobs import run_ansible_job, prune_finished, mark_finished
 from .security import job_tag, visible_job
 from flask import (
-    render_template, request, jsonify,
+    render_template, jsonify,
     current_app, abort
 )
 from flask_login import login_required, current_user
@@ -258,14 +259,16 @@ def deployment_ips_save(project_name):
     """Persist the mapping, leaving other settings untouched."""
     app = current_app._get_current_object()
     username = current_user.username
-    body = request.json or {}
+    body = json_body()
 
     rows = body.get('mappings') or []
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        bad_request('mappings must be a list of objects.')
     cleaned = []
     seen = set()
     for r in rows:
-        name = (r.get('hostname') or '').strip()
-        ip = (r.get('mgmt_ip') or '').strip()
+        name = str(r.get('hostname') or '').strip()
+        ip = str(r.get('mgmt_ip') or '').strip()
         if not name or name in seen:
             continue
         seen.add(name)
@@ -285,9 +288,7 @@ def deployment_ips_save(project_name):
 @login_required
 def deploy_save_mapping(project_name):
     """Save the mapping table."""
-    data = request.get_json()
-    if not data:
-        return jsonify(ok=False, error='No data'), 400
+    data = json_body()
 
     rows = data.get('mappings', [])
     problems = validate_targets(rows)
@@ -342,9 +343,7 @@ def deploy_auto_populate(project_name):
 @login_required
 def deploy_dryrun(project_name):
     """Run dry-run playbook — returns diffs per host."""
-    data = request.get_json()
-    if not data:
-        return jsonify(ok=False, error='No data'), 400
+    data = json_body()
 
     hosts = data.get('hosts', [])
     username = data.get('username', '')
@@ -394,9 +393,7 @@ def deploy_status(project_name, job_id):
 @login_required
 def deploy_push(project_name):
     """Run deploy playbook — checkpoint, push, verify, confirm."""
-    data = request.get_json()
-    if not data:
-        return jsonify(ok=False, error='No data'), 400
+    data = json_body()
 
     hosts = data.get('hosts', [])
     username = data.get('username', '')

@@ -30,6 +30,7 @@ from .transfer import (
     export_project, import_project, read_manifest, TransferError,
 )
 
+from .api import json_body
 from .jobs import prune_finished, mark_finished
 from .security import job_tag, visible_job
 from .utils import (
@@ -272,7 +273,8 @@ def reconcile_project(project_name):
     POST {"apply": true}   -> write the files
     """
     app  = current_app._get_current_object()
-    body = request.json or {}
+    body = request.get_json(silent=True)
+    body = body if isinstance(body, dict) else {}
     try:
         result = reconcile_host_vars(
             app, current_user.username, project_name,
@@ -288,11 +290,13 @@ def reconcile_project(project_name):
 @login_required
 def save_all_hostvars(project_name, hostname):
     app   = current_app._get_current_object()
-    files = request.json or []
+    files = json_body(kind=list)
     hvdir = project_host_vars_dir(app, current_user.username, project_name)
     errors = []
     for item in files:
         try:
+            if not isinstance(item, dict):
+                raise ValueError('Each file must be an object')
             fname    = item['filename']
             fcontent = item['content']
             if fname not in HOSTVARS_FILES:
@@ -301,7 +305,9 @@ def save_all_hostvars(project_name, hostname):
             os.makedirs(dest, exist_ok=True)
             with open(os.path.join(dest, fname), 'w') as f:
                 f.write(fcontent)
-        except (ValueError, KeyError) as e:
+        except KeyError as e:
+            errors.append('Missing field: %s' % e)
+        except ValueError as e:
             errors.append(str(e))
     if errors:
         return jsonify({'ok': False, 'errors': errors}), 400
@@ -339,8 +345,9 @@ def run_generate(project_name):
     from .docker_runner import run_generate as docker_run_generate
 
     app   = current_app._get_current_object()
-    limit = request.json.get('limit', '').strip()
-    tags  = request.json.get('tags', '').strip()
+    body  = json_body()
+    limit = str(body.get('limit') or '').strip()
+    tags  = str(body.get('tags') or '').strip()
 
     out_dir = project_generated_configs_dir(app, current_user.username, project_name)
     os.makedirs(out_dir, exist_ok=True)
@@ -458,7 +465,7 @@ def resources_page(project_name):
 @login_required
 def api_add_pool(project_name):
     app  = current_app._get_current_object()
-    data = request.json
+    data = json_body()
     import uuid as _uuid
     data['id'] = 'pool_' + _uuid.uuid4().hex[:8]
     try:
@@ -490,7 +497,7 @@ def api_carved_subnets(project_name, pool_id):
 def api_carve_block(project_name, pool_id):
     """Carve a block of any size from a manual supernet."""
     app  = current_app._get_current_object()
-    data = request.json or {}
+    data = json_body()
     try:
         subnet = carve_supernet_block(
             app, current_user.username, project_name, pool_id,
@@ -508,7 +515,7 @@ def api_carve_block(project_name, pool_id):
 def api_remove_block(project_name, pool_id):
     """Remove a manually carved block, returning its space."""
     app  = current_app._get_current_object()
-    data = request.json or {}
+    data = json_body()
     try:
         remove_supernet_block(app, current_user.username, project_name,
                               pool_id, (data.get('subnet') or '').strip())
@@ -557,7 +564,7 @@ def api_convert_supernet(project_name, pool_id):
 def api_update_pool(project_name, pool_id):
     """Change a pool's name or range without losing its allocations."""
     app  = current_app._get_current_object()
-    data = request.json or {}
+    data = json_body()
     try:
         pool = update_pool(app, current_user.username, project_name, pool_id,
                            name=(data.get('name') or None),
@@ -597,7 +604,7 @@ def api_available_ips(project_name, pool_id):
 @login_required
 def api_allocate_unique(project_name):
     app  = current_app._get_current_object()
-    data = request.json
+    data = json_body('pool_id', 'ip', 'hostname', 'interface')
     allocate_unique(app, current_user.username, project_name,
                     data['pool_id'], data['ip'], data['hostname'], data['interface'])
     return jsonify({'ok': True})
@@ -607,7 +614,7 @@ def api_allocate_unique(project_name):
 @login_required
 def api_release_unique(project_name):
     app  = current_app._get_current_object()
-    data = request.json
+    data = json_body('pool_id', 'ip')
     release_unique(app, current_user.username, project_name,
                    data['pool_id'], data['ip'], data.get('hostname') or None)
     return jsonify({'ok': True})
@@ -617,11 +624,14 @@ def api_release_unique(project_name):
 @login_required
 def api_allocate_ptp(project_name):
     app  = current_app._get_current_object()
-    data = request.json
-    peer_ip = allocate_ptp(app, current_user.username, project_name,
-                           data['pool_id'], data['ip'],
-                           data['hostname'], data['interface'],
-                           data.get('peer_note'))
+    data = json_body('pool_id', 'ip', 'hostname', 'interface')
+    try:
+        peer_ip = allocate_ptp(app, current_user.username, project_name,
+                               data['pool_id'], data['ip'],
+                               data['hostname'], data['interface'],
+                               data.get('peer_note'))
+    except ValueError as e:     # not an IP address
+        return jsonify({'ok': False, 'error': str(e)}), 400
     return jsonify({'ok': True, 'peer_ip': peer_ip})
 
 
@@ -629,7 +639,7 @@ def api_allocate_ptp(project_name):
 @login_required
 def api_release_ptp(project_name):
     app  = current_app._get_current_object()
-    data = request.json
+    data = json_body('pool_id', 'ip')
     release_ptp(app, current_user.username, project_name,
                 data['pool_id'], data['ip'])
     return jsonify({'ok': True})
@@ -639,7 +649,7 @@ def api_release_ptp(project_name):
 @login_required
 def api_assign_vlan(project_name):
     app  = current_app._get_current_object()
-    data = request.json
+    data = json_body('pool_id', 'subnet', 'vlan_id', 'vlan_name')
     try:
         assign_vlan_subnet(app, current_user.username, project_name,
                            data['pool_id'], data['subnet'],
@@ -655,7 +665,7 @@ def api_assign_vlan(project_name):
 @login_required
 def api_release_vlan(project_name):
     app  = current_app._get_current_object()
-    data = request.json
+    data = json_body('pool_id', 'subnet')
     release_vlan_subnet(app, current_user.username, project_name,
                         data['pool_id'], data['subnet'])
     return jsonify({'ok': True})
@@ -676,7 +686,7 @@ def api_get_common(project_name):
 @login_required
 def api_save_common(project_name):
     app  = current_app._get_current_object()
-    data = request.json
+    data = json_body()
     save_common(app, current_user.username, project_name, data)
     return jsonify({'ok': True})
 
@@ -696,7 +706,7 @@ def api_get_conventions(project_name):
 @login_required
 def api_save_conventions(project_name):
     app  = current_app._get_current_object()
-    data = request.json
+    data = json_body()
     save_conventions(app, current_user.username, project_name, data)
     return jsonify({'ok': True})
 

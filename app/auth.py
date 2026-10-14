@@ -13,6 +13,22 @@ def index():
     return redirect(url_for('auth.login'))
 
 
+@auth_bp.route('/healthz')
+def healthz():
+    """Liveness for Docker's HEALTHCHECK. Unauthenticated, reveals nothing.
+
+    Answering at all shows gunicorn is serving requests; the query shows
+    the user database — which every login needs — is readable.
+    """
+    from .models import get_db
+    try:
+        with get_db(current_app._get_current_object()) as db:
+            db.execute('SELECT 1').fetchone()
+    except Exception:
+        return {'ok': False}, 503
+    return {'ok': True}
+
+
 @auth_bp.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
