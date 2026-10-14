@@ -64,6 +64,17 @@ def init_db(app):
 
     from .audit import init_audit
     init_audit(app)
+    from .sharing import init_sharing
+    init_sharing(app)
+
+
+def _json_list(value):
+    import json
+    try:
+        out = json.loads(value) if value else []
+    except ValueError:
+        return []
+    return out if isinstance(out, list) else []
 
 
 class User(UserMixin):
@@ -77,7 +88,7 @@ class User(UserMixin):
 
     def __init__(self, id, username, is_admin=False, session_version=0,
                  source='local', oidc_sub=None, email=None, link_email=None,
-                 sso_admin=False):
+                 sso_admin=False, groups=None):
         self.id       = id
         self.username = username
         self.local_admin = bool(is_admin)
@@ -87,6 +98,8 @@ class User(UserMixin):
         self.oidc_sub = oidc_sub
         self.email = email
         self.link_email = link_email
+        # Identity provider groups from the last SSO sign-in.
+        self.groups = list(groups or [])
 
     @property
     def is_admin(self):
@@ -108,7 +121,7 @@ class User(UserMixin):
         return User(row['id'], row['username'], row['is_admin'],
                     col('session_version', 0), col('source', 'local'),
                     col('oidc_sub'), col('email'), col('link_email'),
-                    col('sso_admin', 0))
+                    col('sso_admin', 0), _json_list(col('groups')))
 
     def get_id(self):
         return '%d:%d' % (self.id, self.session_version)

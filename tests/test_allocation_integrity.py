@@ -245,7 +245,7 @@ class TestEditorReportsFailedAllocations:
         from app.project import create_project
         with app.app_context():
             create_project(app, 'admin', 'reload')
-        data = auth_client.get('/projects/reload/api/allocations').get_json()
+        data = auth_client.get('/projects/admin/reload/api/allocations').get_json()
         assert {'unique', 'point_to_point'} <= set(data)
 
 
@@ -332,7 +332,7 @@ class TestSharedVtepFromEditor:
     def test_release_route_passes_the_switch(self, vtep, auth_client):
         self._save_vtep(vtep, 'core-01', '10.255.1.1')
         allocate_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1', 'core-02', 'Loopback IP')
-        res = auth_client.post('/projects/v/api/allocations/unique/release',
+        res = auth_client.post('/projects/admin/v/api/allocations/unique/release',
                                json={'pool_id': 'lb', 'ip': '10.255.1.1',
                                      'hostname': 'core-02'})
         assert res.status_code == 200

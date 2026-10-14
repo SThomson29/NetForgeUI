@@ -320,7 +320,7 @@ function toggleAllMapping(el) {
 }
 
 async function autoPopulate() {
-  const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/auto-populate`);
+  const res = await fetch(`${PROJECT_BASE}/deploy/auto-populate`);
   const data = await res.json();
   if (data.ok) {
     location.reload();
@@ -343,7 +343,7 @@ async function saveMappings() {
 
   const timeout = parseInt(document.getElementById('rollback-timeout').value) || 5;
 
-  const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/save-mapping`, {
+  const res = await fetch(`${PROJECT_BASE}/deploy/save-mapping`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mappings, rollback_timeout: timeout })
@@ -412,7 +412,7 @@ async function startDryRun() {
 
   let start;
   try {
-    const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/dryrun`, {
+    const res = await fetch(`${PROJECT_BASE}/deploy/dryrun`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -553,7 +553,7 @@ function pollDeployJob(jobId, container, onDone) {
     let job;
     try {
       const res = await fetch(
-        `/projects/${encodeURIComponent(PROJECT)}/deploy/status/${jobId}`);
+        `${PROJECT_BASE}/deploy/status/${jobId}`);
       if (!res.ok) {
         container.innerHTML =
           `<div class="alert alert-danger"><span>Lost track of this job (status ${esc(res.status)}).`
@@ -609,7 +609,7 @@ async function confirmDeploy() {
 
   let start;
   try {
-    const res = await fetch(`/projects/${encodeURIComponent(PROJECT)}/deploy/push`, {
+    const res = await fetch(`${PROJECT_BASE}/deploy/push`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -72,8 +72,10 @@
 <script>
 var ce = React.createElement;
 const PROJECT_NAME = {{ project_name | tojson }};
+// The host_vars this editor loaded, as the server fingerprints them.
+let HOST_FINGERPRINT = null;
 function selectHost(hostname) {
-  window.location = hostname ? '/projects/' + PROJECT_NAME + '/editor?host=' + encodeURIComponent(hostname) : '/projects/' + PROJECT_NAME + '/editor';
+  window.location = hostname ? PROJECT_BASE + '/editor?host=' + encodeURIComponent(hostname) : PROJECT_BASE + '/editor';
 }
 
 {% if selected %}
@@ -191,7 +193,7 @@ var __triggerAllocRefresh = null; // Set by App on mount
    are reloaded from the server and the user is told. The field value is
    kept: saving the host records it from host_vars either way. */
 function poolRequest(endpoint, body, what) {
-  fetch('/projects/' + PROJECT_NAME + endpoint, {
+  fetch(PROJECT_BASE + endpoint, {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify(body)
   }).then(function(res) {
@@ -207,7 +209,7 @@ function poolRequest(endpoint, body, what) {
 }
 
 function poolReloadAllocations() {
-  fetch('/projects/' + PROJECT_NAME + '/api/allocations')
+  fetch(PROJECT_BASE + '/api/allocations')
     .then(function(res) { if (!res.ok) throw new Error(); return res.json(); })
     .then(function(allocs) {
       for (var k in PROJECT_ALLOCS) delete PROJECT_ALLOCS[k];
@@ -648,8 +650,8 @@ function App() {
 
   // Load state from server on mount
   useEffect(() => {
-    fetch('/projects/' + PROJECT_NAME + '/api/hostvars/' + encodeURIComponent(SELECTED_HOST) + '/state')
-      .then(r => r.json())
+    fetch(PROJECT_BASE + '/api/hostvars/' + encodeURIComponent(SELECTED_HOST) + '/state')
+      .then(r => { HOST_FINGERPRINT = r.headers.get('X-Hostvars-Fingerprint'); return r.json(); })
       .then(s => {
         setHostname(s.hostname || '');
         setPlatform(s.platform || 'aoscx');
@@ -858,11 +860,20 @@ function App() {
 
     setSaveStatus('Saving...'); setSaveOk(null);
     try {
-      const res  = await fetch('/projects/' + PROJECT_NAME + '/api/hostvars/' + encodeURIComponent(SELECTED_HOST) + '/save_all', {
-        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(files)});
+      const headers = {'Content-Type': 'application/json'};
+      // Lets the server refuse the save if someone else saved this switch
+      // since it was loaded, rather than overwrite their changes.
+      if (HOST_FINGERPRINT) headers['X-Base-Fingerprint'] = HOST_FINGERPRINT;
+      const res  = await fetch(PROJECT_BASE + '/api/hostvars/' + encodeURIComponent(SELECTED_HOST) + '/save_all', {
+        method: 'POST', headers, body: JSON.stringify(files)});
       const data = await res.json();
       setSaveOk(data.ok);
+      if (data.conflict) {
+        setSaveStatus(data.error);      // stays until they act on it
+        return;
+      }
       if (data.ok) {
+        HOST_FINGERPRINT = res.headers.get('X-Hostvars-Fingerprint') || HOST_FINGERPRINT;
         setIsDirty(false);
         // Refresh pool allocations so pool pickers show updated assignments
         if (data.allocations) {
@@ -871,7 +882,7 @@ function App() {
           setAllocRefresh(function(c) { return c + 1; });
         }
       }
-      setSaveStatus(data.ok ? 'Saved ✓' : 'Error saving');
+      setSaveStatus(data.ok ? 'Saved ✓' : (data.error || 'Error saving'));
       setTimeout(() => setSaveStatus(''), 3000);
     } catch(err) {
       setSaveOk(false); setSaveStatus('Network error');
@@ -1098,7 +1109,7 @@ function App() {
 
     status.textContent = 'Loading from ' + src + '\u2026';
     try {
-      const res = await fetch('/projects/' + PROJECT_NAME
+      const res = await fetch(PROJECT_BASE
         + '/api/hostvars/' + encodeURIComponent(src) + '/state');
       if (!res.ok) { status.textContent = 'Could not read ' + src + '.'; return; }
       const state = await res.json();

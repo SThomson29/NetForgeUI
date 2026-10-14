@@ -21,7 +21,7 @@ def proj(app, auth_client):
         add_pool(app, 'admin', 'api', {
             'id': 'pp', 'type': 'point_to_point', 'name': 'p2p',
             'prefix': '31', 'subnet': '10.8.0.0/24'})
-    return '/projects/api'
+    return '/projects/admin/api'
 
 
 ROUTES = [
@@ -119,7 +119,7 @@ class TestFirmwareHostSelection:
         fw.mkdir()
         (fw / 'img.swi').write_text('x')
         app.config['FIRMWARE_DIR'] = str(fw)
-        res = auth_client.post('/projects/p/firmware/run', json={
+        res = auth_client.post('/projects/admin/p/firmware/run', json={
             'image': 'img.swi', 'hosts': 'core',
             'switch_username': 'u', 'switch_password': 'p'})
         assert res.status_code == 400

@@ -117,30 +117,30 @@ def _write_json_atomic(path, data):
 # Project CRUD
 # ---------------------------------------------------------------------------
 
+def project_summary(app, username, name):
+    """What the projects list shows for one project."""
+    cfg = _load_config(app, username, name)
+    gcdir = project_generated_configs_dir(app, username, name)
+    config_count = len([
+        f for f in os.listdir(gcdir)
+        if f.endswith('.ios')
+    ]) if os.path.isdir(gcdir) else 0
+    return {
+        'name':         name,
+        'owner':        username,
+        'display_name': cfg.get('name', name),
+        'created':      cfg.get('created', ''),
+        'host_count':   _count_hosts(app, username, name),
+        'config_count': config_count,
+    }
+
+
 def list_projects(app, username):
     """Return list of project metadata dicts sorted by name."""
     pdir = projects_dir(app, username)
     os.makedirs(pdir, exist_ok=True)
-    result = []
-    for name in sorted(os.listdir(pdir)):
-        full = os.path.join(pdir, name)
-        if not os.path.isdir(full):
-            continue
-        cfg = _load_config(app, username, name)
-        gcdir = project_generated_configs_dir(app, username, name)
-        config_count = len([
-            f for f in os.listdir(gcdir)
-            if f.endswith('.ios')
-        ]) if os.path.isdir(gcdir) else 0
-        host_count = _count_hosts(app, username, name)
-        result.append({
-            'name':         name,
-            'display_name': cfg.get('name', name),
-            'created':      cfg.get('created', ''),
-            'host_count':   host_count,
-            'config_count': config_count,
-        })
-    return result
+    return [project_summary(app, username, name) for name in sorted(os.listdir(pdir))
+            if os.path.isdir(os.path.join(pdir, name))]
 
 
 def create_project(app, username, project_name):
@@ -1317,6 +1317,17 @@ def dismiss_check(app, username, project_name, key, fingerprint):
 def restore_check(app, username, project_name, key):
     cfg = _load_config(app, username, project_name)
     cfg.get('dismissed_checks', {}).pop(key, None)
+    _save_config(app, username, project_name, cfg)
+
+
+@_locked
+def record_host_save(app, username, project_name, hostname, by):
+    """Who last saved a switch, so an editor whose save is refused for a
+    conflict can say who changed it."""
+    from datetime import datetime, timezone
+    cfg = _load_config(app, username, project_name)
+    cfg.setdefault('host_saves', {})[hostname] = {
+        'by': by, 'at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
     _save_config(app, username, project_name, cfg)
 
 

@@ -221,7 +221,7 @@ class TestResourcesPageRendering:
             add_pool(app, 'admin', proj, {
                 'id': 'ptp1', 'type': 'point_to_point', 'name': 'P2P links',
                 'subnet': '10.100.5.0/24', 'parent_pool_id': 'sn1'})
-        res = auth_client.get('/projects/%s/resources' % proj)
+        res = auth_client.get('/projects/admin/%s/resources' % proj)
         assert res.status_code == 200
         body = res.data.decode()
         assert 'delegated from VLANs' in body
@@ -231,7 +231,7 @@ class TestResourcesPageRendering:
         from app.project import create_project
         with app.app_context():
             create_project(app, 'admin', 'bare')
-        res = auth_client.get('/projects/bare/resources')
+        res = auth_client.get('/projects/admin/bare/resources')
         assert res.status_code == 200
         assert 'SUPERNETS = []' in res.data.decode()
 
@@ -241,12 +241,12 @@ class TestResourcesPageRendering:
                 'id': 'ptp1', 'type': 'point_to_point', 'name': 'P2P',
                 'subnet': '10.100.5.0/24', 'parent_pool_id': 'sn1'})
         data = auth_client.get(
-            '/projects/%s/api/pools/sn1/carved' % proj).get_json()
+            '/projects/admin/%s/api/pools/sn1/carved' % proj).get_json()
         assert '10.100.5.0/24' not in data['subnets']
         assert '10.100.6.0/24' in data['subnets']
 
     def test_api_reports_overlap_clearly(self, app, auth_client, proj):
-        res = auth_client.post('/projects/%s/api/pools' % proj, json={
+        res = auth_client.post('/projects/admin/%s/api/pools' % proj, json={
             'type': 'point_to_point', 'name': 'P2P',
             'subnet': '10.100.5.0/24'})
         assert res.status_code == 400
@@ -290,7 +290,7 @@ class TestAddressOrdering:
     def test_carved_endpoint_is_in_address_order(self, app, auth_client, proj):
         """The delegation picker — a /16 carved to /24 gives 256 entries."""
         data = auth_client.get(
-            '/projects/%s/api/pools/sn1/carved' % proj).get_json()
+            '/projects/admin/%s/api/pools/sn1/carved' % proj).get_json()
         subnets = data['subnets']
         assert subnets[0] == '10.100.0.0/24'
         assert subnets[1] == '10.100.1.0/24'
@@ -299,7 +299,7 @@ class TestAddressOrdering:
         assert subnets[-1] == '10.100.255.0/24'
 
     def test_resources_table_is_in_address_order(self, app, auth_client, proj):
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         i2 = body.index('10.100.2.0/24')
         i10 = body.index('10.100.10.0/24')
         i100 = body.index('10.100.100.0/24')
@@ -311,7 +311,7 @@ class TestVlanAssignment:
 
     def test_assign_without_a_hostname(self, app, auth_client, proj):
         """A VLAN can be named before its switch is known."""
-        res = auth_client.post('/projects/%s/api/allocations/vlan' % proj, json={
+        res = auth_client.post('/projects/admin/%s/api/allocations/vlan' % proj, json={
             'pool_id': 'sn1', 'subnet': '10.100.7.0/24',
             'vlan_id': '700', 'vlan_name': 'Voice'})
         assert res.get_json()['ok'] is True
@@ -327,7 +327,7 @@ class TestVlanAssignment:
         assert allocs['svi'].get('sn1', {}) == {}
 
     def test_assign_with_hostname_derives_gateway(self, app, auth_client, proj):
-        res = auth_client.post('/projects/%s/api/allocations/vlan' % proj, json={
+        res = auth_client.post('/projects/admin/%s/api/allocations/vlan' % proj, json={
             'pool_id': 'sn1', 'subnet': '10.100.8.0/24',
             'vlan_id': '800', 'vlan_name': 'Users', 'hostname': 'sw1'})
         assert res.get_json()['ok'] is True
@@ -343,7 +343,7 @@ class TestVlanAssignment:
             add_pool(app, 'admin', proj, {
                 'id': 'ptp1', 'type': 'point_to_point', 'name': 'P2P',
                 'subnet': '10.100.5.0/24', 'parent_pool_id': 'sn1'})
-        res = auth_client.post('/projects/%s/api/allocations/vlan' % proj, json={
+        res = auth_client.post('/projects/admin/%s/api/allocations/vlan' % proj, json={
             'pool_id': 'sn1', 'subnet': '10.100.5.0/24',
             'vlan_id': '500', 'vlan_name': 'Links'})
         assert res.get_json()['ok'] is True
@@ -358,7 +358,7 @@ class TestVlanAssignment:
             add_pool(app, 'admin', proj, {
                 'id': 'ptp1', 'type': 'point_to_point', 'name': 'P2P',
                 'subnet': '10.100.5.0/24', 'parent_pool_id': 'sn1'})
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'openVlanAssign("sn1", "10.100.6.0/24")' in body
         assert 'openVlanAssign("sn1", "10.100.5.0/24")' in body
 
@@ -366,7 +366,7 @@ class TestVlanAssignment:
 class TestPoolTypeLabels:
 
     def test_supernet_is_not_called_vlan_supernet(self, app, auth_client, proj):
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'VLAN supernet' not in body
         assert '>Supernet<' in body
 
@@ -386,7 +386,7 @@ class TestPoolFormInitialisation:
         delegation source selector among them — stayed unset until the type
         dropdown was changed and changed back.
         """
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert "addEventListener('DOMContentLoaded', updatePoolForm)" in body, \
             'pool form is never initialised on page load'
 
@@ -425,7 +425,7 @@ class TestSubnetFormatValidation:
         assert any(p['id'] == 'ok' for p in pools)
 
     def test_api_reports_the_problem(self, app, auth_client, proj):
-        res = auth_client.post('/projects/%s/api/pools' % proj, json={
+        res = auth_client.post('/projects/admin/%s/api/pools' % proj, json={
             'type': 'unique', 'name': 'Trusted',
             'prefix': 18, 'subnet': '10.50.64.0'})
         assert res.status_code == 400
@@ -442,6 +442,6 @@ class TestSubnetFormatValidation:
             hv = os.path.join(project_host_vars_dir(app, 'admin', proj), 'sw1')
             os.makedirs(hv, exist_ok=True)
         body = auth_client.get(
-            '/projects/%s/editor?host=sw1' % proj).data.decode()
+            '/projects/admin/%s/editor?host=sw1' % proj).data.decode()
         assert 'MAX_ENUMERATED_IPS' in body
         assert 'isNaN(subnetPrefix)' in body

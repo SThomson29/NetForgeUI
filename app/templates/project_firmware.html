@@ -213,7 +213,7 @@ async function loadImages() {
   const none = document.getElementById('fw-no-images');
   const opts = document.getElementById('fw-options');
   try {
-    const res  = await fetch(`/projects/${encodeURIComponent(PROJECT)}/firmware/images`);
+    const res  = await fetch(`${PROJECT_BASE}/firmware/images`);
     const data = await res.json();
     document.getElementById('fw-dir').textContent = data.firmware_dir || 'firmware/';
     if (!data.images || !data.images.length) {
@@ -298,7 +298,7 @@ async function startFirmware() {
   document.getElementById('fw-results-card').style.display = 'none';
 
   try {
-    const res  = await fetch(`/projects/${encodeURIComponent(PROJECT)}/firmware/run`,
+    const res  = await fetch(`${PROJECT_BASE}/firmware/run`,
       {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const data = await res.json();
     if (!data.ok) {
@@ -318,7 +318,7 @@ function pollJob(jobId) {
   const tick = async () => {
     try {
       const res  = await fetch(
-        `/projects/${encodeURIComponent(PROJECT)}/firmware/status/${jobId}`);
+        `${PROJECT_BASE}/firmware/status/${jobId}`);
       if (!res.ok) {
         clearTimeout(pollTimer);
         document.getElementById('fw-start').disabled = false;

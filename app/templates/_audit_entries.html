@@ -43,7 +43,7 @@
       <span>
         {{ e.targets|map(attribute='hostname')|join(', ') }}
         <span class="audit-who">
-          {% if show_owner %}· {{ e.username }} / {{ e.project }}{% endif %}
+          {% if show_owner %}· {{ e.username }} · {{ e.owner or e.username }} / {{ e.project }}{% else %}· {{ e.username }}{% endif %}
           {% if e.switch_user %}· as {{ e.switch_user }}{% endif %}
         </span>
       </span>

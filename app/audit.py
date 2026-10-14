@@ -97,6 +97,14 @@ def init_audit(app):
         if 'details_trimmed' not in cols:
             db.execute('ALTER TABLE audit_log ADD COLUMN '
                        'details_trimmed INTEGER NOT NULL DEFAULT 0')
+        # Whose project an entry belongs to, as distinct from who acted —
+        # they differ once projects are shared. Older entries were always
+        # the actor's own project.
+        if 'owner' not in cols:
+            db.execute('ALTER TABLE audit_log ADD COLUMN owner TEXT')
+        db.execute('UPDATE audit_log SET owner = username WHERE owner IS NULL')
+        db.execute('CREATE INDEX IF NOT EXISTS audit_by_owner_project '
+                   'ON audit_log (owner, project, id)')
 
 
 def file_fingerprint(path):
@@ -154,14 +162,19 @@ def generation_results(before, after):
     return results
 
 
-def record_start(app, *, username, project, action, switch_user, targets, params):
-    """Open an entry for a run that is starting. Returns its id."""
+def record_start(app, *, username, project, action, switch_user, targets, params,
+                 owner=None):
+    """Open an entry for a run that is starting. Returns its id.
+
+    username is who acted; owner whose project it is (the actor's own if
+    not given).
+    """
     trim_old(app)
     with get_db(app) as db:
         cur = db.execute(
-            'INSERT INTO audit_log (started_at, username, project, action, '
-            'switch_user, targets, params, status) VALUES (?,?,?,?,?,?,?,?)',
-            (_now(), username, project, action, switch_user,
+            'INSERT INTO audit_log (started_at, username, owner, project, action, '
+            'switch_user, targets, params, status) VALUES (?,?,?,?,?,?,?,?,?)',
+            (_now(), username, owner or username, project, action, switch_user,
              json.dumps(targets), json.dumps(params), 'running'))
         return cur.lastrowid
 
@@ -269,9 +282,10 @@ def _outcome(e):
             'green' if status == 'done' else 'red')
 
 
-def entries(app, *, username=None, project=None, limit=200,
+def entries(app, *, username=None, project=None, owner=None, limit=200,
             include_generations=True):
-    """Newest first, optionally narrowed to one user and/or project.
+    """Newest first, optionally narrowed to who acted (username), whose
+    project (owner) and/or the project name.
 
     Each deploy target whose file hash matches a logged generation gains
     'generated_by': the entry that first produced that exact content.
@@ -282,6 +296,9 @@ def entries(app, *, username=None, project=None, limit=200,
     if username is not None:
         where.append('username = ?')
         args.append(username)
+    if owner is not None:
+        where.append('owner = ?')
+        args.append(owner)
     if project is not None:
         where.append('project = ?')
         args.append(project)
@@ -305,16 +322,16 @@ def _link_generations(db, rows):
             digest = t.get('sha256')
             if not digest:
                 continue
-            key = (e['username'], e['project'], digest)
+            key = (e['owner'], e['project'], digest)
             if key not in cache:
                 # Hashes are hex, so a substring match on the stored JSON is
                 # exact enough; the earliest entry first produced the content.
                 g = db.execute(
                     "SELECT id, started_at, username FROM audit_log "
                     "WHERE action = 'generate' AND status = 'done' "
-                    "AND username = ? AND project = ? AND results LIKE ? "
+                    "AND owner = ? AND project = ? AND results LIKE ? "
                     "ORDER BY id LIMIT 1",
-                    (e['username'], e['project'], '%' + digest + '%')).fetchone()
+                    (e['owner'], e['project'], '%' + digest + '%')).fetchone()
                 cache[key] = dict(g) if g else None
             g = cache[key]
             # Only a generation that ran before this deploy can have made it.

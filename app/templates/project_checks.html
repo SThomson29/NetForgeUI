@@ -87,7 +87,7 @@ const PROJECT = {{ project_name | tojson }};
 async function checkAction(btn) {
   btn.disabled = true;
   try {
-    const res = await fetch('/projects/' + encodeURIComponent(PROJECT) + '/checks/' + btn.dataset.action, {
+    const res = await fetch(PROJECT_BASE + '/checks/' + btn.dataset.action, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({key: btn.dataset.key})
     });

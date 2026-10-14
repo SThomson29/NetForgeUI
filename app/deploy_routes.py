@@ -16,11 +16,11 @@ import yaml
 from .ansible_safe import validate_targets
 from . import audit, checks
 from .api import json_body, bad_request
-from .jobs import run_ansible_job, prune_finished, mark_finished
+from .jobs import run_ansible_job, prune_finished, mark_finished, busy_hosts
 from .security import job_tag, visible_job
 from flask import (
     render_template, jsonify,
-    current_app, abort
+    current_app, abort, g
 )
 from flask_login import login_required, current_user
 
@@ -185,6 +185,7 @@ def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts,
             'status': 'starting', 'output': '',
             'returncode': None, 'results': [],
             'playbook': playbook_name,
+            '_hosts': list(limit_hosts or ()),
             **job_tag(owner, project_name),
         }
 
@@ -213,13 +214,31 @@ def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts,
     return job_id
 
 
+def _project_key(project_name):
+    return '%s/%s' % (g.project_owner, project_name)
+
+
+def switches_in_use(project_key, hostnames):
+    """A message naming any of hostnames a push or firmware upgrade in
+    this project is still working on, or None. Two at once against one
+    switch would fight over its checkpoint and rollback."""
+    from .firmware_routes import _fw_jobs, _fw_jobs_lock
+    busy = busy_hosts(_deploy_jobs, _deploy_jobs_lock, project_key, hostnames,
+                      lambda job: job.get('playbook') == 'deploy_push.yml')
+    busy.update(busy_hosts(_fw_jobs, _fw_jobs_lock, project_key, hostnames))
+    if not busy:
+        return None
+    return 'Already being changed: %s. Try again when that finishes.' % ', '.join(
+        '%s (started by %s)' % (h, who) for h, who in sorted(busy.items()))
+
+
 # ── Routes ─────────────────────────────────────────────────
 
 @login_required
 def project_deploy(project_name):
     """Render the deploy tab."""
     app = current_app._get_current_object()
-    username = current_user.username
+    username = g.project_owner
     mapping = _load_mapping(app, username, project_name)
     config_dir = project_generated_configs_dir(app, username, project_name)
 
@@ -253,7 +272,7 @@ def deployment_ips(project_name):
     the same mapping.
     """
     app = current_app._get_current_object()
-    mapping = _load_mapping(app, current_user.username, project_name)
+    mapping = _load_mapping(app, g.project_owner, project_name)
     return render_template(
         'project_deployment_ips.html',
         project_name=project_name,
@@ -265,7 +284,7 @@ def deployment_ips(project_name):
 def deployment_ips_save(project_name):
     """Persist the mapping, leaving other settings untouched."""
     app = current_app._get_current_object()
-    username = current_user.username
+    username = g.project_owner
     body = json_body()
 
     rows = body.get('mappings') or []
@@ -306,7 +325,7 @@ def deploy_save_mapping(project_name):
         return jsonify(ok=False, error=_ROLLBACK_ERROR), 400
 
     app = current_app._get_current_object()
-    username = current_user.username
+    username = g.project_owner
     mapping_data = {
         # Only the fields the mapping holds — nothing else from the request.
         'hosts': [{'hostname': str(r.get('hostname')),
@@ -325,7 +344,7 @@ def deploy_auto_populate(project_name):
     from .utils import read_project_hosts
 
     app = current_app._get_current_object()
-    username = current_user.username
+    username = g.project_owner
 
     try:
         hosts = read_project_hosts(app, username, project_name)
@@ -365,7 +384,7 @@ def deploy_dryrun(project_name):
 
     app = current_app._get_current_object()
     config_dir = project_generated_configs_dir(
-        app, current_user.username, project_name
+        app, g.project_owner, project_name
     )
     hosts, problems = _resolve_config_files(hosts, config_dir)
     if problems:
@@ -379,13 +398,14 @@ def deploy_dryrun(project_name):
     }
 
     audit_id = audit.record_start(
-        app, username=current_user.username, project=project_name,
+        app, username=current_user.username, owner=g.project_owner,
+        project=project_name,
         action='deploy_dryrun', switch_user=username,
         targets=audit.deploy_targets(hosts, config_dir), params={})
     job_id = _start_deploy_job(
         app, 'deploy_dryrun.yml', inventory, extra_vars,
         limit_hosts=[h['hostname'] for h in hosts],
-        owner=current_user.username, project_name=project_name,
+        owner=current_user.username, project_name=_project_key(project_name),
         audit_id=audit_id,
     )
     return jsonify(ok=True, job_id=job_id)
@@ -405,7 +425,7 @@ def reachability(project_name):
     if not isinstance(wanted, list):
         bad_request('hosts must be a list of hostnames.')
     mapping = _load_mapping(current_app._get_current_object(),
-                            current_user.username, project_name)
+                            g.project_owner, project_name)
     hosts = [h for h in mapping.get('hosts', [])
              if isinstance(h, dict) and (not wanted or h.get('hostname') in wanted)]
     # The mapping may predate validation.
@@ -418,7 +438,7 @@ def deploy_status(project_name, job_id):
     """Poll a running or finished deploy job."""
     with _deploy_jobs_lock:
         snapshot = visible_job(_deploy_jobs.get(job_id),
-                               current_user.username, project_name)
+                               current_user.username, _project_key(project_name))
     if not snapshot:
         abort(404)
     return jsonify(snapshot)
@@ -445,11 +465,14 @@ def deploy_push(project_name):
 
     app = current_app._get_current_object()
     config_dir = project_generated_configs_dir(
-        app, current_user.username, project_name
+        app, g.project_owner, project_name
     )
     hosts, problems = _resolve_config_files(hosts, config_dir)
     if problems:
         return jsonify(ok=False, error='; '.join(problems)), 400
+    busy = switches_in_use(_project_key(project_name), [h['hostname'] for h in hosts])
+    if busy:
+        return jsonify(ok=False, error=busy), 409
     inventory = _build_inventory(hosts, username, password)
 
     extra_vars = {
@@ -460,14 +483,15 @@ def deploy_push(project_name):
     }
 
     audit_id = audit.record_start(
-        app, username=current_user.username, project=project_name,
+        app, username=current_user.username, owner=g.project_owner,
+        project=project_name,
         action='deploy_push', switch_user=username,
         targets=audit.deploy_targets(hosts, config_dir),
         params={'rollback_timeout': rollback_timeout})
     job_id = _start_deploy_job(
         app, 'deploy_push.yml', inventory, extra_vars,
         limit_hosts=[h['hostname'] for h in hosts],
-        owner=current_user.username, project_name=project_name,
+        owner=current_user.username, project_name=_project_key(project_name),
         audit_id=audit_id,
     )
     return jsonify(ok=True, job_id=job_id)

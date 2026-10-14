@@ -15,6 +15,7 @@ A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — 
 - **Deployment** — push generated configs to live switches over SSH, with a diff-first dry run and automatic on-box rollback if a push breaks connectivity
 - **Firmware** — upload an AOS-CX image to a chosen partition and boot to it, with optional permission for non-failsafe subcomponent updates
 - **Multi-user** — per-user data isolation with an admin panel for user management
+- **Shared projects** — share a project with users or SSO groups at view, edit or deploy level, with protection against two people overwriting each other
 - **Single sign-on** — optional OpenID Connect sign-in (Entra ID, Okta, Keycloak, ...), limited to a group, with admins by group
 - **Project checks** — cross-switch mistakes (duplicate addresses, mismatched VSX pairs, undefined VLANs and VRFs, stale configs) flagged as warnings
 
@@ -260,6 +261,39 @@ values, rather than run with sign-in open to anyone the provider knows.
 - Taking someone out of `OIDC_ALLOWED_GROUP` stops new sign-ins; a session
   already open lasts until they sign out or close the browser. Deleting the
   account in Admin ends it at once, but also removes their workspace.
+
+---
+
+## Shared projects
+
+Every project has an owner, and its address includes them:
+`/projects/<owner>/<project>/...`. The owner can share it from the project's
+**Sharing** page with a user or, on an SSO instance, an identity provider group:
+
+| Level | Can |
+|---|---|
+| View | Read everything — editor, Resources, Checks, History — and download configs |
+| Edit | Also save switches, change Resources and generate |
+| Deploy | Also run dry runs, pushes, firmware upgrades and reachability checks |
+
+Only the owner can share, delete or transfer a project; admins can open any
+project read-only and can transfer it. Shared projects appear under **Shared
+with you** on the Projects page.
+
+- **Two people on one switch:** a save is refused if someone else saved that
+  switch since you opened it, naming who and when, rather than overwriting their
+  changes. Reload to pick up theirs.
+- **Jobs:** only one generation runs per project at a time, and a switch being
+  pushed to or upgraded can't be pushed to or upgraded again until that finishes.
+  Dry runs never wait. A running job's output is visible to whoever started it;
+  everyone with access sees the result in History, with who ran it.
+- **Groups** are matched against what the identity provider sent at the person's
+  last SSO sign-in, so joining or leaving a group takes effect when they next sign in.
+- **Transfer** moves the project, its shares and its history to another user;
+  the previous owner keeps edit access. A user who owns shared projects can't be
+  deleted until those are transferred.
+- **Shares don't travel:** an exported project imported elsewhere belongs to whoever
+  imports it.
 
 ---
 

@@ -145,39 +145,39 @@ class TestJobVisibility:
                     output='hostname CO-CORE-SW-01')
 
         with patch('app.deploy_routes._run_playbook_job', _fake):
-            res = auth_client.post('/projects/deploy-test/deploy/dryrun', json={
+            res = auth_client.post('/projects/admin/deploy-test/deploy/dryrun', json={
                 'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                 'username': 'u', 'password': 'p'})
         return json.loads(res.data)['job_id']
 
     def test_deploy_job_visible_to_owner(self, app, auth_client):
         job_id = self._start_deploy(app, auth_client)
-        res = auth_client.get('/projects/deploy-test/deploy/status/' + job_id)
+        res = auth_client.get('/projects/admin/deploy-test/deploy/status/' + job_id)
         assert res.status_code == 200
         assert '_owner' not in json.loads(res.data)
 
     def test_deploy_job_hidden_from_other_user(self, app, auth_client, other_user):
         job_id = self._start_deploy(app, auth_client)
-        res = other_user.get('/projects/deploy-test/deploy/status/' + job_id)
+        res = other_user.get('/projects/admin/deploy-test/deploy/status/' + job_id)
         assert res.status_code == 404
 
     def test_deploy_job_hidden_under_another_project(self, app, auth_client):
         job_id = self._start_deploy(app, auth_client)
-        res = auth_client.get('/projects/elsewhere/deploy/status/' + job_id)
+        res = auth_client.get('/projects/admin/elsewhere/deploy/status/' + job_id)
         assert res.status_code == 404
 
     def test_generate_job_hidden_from_other_user(self, app, auth_client, other_user):
         import app.projects as P
         from app.security import job_tag
         with P._jobs_lock:
-            P._jobs['g1'] = {'status': 'done', **job_tag('admin', 'proj')}
-        assert auth_client.get('/projects/proj/generate/status/g1').status_code == 200
-        assert other_user.get('/projects/proj/generate/status/g1').status_code == 404
+            P._jobs['g1'] = {'status': 'done', **job_tag('admin', 'admin/proj')}
+        assert auth_client.get('/projects/admin/proj/generate/status/g1').status_code == 200
+        assert other_user.get('/projects/admin/proj/generate/status/g1').status_code == 404
 
     def test_firmware_job_hidden_from_other_user(self, app, auth_client, other_user):
         import app.firmware_routes as F
         from app.security import job_tag
         with F._fw_jobs_lock:
-            F._fw_jobs['f1'] = {'status': 'done', **job_tag('admin', 'proj')}
-        assert auth_client.get('/projects/proj/firmware/status/f1').status_code == 200
-        assert other_user.get('/projects/proj/firmware/status/f1').status_code == 404
+            F._fw_jobs['f1'] = {'status': 'done', **job_tag('admin', 'admin/proj')}
+        assert auth_client.get('/projects/admin/proj/firmware/status/f1').status_code == 200
+        assert other_user.get('/projects/admin/proj/firmware/status/f1').status_code == 404

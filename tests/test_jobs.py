@@ -92,7 +92,7 @@ class TestJobsAreMarkedFinished:
         with app.app_context():
             create_project(app, 'admin', 'gen')
         monkeypatch.setattr(D, 'run_generate', lambda **kw: (0, 'ok'))
-        res = auth_client.post('/projects/gen/generate/run',
+        res = auth_client.post('/projects/admin/gen/generate/run',
                                json={'limit': '', 'tags': ''})
         job_id = res.get_json()['job_id']
         for _ in range(100):
@@ -112,7 +112,7 @@ class TestJobsAreMarkedFinished:
         with P._jobs_lock:
             P._jobs['ancient'] = {'status': 'done', '_finished_at': -10 ** 9}
         monkeypatch.setattr(D, 'run_generate', lambda **kw: (0, 'ok'))
-        auth_client.post('/projects/gen2/generate/run',
+        auth_client.post('/projects/admin/gen2/generate/run',
                          json={'limit': '', 'tags': ''})
         assert 'ancient' not in P._jobs
 

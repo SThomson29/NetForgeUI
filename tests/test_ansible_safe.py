@@ -127,7 +127,7 @@ class TestRoutes:
 
     def test_deploy_refuses_a_crafted_hostname(self, app, auth_client):
         proj = self._deploy_project(app)
-        res = auth_client.post('/projects/%s/deploy/dryrun' % proj, json={
+        res = auth_client.post('/projects/admin/%s/deploy/dryrun' % proj, json={
             'hosts': [{'hostname': 'sw1,all', 'mgmt_ip': '10.0.0.1'}],
             'username': 'admin', 'password': 'pw'})
         assert res.status_code == 400
@@ -135,7 +135,7 @@ class TestRoutes:
 
     def test_mapping_save_refuses_a_crafted_hostname(self, app, auth_client):
         proj = self._deploy_project(app)
-        res = auth_client.post('/projects/%s/deployment-ips/save' % proj, json={
+        res = auth_client.post('/projects/admin/%s/deployment-ips/save' % proj, json={
             'mappings': [{'hostname': '{{ x }}', 'mgmt_ip': '10.0.0.1'}]})
         assert res.status_code == 400
 
@@ -154,7 +154,7 @@ class TestRoutes:
 
         monkeypatch.setattr(dr, '_run_playbook_job', capture)
         proj = self._deploy_project(app)
-        res = auth_client.post('/projects/%s/deploy/dryrun' % proj, json={
+        res = auth_client.post('/projects/admin/%s/deploy/dryrun' % proj, json={
             'hosts': [{'hostname': 'sw1', 'mgmt_ip': '10.0.0.1'}],
             'username': 'admin', 'password': '{{ 7 * 7 }}'})
         assert res.status_code == 200

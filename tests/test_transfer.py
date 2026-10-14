@@ -208,7 +208,7 @@ class TestImportValidation:
                                _make_archive({'host_vars/sw1/a.yml': 'x: [un'}))
 
     @pytest.mark.parametrize('ini', [
-        '[cx]\n../../other-user/projects/p/host_vars/sw1\n',
+        '[cx]\n../../other-user/projects/admin/p/host_vars/sw1\n',
         '[cx]\nsw1/../../x\n',
         '[cx]\n.hidden\n',
         '[cx]\nsw1 ansible_connection=local\n',
@@ -379,14 +379,14 @@ class TestSecretFieldDrift:
 class TestTransferRoutes:
 
     def test_export_downloads_an_archive(self, app, auth_client, project):
-        res = auth_client.get('/projects/%s/export' % project)
+        res = auth_client.get('/projects/admin/%s/export' % project)
         assert res.status_code == 200
         assert res.headers['Content-Type'] == 'application/zip'
         assert 'src-proj.netforge.zip' in res.headers['Content-Disposition']
         assert b'RADSECRET' not in res.data
 
     def test_preview_returns_manifest(self, app, auth_client, project):
-        data = auth_client.get('/projects/%s/export' % project).data
+        data = auth_client.get('/projects/admin/%s/export' % project).data
         res = auth_client.post(
             '/projects/import/preview',
             data={'archive': (io.BytesIO(data), 'p.zip')},
@@ -405,7 +405,7 @@ class TestTransferRoutes:
         assert res.get_json()['ok'] is False
 
     def test_import_creates_project(self, app, auth_client, project):
-        data = auth_client.get('/projects/%s/export' % project).data
+        data = auth_client.get('/projects/admin/%s/export' % project).data
         res = auth_client.post(
             '/projects/import',
             data={'archive': (io.BytesIO(data), 'p.zip'),
@@ -416,7 +416,7 @@ class TestTransferRoutes:
         assert b'brought-in' in listing.data
 
     def test_import_rejects_duplicate_name(self, app, auth_client, project):
-        data = auth_client.get('/projects/%s/export' % project).data
+        data = auth_client.get('/projects/admin/%s/export' % project).data
         res = auth_client.post(
             '/projects/import',
             data={'archive': (io.BytesIO(data), 'p.zip'),
@@ -426,7 +426,7 @@ class TestTransferRoutes:
         assert 'already exists' in res.get_json()['error']
 
     def test_export_requires_login(self, client, project):
-        res = client.get('/projects/%s/export' % project,
+        res = client.get('/projects/admin/%s/export' % project,
                          follow_redirects=False)
         assert res.status_code == 401
 

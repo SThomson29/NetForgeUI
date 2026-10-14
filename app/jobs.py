@@ -36,6 +36,22 @@ JOB_RETENTION_SECS = 60 * 60
 OUTPUT_PUBLISH_SECS = 0.5
 
 
+def busy_hosts(store, lock, project_key, hostnames, match=lambda job: True):
+    """{hostname: who started it} for switches among hostnames that a job
+    in store, for the same project, is still working on."""
+    wanted = set(hostnames)
+    busy = {}
+    with lock:
+        for job in store.values():
+            # Unfinished until mark_finished, which every path through a
+            # job's worker reaches — status alone can stall at 'starting'.
+            if (job.get('_project') == project_key and match(job)
+                    and job.get('_finished_at') is None):
+                for h in set(job.get('_hosts') or ()) & wanted:
+                    busy[h] = job.get('_owner')
+    return busy
+
+
 def mark_finished(job):
     job['_finished_at'] = time.monotonic()
 

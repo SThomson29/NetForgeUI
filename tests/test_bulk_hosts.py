@@ -95,7 +95,7 @@ def _hosts(app):
 class TestRoutes:
 
     def test_preview_changes_nothing(self, proj, auth_client):
-        res = auth_client.post('/projects/bulk/hosts/bulk/preview',
+        res = auth_client.post('/projects/admin/bulk/hosts/bulk/preview',
                                json={'text': 'EDGE-[01-03]', 'stacking': 'none'})
         data = res.get_json()
         assert data['ok'] and data['add_count'] == 3
@@ -103,7 +103,7 @@ class TestRoutes:
 
     def test_add_with_one_stacking_type(self, proj, auth_client):
         from app.project import project_host_vars_dir
-        res = auth_client.post('/projects/bulk/hosts/bulk',
+        res = auth_client.post('/projects/admin/bulk/hosts/bulk',
                                json={'text': 'ACC-[1-3]', 'stacking': 'vsf'})
         data = res.get_json()
         assert data['added'] == ['ACC-1', 'ACC-2', 'ACC-3'] and data['skipped'] == []
@@ -114,8 +114,8 @@ class TestRoutes:
             assert 'vsf.yml' in files and 'vsx.yml' not in files
 
     def test_bad_and_existing_names_are_skipped(self, proj, auth_client):
-        auth_client.post('/projects/bulk/hosts/bulk', json={'text': 'core-01'})
-        data = auth_client.post('/projects/bulk/hosts/bulk', json={
+        auth_client.post('/projects/admin/bulk/hosts/bulk', json={'text': 'core-01'})
+        data = auth_client.post('/projects/admin/bulk/hosts/bulk', json={
             'text': 'CORE-01, core-02, core-02, bad!name'}).get_json()
         assert data['added'] == ['core-02']
         assert {s['name']: s['reason'] for s in data['skipped']} == {
@@ -125,7 +125,7 @@ class TestRoutes:
         assert set(_hosts(proj)) == {'core-01', 'core-02'}
 
     def test_add_uses_the_text_not_a_client_list(self, proj, auth_client):
-        auth_client.post('/projects/bulk/hosts/bulk', json={
+        auth_client.post('/projects/admin/bulk/hosts/bulk', json={
             'text': 'sw-1', 'names': ['../../evil'], 'items': [{'name': 'evil', 'add': True}]})
         assert set(_hosts(proj)) == {'sw-1'}
 
@@ -136,32 +136,32 @@ class TestRoutes:
         {'text': 'SW[5-1]'},
     ])
     def test_rejected_batches_add_nothing(self, proj, auth_client, body):
-        for url in ('/projects/bulk/hosts/bulk/preview', '/projects/bulk/hosts/bulk'):
+        for url in ('/projects/admin/bulk/hosts/bulk/preview', '/projects/admin/bulk/hosts/bulk'):
             res = auth_client.post(url, json=body)
             assert res.status_code == 400
             assert res.get_json()['error']
         assert _hosts(proj) == {}
 
     def test_hosts_ini_stays_valid_after_a_big_batch(self, proj, auth_client):
-        auth_client.post('/projects/bulk/hosts/bulk', json={'text': 'core-[1-2]', 'stacking': 'vsx'})
-        auth_client.post('/projects/bulk/hosts/bulk', json={'text': 'E-FL[1-3]-SW[01-40]'})
+        auth_client.post('/projects/admin/bulk/hosts/bulk', json={'text': 'core-[1-2]', 'stacking': 'vsx'})
+        auth_client.post('/projects/admin/bulk/hosts/bulk', json={'text': 'E-FL[1-3]-SW[01-40]'})
         hosts = _hosts(proj)
         assert len(hosts) == 122
         assert hosts['core-1'] == 'cx_vsx' and hosts['E-FL3-SW40'] == 'cx'
 
     def test_requires_login(self, client):
-        assert client.post('/projects/bulk/hosts/bulk', json={'text': 'a'}).status_code in (302, 401)
+        assert client.post('/projects/admin/bulk/hosts/bulk', json={'text': 'a'}).status_code in (302, 401)
 
 
 class TestPage:
 
     def test_toggle_and_bulk_controls(self, proj, auth_client):
-        body = auth_client.get('/projects/bulk/hosts').data.decode()
+        body = auth_client.get('/projects/admin/bulk/hosts').data.decode()
         assert 'id="mode-single"' in body and 'id="mode-bulk"' in body
         assert 'id="bulk-text"' in body and 'id="bulk-stacking"' in body
-        assert '/projects/bulk/hosts/bulk/preview' in body
+        assert '/projects/admin/bulk/hosts/bulk/preview' in body
         # single add is unchanged
-        assert 'name="hostname"' in body and '/projects/bulk/hosts/add' in body
+        assert 'name="hostname"' in body and '/projects/admin/bulk/hosts/add' in body
 
     def test_preview_output_is_escaped(self):
         with open('app/templates/project_hosts.html') as f:

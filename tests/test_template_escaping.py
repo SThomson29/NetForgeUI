@@ -45,7 +45,7 @@ def test_pool_name_stays_inside_a_string(app, auth_client, name):
         add_pool(app, 'admin', 'xss', {
             'id': 'pool_1', 'type': 'unique', 'name': name,
             'prefix': '32', 'subnet': '10.255.0.0/24'})
-    body = auth_client.get('/projects/xss/resources').data.decode()
+    body = auth_client.get('/projects/admin/xss/resources').data.decode()
 
     calls = _handler_args(body, 'removePool')
     assert calls, 'removePool handler not found'
@@ -84,7 +84,10 @@ _INTENTIONAL_HTML = re.compile(
     r"^(esc\(|escapeHtml\(|encodeURIComponent\(|'\{\{|statusBadge$|diffHtml$"
     r"|lines$|summaryClass$|summaryMsg$|statusIcon$|r\.changed \?|failed > 0"
     r"|good \?|r\.uploaded \?|r\.booted \?|h\.mgmt_ip \? ''"
-    r"|r\.previous_version \?|r\.unsafe_updates_allowed)")
+    r"|r\.previous_version \?|r\.unsafe_updates_allowed"
+    # Built server-side from validated owner and project names, and the
+    # sidebar's shared-by note, which escapes its own text.
+    r"|PROJECT_BASE$|projectShared$)")
 
 
 def test_html_built_in_javascript_escapes_its_data():
@@ -174,7 +177,7 @@ def test_reconcile_output_escapes_host_names(app, auth_client):
     from app.project import create_project
     with app.app_context():
         create_project(app, 'admin', 'recon')
-    body = auth_client.get('/projects/recon/hosts').data.decode()
+    body = auth_client.get('/projects/admin/recon/hosts').data.decode()
     lines = _markup_lines(body, 'host')
     assert any("esc(host)" in line for line in lines)
     assert any("data.hosts[host].map(esc)" in line for line in lines)

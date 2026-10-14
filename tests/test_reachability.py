@@ -100,30 +100,30 @@ class TestRoute:
         return probed
 
     def test_named_switches_only(self, auth_client, mapped):
-        res = auth_client.post('/projects/p/reachability', json={'hosts': ['core-02']})
+        res = auth_client.post('/projects/admin/p/reachability', json={'hosts': ['core-02']})
         assert res.status_code == 200
         assert [h['hostname'] for h in mapped] == ['core-02']
 
     def test_empty_means_all_valid_mapped(self, auth_client, mapped):
-        auth_client.post('/projects/p/reachability', json={})
+        auth_client.post('/projects/admin/p/reachability', json={})
         assert [h['hostname'] for h in mapped] == ['core-01', 'core-02']
 
     def test_addresses_come_from_the_mapping_not_the_request(self, auth_client, mapped):
-        auth_client.post('/projects/p/reachability',
+        auth_client.post('/projects/admin/p/reachability',
                          json={'hosts': ['core-01'], 'mgmt_ip': '8.8.8.8',
                                'addresses': {'core-01': '8.8.8.8'}})
         assert [h['mgmt_ip'] for h in mapped] == ['10.1.0.1']
 
     def test_unknown_switch_is_not_probed(self, auth_client, mapped):
-        auth_client.post('/projects/p/reachability', json={'hosts': ['8.8.8.8']})
+        auth_client.post('/projects/admin/p/reachability', json={'hosts': ['8.8.8.8']})
         assert mapped == []
 
     def test_hosts_must_be_a_list(self, auth_client, mapped):
-        res = auth_client.post('/projects/p/reachability', json={'hosts': 'core-01'})
+        res = auth_client.post('/projects/admin/p/reachability', json={'hosts': 'core-01'})
         assert res.status_code == 400
 
     def test_requires_login(self, client):
-        assert client.post('/projects/p/reachability', json={}).status_code in (302, 401)
+        assert client.post('/projects/admin/p/reachability', json={}).status_code in (302, 401)
 
 
 class TestPages:
@@ -141,7 +141,7 @@ class TestPages:
 
     @pytest.mark.parametrize('page', ['deploy', 'firmware'])
     def test_button_and_results_area(self, auth_client, proj, page):
-        body = auth_client.get('/projects/%s/%s' % (proj, page)).data.decode()
+        body = auth_client.get('/projects/admin/%s/%s' % (proj, page)).data.decode()
         assert 'Check reachability' in body
         assert 'id="reach-results"' in body
         assert 'function checkReachability(' in body

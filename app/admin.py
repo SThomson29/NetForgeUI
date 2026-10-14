@@ -80,10 +80,20 @@ def delete_user(user_id):
         flash('You cannot delete your own account.', 'error')
         return redirect(url_for('admin.admin_page'))
 
+    # Projects other people use must go to one of them first; deleting
+    # the owner would delete the project out from under them.
+    from . import sharing
+    shared = sharing.shared_projects_owned_by(app, user.username)
+    if shared:
+        flash(f'{user.username} owns shared projects ({", ".join(shared)}). Transfer '
+              f'them from each project\'s Sharing page first.', 'error')
+        return redirect(url_for('admin.admin_page'))
+
     workspace = user_dir(app, user.username)
     if os.path.isdir(workspace):
         shutil.rmtree(workspace)
 
+    sharing.forget_user(app, user.username)
     User.delete(user_id, app)
     flash(f'User {user.username} deleted.', 'success')
     return redirect(url_for('admin.admin_page'))

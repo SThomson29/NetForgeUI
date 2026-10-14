@@ -86,7 +86,7 @@ class TestDeployIsRecorded:
                             'changed': True, 'diff': {'prepared': 'whole config'},
                             'commands': SECRET_COMMANDS}],
                           output='+radius-server host 1.1.1.1 key plaintext RADSECRET\n'):
-            auth_client.post('/projects/deploy-test/deploy/dryrun', json=dict(
+            auth_client.post('/projects/admin/deploy-test/deploy/dryrun', json=dict(
                 PUSH_BODY, rollback_timeout=None))
         (e,) = _wait_entries(app)
         assert e['action'] == 'deploy_dryrun'
@@ -104,7 +104,7 @@ class TestDeployIsRecorded:
         with _fake_runner([{'hostname': 'CO-CORE-SW-01', 'confirmed': True,
                             'rollback_pending': False, 'checkpoint': 'cp1',
                             'commands': []}]):
-            auth_client.post('/projects/deploy-test/deploy/push', json=PUSH_BODY)
+            auth_client.post('/projects/admin/deploy-test/deploy/push', json=PUSH_BODY)
         (e,) = _wait_entries(app)
         assert e['action'] == 'deploy_push'
         assert e['params'] == {'rollback_timeout': 7}
@@ -114,7 +114,7 @@ class TestDeployIsRecorded:
         setup_deploy_project(app, auth_client)
         with _fake_runner([{'hostname': 'CO-CORE-SW-01', 'confirmed': False,
                             'rollback_pending': True}], rc=2):
-            auth_client.post('/projects/deploy-test/deploy/push', json=PUSH_BODY)
+            auth_client.post('/projects/admin/deploy-test/deploy/push', json=PUSH_BODY)
         (e,) = _wait_entries(app)
         assert e['outcome'][1] == 'red'
         assert 'rollback pending' in e['outcome'][0]
@@ -124,7 +124,7 @@ class TestDeployIsRecorded:
         with _fake_runner([{'hostname': 'CO-CORE-SW-01', 'changed': True,
                             'commands': SECRET_COMMANDS}],
                           output='\n'.join('+' + c for c in SECRET_COMMANDS)):
-            auth_client.post('/projects/deploy-test/deploy/dryrun', json=PUSH_BODY)
+            auth_client.post('/projects/admin/deploy-test/deploy/dryrun', json=PUSH_BODY)
         _wait_entries(app)
         stored = json.dumps(_raw_rows(app))
         for s in SECRETS + ['SWITCHPASS']:
@@ -134,7 +134,7 @@ class TestDeployIsRecorded:
         setup_deploy_project(app, auth_client)
         with patch('app.deploy_routes._run_playbook_job',
                    side_effect=RuntimeError('boom')):
-            auth_client.post('/projects/deploy-test/deploy/push', json=PUSH_BODY)
+            auth_client.post('/projects/admin/deploy-test/deploy/push', json=PUSH_BODY)
         (e,) = _wait_entries(app)
         assert e['status'] == 'failed'
         assert 'boom' in e['output_tail']
@@ -144,7 +144,7 @@ class TestDeployIsRecorded:
         setup_deploy_project(app, auth_client)
         with _fake_runner([]), \
                 patch('app.audit.record_finish', side_effect=RuntimeError('db')):
-            job = post_and_wait(auth_client, '/projects/deploy-test/deploy/push',
+            job = post_and_wait(auth_client, '/projects/admin/deploy-test/deploy/push',
                                 PUSH_BODY)
         assert job['status'] == 'done'
 
@@ -170,7 +170,7 @@ class TestFirmwareIsRecorded:
                     {'hostname': 'core-01', 'reachable_after_boot': True}])
         monkeypatch.setattr(fr, '_run_firmware_playbook', _fake)
 
-        res = auth_client.post('/projects/p/firmware/run', json={
+        res = auth_client.post('/projects/admin/p/firmware/run', json={
             'image': 'PL_10_15.swi', 'partition': 'primary',
             'switch_username': 'netops', 'switch_password': 'SWITCHPASS'})
         assert res.status_code == 200
@@ -209,7 +209,7 @@ class TestVisibility:
             self._entry(app, 'admin', 'mine')
             self._entry(app, 'admin', 'other-project')
             self._entry(app, 'mallory', 'mine')
-        body = auth_client.get('/projects/mine/history').data.decode()
+        body = auth_client.get('/projects/admin/mine/history').data.decode()
         assert 'SW-admin' in body
         assert 'SW-mallory' not in body
         assert body.count('class="audit-entry"') == 1
@@ -231,7 +231,7 @@ class TestVisibility:
         assert client.get('/admin/audit').status_code == 403
 
     def test_history_requires_login(self, client):
-        assert client.get('/projects/p/history').status_code in (302, 401)
+        assert client.get('/projects/admin/p/history').status_code in (302, 401)
 
     def test_recorded_text_is_escaped(self, app, auth_client):
         from app.project import create_project
@@ -244,7 +244,7 @@ class TestVisibility:
                                            'results': [{'hostname': 'sw1',
                                                         'commands': SECRET_COMMANDS}],
                                            'output': '<img src=x onerror=alert(1)>'})
-        body = auth_client.get('/projects/esc/history').data.decode()
+        body = auth_client.get('/projects/admin/esc/history').data.decode()
         assert '<script>alert(1)</script>' not in body
         assert '<img src=x' not in body
         assert '&lt;script&gt;' in body
@@ -272,7 +272,7 @@ def _generate(app, auth_client, project, files, rc=0, body=None):
         return rc, 'PLAY RECAP\n'
 
     with patch.object(D, 'run_generate', fake):
-        res = auth_client.post('/projects/%s/generate/run' % project,
+        res = auth_client.post('/projects/admin/%s/generate/run' % project,
                                json=body or {'limit': '', 'tags': ''})
     assert res.status_code == 200
 
@@ -317,7 +317,7 @@ class TestPushTracesToGeneration:
 
     def _push(self, app, auth_client):
         with _fake_runner([{'hostname': 'CO-CORE-SW-01', 'confirmed': True}]):
-            auth_client.post('/projects/deploy-test/deploy/push', json=PUSH_BODY)
+            auth_client.post('/projects/admin/deploy-test/deploy/push', json=PUSH_BODY)
 
     def _last_push(self, app):
         pushes = [e for e in _wait_entries(app) if e['action'] == 'deploy_push']
@@ -460,8 +460,8 @@ class TestGenerationsToggle:
                 audit.record_start(app, username='admin', project='tog',
                                    action=action, switch_user=None,
                                    targets=[{'hostname': 'sw-' + action}], params={})
-        shown = auth_client.get('/projects/tog/history').data.decode()
-        hidden = auth_client.get('/projects/tog/history?generations=0').data.decode()
+        shown = auth_client.get('/projects/admin/tog/history').data.decode()
+        hidden = auth_client.get('/projects/admin/tog/history?generations=0').data.decode()
         assert 'sw-generate' in shown and 'Hide generations' in shown
         assert 'sw-generate' not in hidden and 'sw-deploy_push' in hidden
         assert 'Show generations' in hidden

@@ -38,7 +38,7 @@ def setup_deploy_project(app, auth_client, project_name='deploy-test',
     # Add hosts
     for hostname, stacking in hosts:
         auth_client.post(
-            f'/projects/{project_name}/hosts/add',
+            f'/projects/admin/{project_name}/hosts/add',
             data={'hostname': hostname, 'stacking': stacking},
             follow_redirects=True,
         )
@@ -213,7 +213,7 @@ class TestDeployPage:
 
     def test_deploy_page_loads(self, app, auth_client):
         setup_deploy_project(app, auth_client)
-        res = auth_client.get('/projects/deploy-test/deploy')
+        res = auth_client.get('/projects/admin/deploy-test/deploy')
         assert res.status_code == 200
         assert b'Deploy' in res.data
 
@@ -226,7 +226,7 @@ class TestDeployPage:
                 ],
                 'settings': {'rollback_timeout': 5}
             })
-        res = auth_client.get('/projects/deploy-test/deploy')
+        res = auth_client.get('/projects/admin/deploy-test/deploy')
         assert res.status_code == 200
         assert b'CO-CORE-SW-01' in res.data
         assert b'10.1.100.1' in res.data
@@ -241,11 +241,11 @@ class TestDeployPage:
                 ],
                 'settings': {'rollback_timeout': 5}
             })
-        res = auth_client.get('/projects/deploy-test/deploy')
+        res = auth_client.get('/projects/admin/deploy-test/deploy')
         assert b'.ios' in res.data
 
     def test_deploy_page_requires_login(self, client):
-        res = client.get('/projects/deploy-test/deploy', follow_redirects=False)
+        res = client.get('/projects/admin/deploy-test/deploy', follow_redirects=False)
         assert res.status_code == 401 
 
 
@@ -258,7 +258,7 @@ class TestSaveMappingRoute:
     def test_save_mapping(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/save-mapping',
+            '/projects/admin/deploy-test/deploy/save-mapping',
             json={
                 'mappings': [
                     {'hostname': 'SW-01', 'mgmt_ip': '10.1.1.1'},
@@ -279,7 +279,7 @@ class TestSaveMappingRoute:
     def test_save_empty_mapping(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/save-mapping',
+            '/projects/admin/deploy-test/deploy/save-mapping',
             json={'mappings': [], 'rollback_timeout': 5},
             content_type='application/json',
         )
@@ -289,7 +289,7 @@ class TestSaveMappingRoute:
     def test_save_mapping_no_body(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/save-mapping',
+            '/projects/admin/deploy-test/deploy/save-mapping',
             data='',
             content_type='application/json',
         )
@@ -304,7 +304,7 @@ class TestAutoPopulate:
 
     def test_auto_populate_from_hosts(self, app, auth_client):
         setup_deploy_project(app, auth_client)
-        res = auth_client.get('/projects/deploy-test/deploy/auto-populate')
+        res = auth_client.get('/projects/admin/deploy-test/deploy/auto-populate')
         data = json.loads(res.data)
         assert data['ok'] is True
 
@@ -317,8 +317,8 @@ class TestAutoPopulate:
     def test_auto_populate_does_not_duplicate(self, app, auth_client):
         """Running auto-populate twice should not create duplicates."""
         setup_deploy_project(app, auth_client)
-        auth_client.get('/projects/deploy-test/deploy/auto-populate')
-        auth_client.get('/projects/deploy-test/deploy/auto-populate')
+        auth_client.get('/projects/admin/deploy-test/deploy/auto-populate')
+        auth_client.get('/projects/admin/deploy-test/deploy/auto-populate')
 
         with app.app_context():
             mapping = read_mapping(app, 'deploy-test')
@@ -335,7 +335,7 @@ class TestAutoPopulate:
                 ],
                 'settings': {'rollback_timeout': 5}
             })
-        auth_client.get('/projects/deploy-test/deploy/auto-populate')
+        auth_client.get('/projects/admin/deploy-test/deploy/auto-populate')
 
         with app.app_context():
             mapping = read_mapping(app, 'deploy-test')
@@ -388,7 +388,7 @@ class TestDryRun:
         with self._mock_playbook_success():
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/dryrun',
+                '/projects/admin/deploy-test/deploy/dryrun',
                 {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
@@ -414,7 +414,7 @@ class TestDryRun:
         with self._mock_playbook_success(results=no_change):
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/dryrun',
+                '/projects/admin/deploy-test/deploy/dryrun',
                 {
                     'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                     'username': 'admin',
@@ -429,7 +429,7 @@ class TestDryRun:
         with self._mock_playbook_failure('SSH timeout'):
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/dryrun',
+                '/projects/admin/deploy-test/deploy/dryrun',
                 {
                     'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                     'username': 'admin',
@@ -442,7 +442,7 @@ class TestDryRun:
     def test_dryrun_missing_credentials(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/dryrun',
+            '/projects/admin/deploy-test/deploy/dryrun',
             json={
                 'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                 'username': '',
@@ -455,7 +455,7 @@ class TestDryRun:
     def test_dryrun_missing_hosts(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/dryrun',
+            '/projects/admin/deploy-test/deploy/dryrun',
             json={
                 'hosts': [],
                 'username': 'admin',
@@ -468,7 +468,7 @@ class TestDryRun:
     def test_dryrun_no_body(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/dryrun',
+            '/projects/admin/deploy-test/deploy/dryrun',
             data='',
             content_type='application/json',
         )
@@ -495,7 +495,7 @@ class TestDryRun:
         with self._mock_playbook_success(results=multi_results):
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/dryrun',
+                '/projects/admin/deploy-test/deploy/dryrun',
                 {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
@@ -587,7 +587,7 @@ class TestDeployPush:
         with self._mock_push_success():
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/push',
+                '/projects/admin/deploy-test/deploy/push',
                 {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
@@ -607,7 +607,7 @@ class TestDeployPush:
         with self._mock_push_partial_failure():
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/push',
+                '/projects/admin/deploy-test/deploy/push',
                 {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
@@ -631,7 +631,7 @@ class TestDeployPush:
         with self._mock_push_success():
             data = post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/push',
+                '/projects/admin/deploy-test/deploy/push',
                 {
                     'hosts': [
                         {'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'},
@@ -646,7 +646,7 @@ class TestDeployPush:
     def test_push_missing_credentials(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/push',
+            '/projects/admin/deploy-test/deploy/push',
             json={
                 'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                 'username': '',
@@ -689,7 +689,7 @@ class TestDeployPush:
         with patch('app.deploy_routes._run_playbook_job', side_effect=mock_run):
             post_and_wait(
                 auth_client,
-                '/projects/deploy-test/deploy/push',
+                '/projects/admin/deploy-test/deploy/push',
                 {
                     'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                     'username': 'admin',
@@ -703,7 +703,7 @@ class TestDeployPush:
     def test_push_no_body(self, app, auth_client):
         setup_deploy_project(app, auth_client)
         res = auth_client.post(
-            '/projects/deploy-test/deploy/push',
+            '/projects/admin/deploy-test/deploy/push',
             data='',
             content_type='application/json',
         )
@@ -723,7 +723,7 @@ class TestCredentialSecurity:
 
         with patch('app.deploy_routes._run_playbook_job'):
             auth_client.post(
-                '/projects/deploy-test/deploy/dryrun',
+                '/projects/admin/deploy-test/deploy/dryrun',
                 json={
                     'hosts': [{'hostname': 'SW-01', 'mgmt_ip': '10.1.1.1'}],
                     'username': 'supersecret_user',
@@ -747,7 +747,7 @@ class TestCredentialSecurity:
 
         with patch('app.deploy_routes._run_playbook_job'):
             auth_client.post(
-                '/projects/deploy-test/deploy/push',
+                '/projects/admin/deploy-test/deploy/push',
                 json={
                     'hosts': [{'hostname': 'SW-01', 'mgmt_ip': '10.1.1.1'}],
                     'username': 'admin',
@@ -792,7 +792,7 @@ class TestDeployConfigFileSelection:
                 'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                 'settings': {'rollback_timeout': 5}
             })
-        res = auth_client.get('/projects/deploy-test/deploy')
+        res = auth_client.get('/projects/admin/deploy-test/deploy')
         assert b'CO-CORE-SW-01_FULL.ios' not in res.data
 
     def test_inventory_omits_config_file_by_default(self):
@@ -837,7 +837,7 @@ class TestConfigFileConfinement:
 
     def _post(self, auth_client, route, config_file):
         return auth_client.post(
-            '/projects/deploy-test/deploy/' + route,
+            '/projects/admin/deploy-test/deploy/' + route,
             json={'hosts': [{'hostname': 'CO-CORE-SW-01',
                              'mgmt_ip': '10.1.100.1',
                              'config_file': config_file}],
@@ -1130,12 +1130,12 @@ class TestDeployJobModel:
         assert 'Playbook not found' in job['output']
 
     def test_status_requires_login(self, client):
-        assert client.get('/projects/p/deploy/status/abc').status_code == 401
+        assert client.get('/projects/admin/p/deploy/status/abc').status_code == 401
 
     def test_unknown_job_is_404(self, auth_client, app):
         setup_deploy_project(app, auth_client)
         assert auth_client.get(
-            '/projects/deploy-test/deploy/status/nope').status_code == 404
+            '/projects/admin/deploy-test/deploy/status/nope').status_code == 404
 
 
 class TestSingleWorkerRequirement:
@@ -1167,13 +1167,13 @@ class TestMappingAndRollbackValidation:
     ])
     def test_save_mapping_rejects_bad_hosts(self, app, auth_client, rows):
         setup_deploy_project(app, auth_client)
-        res = auth_client.post('/projects/deploy-test/deploy/save-mapping',
+        res = auth_client.post('/projects/admin/deploy-test/deploy/save-mapping',
                                json={'mappings': rows, 'rollback_timeout': 5})
         assert res.status_code == 400
 
     def test_save_mapping_stores_only_mapping_fields(self, app, auth_client):
         setup_deploy_project(app, auth_client)
-        res = auth_client.post('/projects/deploy-test/deploy/save-mapping', json={
+        res = auth_client.post('/projects/admin/deploy-test/deploy/save-mapping', json={
             'mappings': [{'hostname': 'sw1', 'mgmt_ip': '10.0.0.1',
                           'config_file': '/etc/passwd', 'extra': 1}],
             'rollback_timeout': 5})
@@ -1185,14 +1185,14 @@ class TestMappingAndRollbackValidation:
     @pytest.mark.parametrize('value', [0, -1, 61, 2.5, 'abc', '5 mins', True, None, ''])
     def test_save_mapping_rejects_bad_rollback(self, app, auth_client, value):
         setup_deploy_project(app, auth_client)
-        res = auth_client.post('/projects/deploy-test/deploy/save-mapping',
+        res = auth_client.post('/projects/admin/deploy-test/deploy/save-mapping',
                                json={'mappings': [], 'rollback_timeout': value})
         assert res.status_code == 400
 
     @pytest.mark.parametrize('value,expected', [(1, 1), (30, 30), (60, 60), ('15', 15)])
     def test_save_mapping_accepts_rollback_range(self, app, auth_client, value, expected):
         setup_deploy_project(app, auth_client)
-        res = auth_client.post('/projects/deploy-test/deploy/save-mapping',
+        res = auth_client.post('/projects/admin/deploy-test/deploy/save-mapping',
                                json={'mappings': [], 'rollback_timeout': value})
         assert res.status_code == 200
         with app.app_context():
@@ -1203,7 +1203,7 @@ class TestMappingAndRollbackValidation:
         """The playbook does | int, so 'abc' became an immediate rollback."""
         setup_deploy_project(app, auth_client)
         with patch('app.deploy_routes._run_playbook_job') as run:
-            res = auth_client.post('/projects/deploy-test/deploy/push', json={
+            res = auth_client.post('/projects/admin/deploy-test/deploy/push', json={
                 'hosts': [{'hostname': 'CO-CORE-SW-01', 'mgmt_ip': '10.1.100.1'}],
                 'username': 'u', 'password': 'p', 'rollback_timeout': value})
         assert res.status_code == 400

@@ -476,7 +476,7 @@ class TestGenerationRecordsFingerprints:
             return 0, 'PLAY RECAP\n'
 
         with patch.object(D, 'run_generate', fake):
-            res = auth_client.post('/projects/%s/generate/run' % P, json=body)
+            res = auth_client.post('/projects/admin/%s/generate/run' % P, json=body)
         assert res.status_code == 200
 
     def test_full_run_then_edit(self, app, auth_client, project):
@@ -522,7 +522,7 @@ class TestUnreadable:
         project.add('SW1', 'SW2')
         project.write('SW1', 'vlans.yml', 'vlans: [unclosed\n')
         assert project.keys() == {'unreadable:SW1'}
-        assert auth_client.get('/projects/%s/checks' % P).status_code == 200
+        assert auth_client.get('/projects/admin/%s/checks' % P).status_code == 200
 
 
 class TestPagesAndDismissal:
@@ -534,59 +534,59 @@ class TestPagesAndDismissal:
 
     def test_page_lists_findings(self, project, auth_client):
         self._dup(project)
-        body = auth_client.get('/projects/%s/checks' % P).get_data(as_text=True)
+        body = auth_client.get('/projects/admin/%s/checks' % P).get_data(as_text=True)
         assert '10.0.0.1 is used on 2 interfaces' in body
         assert 'SW2 loopback0' in body
 
     def test_page_with_nothing_found(self, project, auth_client):
         project.add('SW1')
-        body = auth_client.get('/projects/%s/checks' % P).get_data(as_text=True)
+        body = auth_client.get('/projects/admin/%s/checks' % P).get_data(as_text=True)
         assert 'No open findings across 1 switch' in body
 
     def test_banner_on_generate_and_deploy(self, project, auth_client):
         self._dup(project)
         for page in ('generate', 'deploy'):
-            body = auth_client.get('/projects/%s/%s' % (P, page)).get_data(as_text=True)
+            body = auth_client.get('/projects/admin/%s/%s' % (P, page)).get_data(as_text=True)
             assert 'Project checks:' in body and '1 error' in body, page
 
     def test_no_banner_when_clean(self, project, auth_client):
         project.add('SW1')
-        body = auth_client.get('/projects/%s/generate' % P).get_data(as_text=True)
+        body = auth_client.get('/projects/admin/%s/generate' % P).get_data(as_text=True)
         assert 'Project checks:' not in body
 
     def test_dismiss_until_details_change(self, project, auth_client):
         self._dup(project)
-        res = auth_client.post('/projects/%s/checks/dismiss' % P, json={'key': 'dup_ip:10.0.0.1'})
+        res = auth_client.post('/projects/admin/%s/checks/dismiss' % P, json={'key': 'dup_ip:10.0.0.1'})
         assert res.get_json() == {'ok': True}
-        body = auth_client.get('/projects/%s/generate' % P).get_data(as_text=True)
+        body = auth_client.get('/projects/admin/%s/generate' % P).get_data(as_text=True)
         assert 'Project checks:' not in body
-        assert '1 dismissed' in auth_client.get('/projects/%s/checks' % P).get_data(as_text=True)
+        assert '1 dismissed' in auth_client.get('/projects/admin/%s/checks' % P).get_data(as_text=True)
 
         # A third switch joins in: the finding says something new, so it's back.
         project.add('SW3')
         project.write('SW3', 'interfaces.yml', loopbacks(('loopback0', '10.0.0.1')))
         assert 'Project checks:' in auth_client.get(
-            '/projects/%s/generate' % P).get_data(as_text=True)
+            '/projects/admin/%s/generate' % P).get_data(as_text=True)
 
     def test_restore(self, project, auth_client):
         self._dup(project)
-        auth_client.post('/projects/%s/checks/dismiss' % P, json={'key': 'dup_ip:10.0.0.1'})
-        auth_client.post('/projects/%s/checks/restore' % P, json={'key': 'dup_ip:10.0.0.1'})
+        auth_client.post('/projects/admin/%s/checks/dismiss' % P, json={'key': 'dup_ip:10.0.0.1'})
+        auth_client.post('/projects/admin/%s/checks/restore' % P, json={'key': 'dup_ip:10.0.0.1'})
         assert 'Project checks:' in auth_client.get(
-            '/projects/%s/generate' % P).get_data(as_text=True)
+            '/projects/admin/%s/generate' % P).get_data(as_text=True)
 
     def test_only_real_findings_can_be_dismissed(self, project, auth_client):
         project.add('SW1')
-        res = auth_client.post('/projects/%s/checks/dismiss' % P, json={'key': 'made:up'})
+        res = auth_client.post('/projects/admin/%s/checks/dismiss' % P, json={'key': 'made:up'})
         assert res.status_code == 404
-        assert auth_client.post('/projects/%s/checks/dismiss' % P, json={}).status_code == 400
+        assert auth_client.post('/projects/admin/%s/checks/dismiss' % P, json={}).status_code == 400
 
     def test_banner_survives_a_failing_check(self, project, auth_client):
         project.add('SW1')
         with patch.object(checks, 'run', side_effect=RuntimeError('boom')):
-            assert auth_client.get('/projects/%s/generate' % P).status_code == 200
+            assert auth_client.get('/projects/admin/%s/generate' % P).status_code == 200
 
     def test_sidebar_link(self, project, auth_client):
         project.add('SW1')
-        body = auth_client.get('/projects/%s/hosts' % P).get_data(as_text=True)
+        body = auth_client.get('/projects/admin/%s/hosts' % P).get_data(as_text=True)
         assert '/checks"' in body

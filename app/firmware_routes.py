@@ -23,7 +23,7 @@ from .api import json_body
 from .jobs import run_ansible_job, prune_finished, mark_finished
 from .security import job_tag, visible_job
 
-from flask import render_template, jsonify, current_app, abort
+from flask import render_template, jsonify, current_app, abort, g
 from flask_login import login_required, current_user
 
 
@@ -132,7 +132,7 @@ def _run_firmware_playbook(job_id, playbook_path, repo_dir, ansible_bin,
 def project_firmware(project_name):
     """Render the firmware tab."""
     app = current_app._get_current_object()
-    mapping = _load_mapping(app, current_user.username, project_name)
+    mapping = _load_mapping(app, g.project_owner, project_name)
     return render_template(
         'project_firmware.html',
         project_name=project_name,
@@ -155,7 +155,9 @@ def firmware_images(project_name):
 def firmware_run(project_name):
     """Start a firmware upgrade as a background job."""
     app = current_app._get_current_object()
-    username = current_user.username
+    username = g.project_owner              # whose project: the files
+    actor = current_user.username           # who started the run
+    key = '%s/%s' % (username, project_name)
     body = json_body()
 
     image      = str(body.get('image') or '').strip()
@@ -203,6 +205,11 @@ def firmware_run(project_name):
     if problems:
         return jsonify(ok=False, error='; '.join(problems)), 400
 
+    from .deploy_routes import switches_in_use
+    busy = switches_in_use(key, [h['hostname'] for h in chosen])
+    if busy:
+        return jsonify(ok=False, error=busy), 409
+
     repo_dir = app.config.get('CONFIGGEN_REPO', 'configgen')
     playbook_path = os.path.join(repo_dir, 'playbooks', 'firmware_upgrade.yml')
     if not os.path.isfile(playbook_path):
@@ -231,16 +238,17 @@ def firmware_run(project_name):
             'returncode': None,
             'results': [],
             'hosts': [h['hostname'] for h in chosen],
+            '_hosts': [h['hostname'] for h in chosen],
             'image': image,
             'partition': partition,
             'allow_unsafe': allow,
-            **job_tag(username, project_name),
+            **job_tag(actor, key),
         }
 
     ansible_bin = app.config.get('ANSIBLE_BIN', 'ansible-playbook')
 
     audit_id = audit.record_start(
-        app, username=username, project=project_name, action='firmware',
+        app, username=actor, owner=username, project=project_name, action='firmware',
         switch_user=sw_user,
         targets=[{'hostname': h['hostname'], 'mgmt_ip': h.get('mgmt_ip', '')}
                  for h in chosen],
@@ -278,8 +286,8 @@ def firmware_run(project_name):
 def firmware_status(project_name, job_id):
     """Poll a running or finished firmware job."""
     with _fw_jobs_lock:
-        snapshot = visible_job(_fw_jobs.get(job_id),
-                               current_user.username, project_name)
+        snapshot = visible_job(_fw_jobs.get(job_id), current_user.username,
+                               '%s/%s' % (g.project_owner, project_name))
     if not snapshot:
         abort(404)
     return jsonify(snapshot)

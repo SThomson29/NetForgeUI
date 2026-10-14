@@ -131,22 +131,22 @@ class TestGuards:
 class TestRoutes:
 
     def test_patch_via_api(self, app, auth_client, proj):
-        res = auth_client.patch('/projects/%s/api/pools/wm' % proj,
+        res = auth_client.patch('/projects/admin/%s/api/pools/wm' % proj,
                                 json={'name': 'Wireless MGMT',
                                       'subnet': '10.50.0.0/24'})
         assert res.get_json()['ok'] is True
 
     def test_api_reports_stranded_allocations(self, app, auth_client, proj):
-        res = auth_client.patch('/projects/%s/api/pools/wm' % proj,
+        res = auth_client.patch('/projects/admin/%s/api/pools/wm' % proj,
                                 json={'subnet': '10.50.0.0/29'})
         assert res.status_code == 400
         assert 'fall outside' in res.get_json()['error']
 
     def test_requires_login(self, client):
-        assert client.patch('/projects/p/api/pools/wm',
+        assert client.patch('/projects/admin/p/api/pools/wm',
                             json={'name': 'x'}).status_code == 401
 
     def test_edit_button_offered_for_pools_not_supernets(self, app, auth_client, proj):
-        body = auth_client.get('/projects/%s/resources' % proj).data.decode()
+        body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
         assert 'editPool("wm"' in body
         assert 'editPool("sn"' not in body

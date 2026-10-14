@@ -39,7 +39,7 @@ async function checkReachability(hostnames, box, btn) {
   btn.textContent = 'Checking…';
   box.innerHTML = '<div class="reach-summary">Connecting to ' + hostnames.length + ' switch(es)…</div>';
   try {
-    const res = await fetch('/projects/' + encodeURIComponent(PROJECT) + '/reachability', {
+    const res = await fetch(PROJECT_BASE + '/reachability', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({hosts: hostnames})
     });
