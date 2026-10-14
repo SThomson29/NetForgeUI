@@ -3,8 +3,27 @@
 {% block page_title %}{{ project_name }} / Hosts{% endblock %}
 
 {% block content %}
+<style>
+.add-mode { display:inline-flex; gap:2px; background:var(--bg-inset); border-radius:var(--radius-sm); padding:2px; }
+.add-mode button { border:0; background:none; font:inherit; font-size:12px; padding:3px 10px;
+                   border-radius:var(--radius-sm); cursor:pointer; color:var(--text-secondary); }
+.add-mode button.on { background:var(--bg-surface, #fff); color:var(--text-primary); font-weight:600; }
+.bulk-text { width:100%; min-height:110px; font-family:'JetBrains Mono', monospace; font-size:12px; }
+.bulk-list { max-height:240px; overflow:auto; margin-top:8px; font-family:'JetBrains Mono', monospace;
+             font-size:12px; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:6px 8px; }
+.bulk-list .skip { color:var(--danger); }
+</style>
+
 <div class="card">
-  <div class="card-header">Add switch</div>
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+    Add switch
+    <div class="add-mode" role="tablist">
+      <button type="button" id="mode-single" class="on" onclick="setAddMode('single')">Single</button>
+      <button type="button" id="mode-bulk" onclick="setAddMode('bulk')">Bulk</button>
+    </div>
+  </div>
+
+  <div id="add-single">
   <form method="post" action="{{ url_for('projects.add_host', project_name=project_name) }}">
     <div class="grid3">
       <div class="fld">
@@ -25,6 +44,35 @@
       </div>
     </div>
   </form>
+  </div>
+
+  <div id="add-bulk" style="display:none">
+    <div class="fld">
+      <label class="lbl">Hostnames</label>
+      <textarea class="form-input bulk-text" id="bulk-text" oninput="bulkStale()"
+                placeholder="One per line or comma-separated, e.g.&#10;core-01, core-02&#10;EDGE-SW-[01-24]&#10;B1-FL[1-5]-SW[001-200]"></textarea>
+      <div class="form-hint">
+        <code>[01-24]</code> expands to a numbered run and keeps the zero padding.
+        Several ranges in one name multiply: <code>FL[1-3]-SW[01-48]</code> gives 144 names.
+        Up to 1000 per batch.
+      </div>
+    </div>
+    <div class="grid3" style="margin-top:8px">
+      <div class="fld">
+        <label class="lbl">Stacking (all switches in this batch)</label>
+        <select class="form-select" id="bulk-stacking" onchange="bulkStale()">
+          <option value="none">None</option>
+          <option value="vsx">VSX</option>
+          <option value="vsf">VSF</option>
+        </select>
+      </div>
+      <div class="fld" style="display:flex;align-items:flex-end;gap:8px">
+        <button type="button" class="btn" id="bulk-preview-btn" onclick="bulkPreview()">Preview</button>
+        <button type="button" class="btn btn-primary" id="bulk-add-btn" onclick="bulkAdd()" style="display:none"></button>
+      </div>
+    </div>
+    <div id="bulk-out"></div>
+  </div>
 </div>
 
 <div class="card">
@@ -80,6 +128,74 @@
 </div>
 
 <script>
+const BULK_PREVIEW_URL = "{{ url_for('projects.bulk_hosts_preview', project_name=project_name) }}";
+const BULK_ADD_URL = "{{ url_for('projects.bulk_hosts_add', project_name=project_name) }}";
+
+function setAddMode(mode) {
+  document.getElementById('add-single').style.display = mode === 'single' ? '' : 'none';
+  document.getElementById('add-bulk').style.display = mode === 'bulk' ? '' : 'none';
+  document.getElementById('mode-single').classList.toggle('on', mode === 'single');
+  document.getElementById('mode-bulk').classList.toggle('on', mode === 'bulk');
+}
+
+function bulkBody() {
+  return JSON.stringify({text: document.getElementById('bulk-text').value,
+                         stacking: document.getElementById('bulk-stacking').value});
+}
+
+/* Editing after a preview makes it stale: hide Add until previewed again. */
+function bulkStale() {
+  document.getElementById('bulk-add-btn').style.display = 'none';
+}
+
+async function bulkPost(url) {
+  const res = await fetch(url, {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: bulkBody()});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || ('server returned ' + res.status));
+  return data;
+}
+
+async function bulkPreview() {
+  const out = document.getElementById('bulk-out');
+  const addBtn = document.getElementById('bulk-add-btn');
+  addBtn.style.display = 'none';
+  out.innerHTML = '<div class="form-hint">Checking…</div>';
+  try {
+    const data = await bulkPost(BULK_PREVIEW_URL);
+    const skipped = data.items.filter(i => !i.add);
+    let html = '<div class="form-hint" style="margin-top:8px">' + data.add_count + ' to add'
+      + (skipped.length ? ', ' + skipped.length + ' skipped' : '') + '</div>';
+    if (data.items.length) {
+      html += '<div class="bulk-list">' + data.items.map(i => i.add
+        ? esc(i.name)
+        : '<span class="skip">' + esc(i.name) + ' — ' + esc(i.reason) + '</span>').join('<br>') + '</div>';
+    }
+    out.innerHTML = html;
+    if (data.add_count) {
+      addBtn.textContent = 'Add ' + data.add_count + ' switch' + (data.add_count === 1 ? '' : 'es');
+      addBtn.style.display = '';
+    }
+  } catch (e) {
+    out.innerHTML = '<div class="alert alert-danger" style="margin-top:8px"><span>' + esc(e.message) + '</span></div>';
+  }
+}
+
+async function bulkAdd() {
+  const addBtn = document.getElementById('bulk-add-btn');
+  addBtn.disabled = true;
+  try {
+    const data = await bulkPost(BULK_ADD_URL);
+    toast('Added ' + data.added.length + ' switch' + (data.added.length === 1 ? '' : 'es')
+          + (data.skipped.length ? ', skipped ' + data.skipped.length : ''));
+    setTimeout(() => location.reload(), 600);
+  } catch (e) {
+    addBtn.disabled = false;
+    document.getElementById('bulk-out').innerHTML =
+      '<div class="alert alert-danger" style="margin-top:8px"><span>' + esc(e.message) + '</span></div>';
+  }
+}
+
 const RECON_URL = "{{ url_for('projects.reconcile_project', project_name=project_name) }}";
 
 async function reconcileCall(apply) {

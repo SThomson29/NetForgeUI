@@ -99,19 +99,32 @@ def read_project_hosts(app, username, project_name):
 
 def add_project_host(app, username, project_name, hostname, stacking):
     """Add a host to a project's hosts.ini and scaffold host_vars."""
-    from .project import project_hosts_ini_path, project_host_vars_dir
+    add_project_hosts(app, username, project_name, [hostname], stacking)
+
+
+def add_project_hosts(app, username, project_name, hostnames, stacking):
+    """Add several hosts with one stacking type.
+
+    hosts.ini is written once for the batch rather than once per host, and
+    under the project lock so a concurrent add cannot lose either change.
+    """
+    from .project import (project_hosts_ini_path, project_host_vars_dir,
+                          project_lock)
+    group = STACKING_TO_GROUP.get(stacking, 'cx')
     ini   = project_hosts_ini_path(app, username, project_name)
     hvdir = project_host_vars_dir(app, username, project_name)
-    cp = configparser.ConfigParser(allow_no_value=True)
-    cp.optionxform = str
-    cp.read(ini)
-    group = STACKING_TO_GROUP.get(stacking, 'cx')
-    if not cp.has_section(group):
-        cp.add_section(group)
-    cp.set(group, hostname)
-    with open(ini, 'w') as f:
-        cp.write(f)
-    _scaffold_host_vars_to(app, hostname, stacking, hvdir)
+    with project_lock(app, username, project_name):
+        cp = configparser.ConfigParser(allow_no_value=True)
+        cp.optionxform = str
+        cp.read(ini)
+        if not cp.has_section(group):
+            cp.add_section(group)
+        for hostname in hostnames:
+            cp.set(group, hostname)
+        with open(ini, 'w') as f:
+            cp.write(f)
+        for hostname in hostnames:
+            _scaffold_host_vars_to(app, hostname, stacking, hvdir)
 
 def remove_project_host(app, username, project_name, hostname):
     """Remove a host from a project."""

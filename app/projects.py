@@ -35,7 +35,7 @@ from .api import json_body
 from .jobs import prune_finished, mark_finished
 from .security import job_tag, visible_job
 from .utils import (
-    read_project_hosts, add_project_host, remove_project_host,
+    read_project_hosts, add_project_host, add_project_hosts, remove_project_host,
     list_project_generated_configs,
     project_host_vars_dir,
     reconcile_host_vars,
@@ -220,6 +220,58 @@ def add_host(project_name):
     except RuntimeError as e:
         flash(str(e), 'error')
     return redirect(url_for('projects.hosts_page', project_name=project_name))
+
+
+def _bulk_plan(app, project_name):
+    """Shared by preview and add: (stacking, plan) or a 400 response."""
+    from .bulk_hosts import plan, BulkError
+    from .utils import STACKING_TO_GROUP
+    body = json_body('text')
+    stacking = str(body.get('stacking') or 'none')
+    if stacking not in STACKING_TO_GROUP:
+        return None, (jsonify(ok=False, error='Unknown stacking type.'), 400)
+    existing = [h['hostname'] for h in
+                read_project_hosts(app, current_user.username, project_name)]
+    try:
+        return (stacking, plan(str(body['text']), existing)), None
+    except BulkError as e:
+        return None, (jsonify(ok=False, error=str(e)), 400)
+
+
+@projects_bp.route('/projects/<project_name>/hosts/bulk/preview', methods=['POST'])
+@login_required
+def bulk_hosts_preview(project_name):
+    """What a bulk add would do, without doing it."""
+    result, error = _bulk_plan(current_app._get_current_object(), project_name)
+    if error:
+        return error
+    _stacking, items = result
+    return jsonify(ok=True, items=items,
+                   add_count=sum(1 for i in items if i['add']))
+
+
+@projects_bp.route('/projects/<project_name>/hosts/bulk', methods=['POST'])
+@login_required
+def bulk_hosts_add(project_name):
+    """Add every name the text expands to that is valid and new.
+
+    The text is expanded again here rather than trusting a list from the
+    page, so exactly the previewed rules apply.
+    """
+    app = current_app._get_current_object()
+    result, error = _bulk_plan(app, project_name)
+    if error:
+        return error
+    stacking, items = result
+    names = [i['name'] for i in items if i['add']]
+    if names:
+        try:
+            add_project_hosts(app, current_user.username, project_name,
+                              names, stacking)
+        except RuntimeError as e:
+            return jsonify(ok=False, error=str(e)), 400
+    return jsonify(ok=True, added=names,
+                   skipped=[i for i in items if not i['add']])
 
 
 @projects_bp.route('/projects/<project_name>/hosts/delete/<hostname>', methods=['POST'])
