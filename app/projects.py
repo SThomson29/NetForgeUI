@@ -609,7 +609,7 @@ def api_release_unique(project_name):
     app  = current_app._get_current_object()
     data = request.json
     release_unique(app, current_user.username, project_name,
-                   data['pool_id'], data['ip'])
+                   data['pool_id'], data['ip'], data.get('hostname') or None)
     return jsonify({'ok': True})
 
 

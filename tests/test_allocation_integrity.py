@@ -199,3 +199,146 @@ class TestPtpLinks:
         a, b = _ptp(proj)['10.254.0.0'], _ptp(proj)['10.254.0.1']
         assert a['hostname'] == 'sw-a' and a['peer_hostname'] is None
         assert b['status'] == 'reserved_for_peer' and b['peer_hostname'] == 'sw-a'
+
+
+# ---------------------------------------------------------------------------
+# Editor
+# ---------------------------------------------------------------------------
+
+class TestEditorReportsFailedAllocations:
+    """The editor updated its pickers and fired the request with errors
+    swallowed, so a failed call left the pickers showing a state the
+    server never recorded."""
+
+    @pytest.fixture
+    def script(self):
+        src = open(os.path.join(os.path.dirname(__file__), '..', 'app',
+                                'templates', 'project_editor.html')).read()
+        return src[src.index('var __triggerAllocRefresh'):
+                   src.index('// PooledIPField')]
+
+    def test_errors_are_not_swallowed(self, script):
+        # Only the reload may ignore its own failure — there is nothing
+        # further to fall back to. The allocation requests must not.
+        rest = script[:script.index('function poolReloadAllocations(')] + \
+            script[script.index('function poolAllocateIP('):]
+        assert 'catch(function(){})' not in rest.replace(' ', '')
+
+    def test_both_calls_go_through_the_checked_request(self, script):
+        for fn in ('poolAllocateIP', 'poolReleaseIP'):
+            body = script[script.index('function %s(' % fn):]
+            body = body[:body.index('\n}\n')]
+            assert 'poolRequest(' in body, fn
+            assert 'fetch(' not in body, fn
+            # local update before the request, so a failure's reload wins
+            assert body.index('__triggerAllocRefresh()') < body.index('poolRequest('), fn
+
+    def test_failure_checks_status_and_reloads(self, script):
+        body = script[script.index('function poolRequest('):]
+        assert 'res.ok' in body
+        assert 'data.ok === false' in body
+        assert 'poolReloadAllocations()' in body
+        assert 'toast(' in body
+
+    def test_reload_endpoint_returns_allocations(self, app, auth_client):
+        from app.project import create_project
+        with app.app_context():
+            create_project(app, 'admin', 'reload')
+        data = auth_client.get('/projects/reload/api/allocations').get_json()
+        assert {'unique', 'point_to_point'} <= set(data)
+
+
+# ---------------------------------------------------------------------------
+# Shared anycast VTEP — editor path
+# ---------------------------------------------------------------------------
+
+class TestSharedVtepFromEditor:
+    """Picking the pair's VTEP for the second switch in the editor used to
+    overwrite the first switch's record and drop the shared flag until the
+    second switch was saved."""
+
+    @pytest.fixture
+    def vtep(self, app):
+        with app.app_context():
+            create_project(app, 'admin', 'v')
+            add_pool(app, 'admin', 'v', {
+                'id': 'lb', 'type': 'unique', 'name': 'VTEP',
+                'prefix': '32', 'subnet': '10.255.1.0/24'})
+        return app
+
+    def _save_vtep(self, app, host, ip):
+        from app.project import project_host_vars_dir
+        hv = os.path.join(project_host_vars_dir(app, 'admin', 'v'), host)
+        os.makedirs(hv, exist_ok=True)
+        with open(os.path.join(hv, 'vxlan.yml'), 'w') as f:
+            f.write('loopback_interface: loopback1\nloopback_ip: "%s"\n'
+                    'ospf_area: "0.0.0.0"\nvxlan:\n  vni_map: []\n' % ip)
+        sync_allocations(app, 'admin', 'v', host)
+
+    def _lb(self, app):
+        return get_all_allocations(app, 'admin', 'v')['unique']['lb']
+
+    def test_second_switch_is_added_not_swapped_in(self, vtep):
+        self._save_vtep(vtep, 'core-01', '10.255.1.1')
+        allocate_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1', 'core-02', 'Loopback IP')
+        e = self._lb(vtep)['10.255.1.1']
+        assert e['shared'] is True
+        assert (e['hostname'], e['shared_with']) == ('core-02', 'core-01')
+
+    def test_editor_then_save_agree(self, vtep):
+        self._save_vtep(vtep, 'core-01', '10.255.1.1')
+        allocate_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1', 'core-02', 'Loopback IP')
+        self._save_vtep(vtep, 'core-02', '10.255.1.1')
+        e = self._lb(vtep)['10.255.1.1']
+        assert e['shared'] is True
+        assert {e['hostname'], e['shared_with']} == {'core-01', 'core-02'}
+
+    def test_second_switch_moving_away_leaves_the_first(self, vtep):
+        """What the editor sends when core-02's VTEP is changed."""
+        self._save_vtep(vtep, 'core-01', '10.255.1.1')
+        allocate_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1', 'core-02', 'Loopback IP')
+        release_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1', 'core-02')
+        e = self._lb(vtep)['10.255.1.1']
+        assert e == {'hostname': 'core-01', 'interface': 'loopback1', 'shared': True}
+
+    def test_first_switch_moving_away_leaves_the_second(self, vtep):
+        self._save_vtep(vtep, 'core-01', '10.255.1.1')
+        allocate_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1', 'core-02', 'Loopback IP')
+        release_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1', 'core-01')
+        e = self._lb(vtep)['10.255.1.1']
+        assert e['hostname'] == 'core-02' and 'shared_with' not in e
+
+    def test_last_holder_leaving_frees_it(self, vtep):
+        self._save_vtep(vtep, 'core-01', '10.255.1.1')
+        release_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1', 'core-01')
+        assert '10.255.1.1' not in self._lb(vtep)
+
+    def test_unshared_address_is_still_overwritten(self, vtep):
+        """Only addresses the sync marked shared are shared. A loopback0
+        clash is a mistake to surface, not to accommodate."""
+        allocate_unique(vtep, 'admin', 'v', 'lb', '10.255.1.5', 'core-01', 'loopback0')
+        allocate_unique(vtep, 'admin', 'v', 'lb', '10.255.1.5', 'core-02', 'loopback0')
+        assert self._lb(vtep)['10.255.1.5'] == {'hostname': 'core-02',
+                                               'interface': 'loopback0'}
+
+    def test_release_without_hostname_removes_it(self, vtep):
+        """Older pages (cached before this change) send no hostname."""
+        self._save_vtep(vtep, 'core-01', '10.255.1.1')
+        allocate_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1', 'core-02', 'Loopback IP')
+        release_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1')
+        assert '10.255.1.1' not in self._lb(vtep)
+
+    def test_release_route_passes_the_switch(self, vtep, auth_client):
+        self._save_vtep(vtep, 'core-01', '10.255.1.1')
+        allocate_unique(vtep, 'admin', 'v', 'lb', '10.255.1.1', 'core-02', 'Loopback IP')
+        res = auth_client.post('/projects/v/api/allocations/unique/release',
+                               json={'pool_id': 'lb', 'ip': '10.255.1.1',
+                                     'hostname': 'core-02'})
+        assert res.status_code == 200
+        assert self._lb(vtep)['10.255.1.1']['hostname'] == 'core-01'
+
+    def test_editor_sends_the_switch_on_release(self):
+        src = open(os.path.join(os.path.dirname(__file__), '..', 'app',
+                                'templates', 'project_editor.html')).read()
+        assert 'poolReleaseIP(pool.id, pool.type, value, hostname)' in src
+        assert 'poolReleaseIP(pool.id, pool.type, value)' not in src

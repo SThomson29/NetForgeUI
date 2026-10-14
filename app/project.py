@@ -911,24 +911,77 @@ def get_available_ips(app, username, project_name, pool_id):
     return available
 
 
+def _claim_unique(pool_allocs, ip, hostname, interface, shared=False):
+    """Record hostname/interface against a unique-pool address.
+
+    `shared` is for an anycast VTEP, which both members of a VSX pair
+    carry: one record names the latest holder in hostname and the other in
+    shared_with. Shared by the save-time sync and the editor's instant
+    allocation — the instant one used to overwrite, dropping the first
+    switch and the shared flag until the second switch was saved.
+    """
+    entry = {'hostname': hostname, 'interface': interface}
+    existing = pool_allocs.get(ip)
+    if shared:
+        entry['shared'] = True
+        # The other holder's interface is kept too, so handing the address
+        # back to it restores its own interface, not this one's.
+        if existing and existing.get('hostname') not in (None, hostname):
+            entry['shared_with'] = existing['hostname']
+            entry['shared_with_interface'] = existing.get('interface', '')
+        elif existing and existing.get('shared_with'):
+            entry['shared_with'] = existing['shared_with']
+            entry['shared_with_interface'] = existing.get('shared_with_interface', '')
+    pool_allocs[ip] = entry
+
+
+def _release_unique(pool_allocs, ip, hostname=None):
+    """Drop hostname's claim on a unique-pool address.
+
+    On a shared address only that switch's half goes: the other holder
+    keeps it. Without a hostname, or on an unshared address, the record is
+    removed outright, as it always was.
+    """
+    entry = pool_allocs.get(ip)
+    if not entry:
+        return
+    if hostname and entry.get('shared'):
+        if entry.get('hostname') == hostname and entry.get('shared_with'):
+            pool_allocs[ip] = {
+                'hostname':  entry['shared_with'],
+                'interface': entry.get('shared_with_interface',
+                                       entry.get('interface', '')),
+                'shared':    True,
+            }
+            return
+        if entry.get('shared_with') == hostname:
+            entry.pop('shared_with', None)
+            entry.pop('shared_with_interface', None)
+            return
+    del pool_allocs[ip]
+
+
 @_locked
 def allocate_unique(app, username, project_name, pool_id, ip, hostname, interface):
-    """Allocate a unique IP."""
+    """Allocate a unique IP.
+
+    The editor cannot tell a VTEP field from any other, so an address is
+    treated as shared here only when it is already recorded as shared —
+    which only the sync does, and only for VTEPs.
+    """
     allocs = _load_allocations(app, username, project_name)
-    if pool_id not in allocs['unique']:
-        allocs['unique'][pool_id] = {}
-    allocs['unique'][pool_id][ip] = {
-        'hostname':  hostname,
-        'interface': interface,
-    }
+    pool_allocs = allocs['unique'].setdefault(pool_id, {})
+    existing = pool_allocs.get(ip)
+    _claim_unique(pool_allocs, ip, hostname, interface,
+                  shared=bool(existing and existing.get('shared')))
     _save_allocations(app, username, project_name, allocs)
 
 
 @_locked
-def release_unique(app, username, project_name, pool_id, ip):
-    """Release a unique IP allocation."""
+def release_unique(app, username, project_name, pool_id, ip, hostname=None):
+    """Release a unique IP allocation (only hostname's half, if shared)."""
     allocs = _load_allocations(app, username, project_name)
-    allocs['unique'].get(pool_id, {}).pop(ip, None)
+    _release_unique(allocs['unique'].get(pool_id, {}), ip, hostname)
     _save_allocations(app, username, project_name, allocs)
 
 
@@ -1350,25 +1403,9 @@ def sync_allocations(app, username, project_name, hostname):
         for k in to_remove:
             # Another switch may still be sharing it, in which case the
             # address stays allocated to them rather than being freed.
-            peer = allocs['unique'][pid][k].get('shared_with')
-            if peer:
-                allocs['unique'][pid][k] = {
-                    'hostname': peer,
-                    'interface': allocs['unique'][pid][k].get('interface', ''),
-                    'shared': True,
-                }
-            else:
-                del allocs['unique'][pid][k]
+            _release_unique(allocs['unique'][pid], k, hostname)
 
-        entry = {'hostname': hostname, 'interface': interface_name}
-        existing = allocs['unique'][pid].get(ip)
-        if shared:
-            entry['shared'] = True
-            if existing and existing.get('hostname') not in (None, hostname):
-                entry['shared_with'] = existing['hostname']
-            elif existing and existing.get('shared_with'):
-                entry['shared_with'] = existing['shared_with']
-        allocs['unique'][pid][ip] = entry
+        _claim_unique(allocs['unique'][pid], ip, hostname, interface_name, shared)
  
     def register_svi(ip, interface_name, pool, role='gateway'):
         """Record an SVI address against its supernet pool.
@@ -1478,25 +1515,12 @@ def sync_allocations(app, username, project_name, hostname):
     # Clear all existing allocations for this hostname before re-scanning
     # This ensures deleted or renamed interfaces don't leave stale reservations
     for pid in list(allocs['unique'].keys()):
-        for ip in list(allocs['unique'][pid].keys()):
-            entry = allocs['unique'][pid][ip]
-            if entry.get('hostname') == hostname:
-                # A shared anycast VTEP belongs to both members of a pair.
-                # Clearing it outright would erase the peer's claim too, so
-                # hand it back to them instead.
-                peer = entry.get('shared_with')
-                if peer:
-                    allocs['unique'][pid][ip] = {
-                        'hostname': peer,
-                        'interface': entry.get('interface', ''),
-                        'shared': True,
-                    }
-                else:
-                    del allocs['unique'][pid][ip]
-            elif entry.get('shared_with') == hostname:
-                # We were the peer on someone else's shared address; drop
-                # only our half of it.
-                entry.pop('shared_with', None)
+        pool_allocs = allocs['unique'][pid]
+        # A shared anycast VTEP belongs to both members of a pair, so only
+        # this host's half is dropped and the peer keeps it.
+        for ip in [k for k, v in pool_allocs.items()
+                   if hostname in (v.get('hostname'), v.get('shared_with'))]:
+            _release_unique(pool_allocs, ip, hostname)
  
     for pid in list(allocs['point_to_point'].keys()):
         pool_allocs = allocs['point_to_point'][pid]

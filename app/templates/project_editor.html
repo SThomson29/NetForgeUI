@@ -185,34 +185,85 @@ function commonDatalist(key, listId) {
 
 var __triggerAllocRefresh = null; // Set by App on mount
 
+/* Allocation calls update the pickers immediately and then tell the server.
+   If the server does not confirm, the pickers would otherwise keep showing
+   a state the server never recorded — so on any failure the allocations
+   are reloaded from the server and the user is told. The field value is
+   kept: saving the host records it from host_vars either way. */
+function poolRequest(endpoint, body, what) {
+  fetch('/projects/' + PROJECT_NAME + endpoint, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  }).then(function(res) {
+    if (!res.ok) throw new Error('server returned ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    if (!data || data.ok === false) throw new Error((data && data.error) || 'rejected');
+  }).catch(function(err) {
+    toast('Could not ' + what + ' (' + err.message + '). Pool status reloaded; '
+          + 'saving this host will record its addresses.', 6000);
+    poolReloadAllocations();
+  });
+}
+
+function poolReloadAllocations() {
+  fetch('/projects/' + PROJECT_NAME + '/api/allocations')
+    .then(function(res) { if (!res.ok) throw new Error(); return res.json(); })
+    .then(function(allocs) {
+      for (var k in PROJECT_ALLOCS) delete PROJECT_ALLOCS[k];
+      Object.assign(PROJECT_ALLOCS, allocs);
+      if (__triggerAllocRefresh) __triggerAllocRefresh();
+    })
+    .catch(function() {});
+}
+
 function poolAllocateIP(poolId, poolType, ip, hostname, interfaceLabel) {
   var endpoint = poolType === 'point_to_point'
     ? '/api/allocations/ptp' : '/api/allocations/unique';
-  fetch('/projects/' + PROJECT_NAME + endpoint, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({pool_id:poolId, ip:ip, hostname:hostname, interface:interfaceLabel||''})
-  }).catch(function(){});
-  // Update local state immediately
+  // Update local state first, so a failure's reload always lands after it
   var bucket = poolType === 'point_to_point' ? 'point_to_point' : 'unique';
   if (!PROJECT_ALLOCS[bucket]) PROJECT_ALLOCS[bucket] = {};
   if (!PROJECT_ALLOCS[bucket][poolId]) PROJECT_ALLOCS[bucket][poolId] = {};
-  PROJECT_ALLOCS[bucket][poolId][ip] = {hostname:hostname, interface:interfaceLabel||''};
+  var prev = PROJECT_ALLOCS[bucket][poolId][ip];
+  var entry = {hostname:hostname, interface:interfaceLabel||''};
+  if (prev && prev.shared) {
+    // A shared anycast VTEP keeps its other holder, as the server does.
+    entry.shared = true;
+    if (prev.hostname && prev.hostname !== hostname) {
+      entry.shared_with = prev.hostname;
+      entry.shared_with_interface = prev.interface || '';
+    } else if (prev.shared_with) {
+      entry.shared_with = prev.shared_with;
+      entry.shared_with_interface = prev.shared_with_interface || '';
+    }
+  }
+  PROJECT_ALLOCS[bucket][poolId][ip] = entry;
   if (__triggerAllocRefresh) __triggerAllocRefresh();
+  poolRequest(endpoint,
+              {pool_id:poolId, ip:ip, hostname:hostname, interface:interfaceLabel||''},
+              'allocate ' + ip);
 }
 
-function poolReleaseIP(poolId, poolType, ip) {
+function poolReleaseIP(poolId, poolType, ip, hostname) {
   var endpoint = poolType === 'point_to_point'
     ? '/api/allocations/ptp/release' : '/api/allocations/unique/release';
-  fetch('/projects/' + PROJECT_NAME + endpoint, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({pool_id:poolId, ip:ip})
-  }).catch(function(){});
-  // Update local state immediately
+  // Update local state first, so a failure's reload always lands after it
   var bucket = poolType === 'point_to_point' ? 'point_to_point' : 'unique';
-  if (PROJECT_ALLOCS[bucket] && PROJECT_ALLOCS[bucket][poolId]) {
-    delete PROJECT_ALLOCS[bucket][poolId][ip];
+  var held = PROJECT_ALLOCS[bucket] && PROJECT_ALLOCS[bucket][poolId];
+  var cur = held && held[ip];
+  if (cur && cur.shared && hostname && cur.hostname === hostname && cur.shared_with) {
+    held[ip] = {hostname:cur.shared_with,
+                interface:(cur.shared_with_interface !== undefined ? cur.shared_with_interface : cur.interface)||'',
+                shared:true};
+  } else if (cur && cur.shared && hostname && cur.shared_with === hostname) {
+    delete cur.shared_with;
+    delete cur.shared_with_interface;
+  } else if (held) {
+    delete held[ip];
   }
   if (__triggerAllocRefresh) __triggerAllocRefresh();
+  // hostname lets the server drop only this switch's half of a shared VTEP
+  poolRequest(endpoint, {pool_id:poolId, ip:ip, hostname:hostname||''}, 'release ' + ip);
 }
 
 // PooledIPField — pure render function, no hooks, all state from props
@@ -268,7 +319,7 @@ function PooledIPField(props) {
         onChange: ev => {
           var newIp = ev.target.value;
           if (newIp === '__free') { setFreeText(true); return; }
-          if (value && value !== newIp) poolReleaseIP(pool.id, pool.type, value);
+          if (value && value !== newIp) poolReleaseIP(pool.id, pool.type, value, hostname);
           if (newIp) poolAllocateIP(pool.id, pool.type, newIp, hostname, label);
           onChange(newIp);
         },
@@ -304,7 +355,7 @@ function PooledIPField(props) {
         onChange: ev => {
           var newIp = ev.target.value;
           if (newIp === '__free') { setFreeText(true); return; }
-          if (value && value !== newIp) poolReleaseIP(pool.id, pool.type, value);
+          if (value && value !== newIp) poolReleaseIP(pool.id, pool.type, value, hostname);
           if (newIp) poolAllocateIP(pool.id, pool.type, newIp, hostname, label);
           onChange(newIp);
         },
