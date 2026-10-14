@@ -30,6 +30,7 @@ from .transfer import (
     export_project, import_project, read_manifest, TransferError,
 )
 
+from . import audit
 from .api import json_body
 from .jobs import prune_finished, mark_finished
 from .security import job_tag, visible_job
@@ -360,6 +361,18 @@ def run_generate(project_name):
         _jobs[job_id] = {'status': 'running', 'output': '', 'returncode': None,
                          **job_tag(username, project_name)}
 
+    # Audit: the hosts in scope, and the configs as they stand beforehand so
+    # the entry can say which ones this run changed.
+    project_hosts = [h['hostname'] for h in
+                     read_project_hosts(app, username, project_name)]
+    named = [n for n in re.split(r'[,:\s]+', limit) if n] if limit else []
+    in_scope = [h for h in project_hosts if not named or h in named] or named
+    before = audit.config_hashes(out_dir)
+    audit_id = audit.record_start(
+        app, username=username, project=project_name, action='generate',
+        switch_user=None, targets=[{'hostname': h} for h in in_scope],
+        params={'limit': limit or None, 'tags': tags or None})
+
     def _run(jid):
         try:
             def _progress(output_so_far):
@@ -392,6 +405,13 @@ def run_generate(project_name):
         finally:
             with _jobs_lock:
                 mark_finished(_jobs[jid])
+                final = dict(_jobs[jid])
+            try:
+                final['results'] = audit.generation_results(
+                    before, audit.config_hashes(out_dir))
+                audit.record_finish(app, audit_id, final)
+            except Exception:                       # noqa: BLE001
+                pass    # never let the log take down the job's own result
 
     threading.Thread(target=_run, args=(job_id,), daemon=True).start()
 
@@ -438,12 +458,14 @@ def delete_config(project_name, filename):
 @projects_bp.route('/projects/<project_name>/history')
 @login_required
 def project_history(project_name):
-    from . import audit
     app = current_app._get_current_object()
+    show_gen = request.args.get('generations', '1') != '0'
     return render_template(
         'project_history.html', project_name=project_name,
+        show_generations=show_gen, detail_days=audit.AUDIT_DETAIL_DAYS,
         entries=audit.entries(app, username=current_user.username,
-                              project=project_name))
+                              project=project_name,
+                              include_generations=show_gen))
 
 
 # ---------------------------------------------------------------------------

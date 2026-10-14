@@ -212,8 +212,9 @@ class TestEditorReportsFailedAllocations:
 
     @pytest.fixture
     def script(self):
-        src = open(os.path.join(os.path.dirname(__file__), '..', 'app',
-                                'templates', 'project_editor.html')).read()
+        with open(os.path.join(os.path.dirname(__file__), '..', 'app',
+                               'templates', 'project_editor.html')) as f:
+            src = f.read()
         return src[src.index('var __triggerAllocRefresh'):
                    src.index('// PooledIPField')]
 
@@ -338,7 +339,8 @@ class TestSharedVtepFromEditor:
         assert self._lb(vtep)['10.255.1.1']['hostname'] == 'core-01'
 
     def test_editor_sends_the_switch_on_release(self):
-        src = open(os.path.join(os.path.dirname(__file__), '..', 'app',
-                                'templates', 'project_editor.html')).read()
+        with open(os.path.join(os.path.dirname(__file__), '..', 'app',
+                               'templates', 'project_editor.html')) as f:
+            src = f.read()
         assert 'poolReleaseIP(pool.id, pool.type, value, hostname)' in src
         assert 'poolReleaseIP(pool.id, pool.type, value)' not in src

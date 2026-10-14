@@ -86,8 +86,9 @@ def _run_bootstrap():
 
     # Runs that were in progress when the container stopped never finished.
     with app.app_context():
-        from app.audit import mark_interrupted
+        from app.audit import mark_interrupted, trim_old
         mark_interrupted(app)
+        trim_old(app)
 
     from app.docker_runner import cleanup_orphaned_containers
     cleanup_orphaned_containers()

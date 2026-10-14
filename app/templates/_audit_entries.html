@@ -25,6 +25,14 @@
 }
 </style>
 
+{% set q = request.args.to_dict() %}
+{% set _ = q.update(request.view_args) %}
+{% set _ = q.update({'generations': '0' if show_generations else '1'}) %}
+<div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+  <a class="btn btn-sm btn-ghost" href="{{ url_for(request.endpoint, **q) }}">
+    {{ 'Hide generations' if show_generations else 'Show generations' }}</a>
+</div>
+
 {% if entries %}
 <div class="card">
   {% for e in entries %}
@@ -48,28 +56,50 @@
         <span class="k">Finished</span><span>{{ e.finished_at or '—' }}</span>
         <span class="k">NetForgeUI user</span><span>{{ e.username }}</span>
         <span class="k">Project</span><span>{{ e.project }}</span>
+        {% if e.action != 'generate' %}
         <span class="k">Switch login</span><span>{{ e.switch_user or '—' }}</span>
+        {% endif %}
         <span class="k">Exit code</span><span>{{ e.returncode if e.returncode is not none else '—' }}</span>
         {% for k, v in e.params.items() if v is not none %}
         <span class="k">{{ k|replace('_', ' ')|capitalize }}</span><span>{{ v }}</span>
         {% endfor %}
       </div>
 
-      <h4>Switches</h4>
+      {% set deploy = e.action in ('deploy_dryrun', 'deploy_push') %}
+      <h4>{{ 'Hosts' if e.action == 'generate' else 'Switches' }}</h4>
       <table class="audit-table">
-        <thead><tr><th>Switch</th><th>Address</th>
-          {% if e.action != 'firmware' %}<th>Config file</th><th>SHA-256</th>{% endif %}</tr></thead>
+        <thead><tr><th>{{ 'Host' if e.action == 'generate' else 'Switch' }}</th>
+          {% if e.action != 'generate' %}<th>Address</th>{% endif %}
+          {% if deploy %}<th>Config file</th><th>SHA-256</th><th>Generated</th>{% endif %}</tr></thead>
         <tbody>
         {% for t in e.targets %}
-          <tr><td>{{ t.hostname }}</td><td>{{ t.mgmt_ip }}</td>
-          {% if e.action != 'firmware' %}
+          <tr><td>{{ t.hostname }}</td>
+          {% if e.action != 'generate' %}<td>{{ t.mgmt_ip }}</td>{% endif %}
+          {% if deploy %}
             <td>{{ t.config_file }}</td>
             <td title="{{ t.sha256 or '' }}">{{ (t.sha256 or 'file missing')[:16] }}</td>
+            <td>{% if t.generated_by %}{{ t.generated_by.username }},
+                {{ t.generated_by.started_at|replace('T', ' ')|replace('Z', ' UTC') }}
+                {% else %}<span class="text-tertiary">not in log</span>{% endif %}</td>
           {% endif %}</tr>
         {% endfor %}
         </tbody>
       </table>
 
+      {% if e.action == 'generate' %}
+      {% if e.results %}
+      <h4>Configs after this run</h4>
+      <table class="audit-table">
+        <thead><tr><th>File</th><th>Change</th><th>SHA-256</th></tr></thead>
+        <tbody>
+        {% for r in e.results %}
+          <tr><td>{{ r.file }}</td><td>{{ r.change }}</td>
+              <td title="{{ r.sha256 or '' }}">{{ (r.sha256 or '')[:16] }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+      {% else %}
       {% for r in e.results %}
       <h4>{{ r.hostname }} result</h4>
       <div class="audit-kv">
@@ -81,6 +111,7 @@
       <pre class="code-block audit-pre">{{ r.commands|join('\n') }}</pre>
       {% endif %}
       {% endfor %}
+      {% endif %}
 
       {% if e.output_tail %}
       <details>
@@ -89,12 +120,14 @@
       </details>
       {% endif %}
       <p class="text-xs text-tertiary" style="margin-top:10px">
-        Secret values in commands and output are masked.
+        {% if e.details_trimmed %}Log and pushed commands removed after
+        {{ detail_days }} days; the rest of this entry is kept.
+        {% else %}Secret values in commands and output are masked.{% endif %}
       </p>
     </div>
   </details>
   {% endfor %}
 </div>
 {% else %}
-<div class="card"><div class="empty"><p>No deploys or firmware runs recorded yet.</p></div></div>
+<div class="card"><div class="empty"><p>Nothing recorded yet.</p></div></div>
 {% endif %}

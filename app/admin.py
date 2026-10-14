@@ -99,9 +99,12 @@ def audit_log():
     app = current_app._get_current_object()
     user = (request.args.get('user') or '').strip() or None
     project = (request.args.get('project') or '').strip() or None
+    show_gen = request.args.get('generations', '1') != '0'
     return render_template(
         'admin_audit.html', filter_user=user, filter_project=project,
-        entries=audit.entries(app, username=user, project=project, limit=500))
+        show_generations=show_gen, detail_days=audit.AUDIT_DETAIL_DAYS,
+        entries=audit.entries(app, username=user, project=project, limit=500,
+                              include_generations=show_gen))
 
 
 # ---------------------------------------------------------------------------

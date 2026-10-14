@@ -1,6 +1,6 @@
 """
-Audit log for actions that touch live switches: deploy dry runs, pushes and
-firmware upgrades.
+Audit log: config generation, and the actions that touch live switches —
+deploy dry runs, pushes and firmware upgrades.
 
 Job state lives in memory and is dropped an hour after a run ends, so
 without this nothing recorded who pushed what to which switch, or how it
@@ -15,22 +15,36 @@ Commands and log output can carry secrets from the generated config —
 RADIUS and TACACS keys, SNMP communities, local passwords — so those values
 are masked before anything is stored. Switch passwords never reach here:
 they are not in the results or the command line.
+
+Generations record a SHA-256 for each FULL/PARTIAL config they leave
+behind, and deploys record the SHA-256 of the file they send, so a push can
+be traced to the generation that first produced its config.
+
+After AUDIT_DETAIL_DAYS the bulky detail — log tail and pushed commands —
+is dropped. Who, what, when, which switches, file hashes and the outcome
+are kept for good.
 """
 
 import hashlib
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .models import get_db
 
 
 ACTIONS = {
+    'generate':      'Generate',
     'deploy_dryrun': 'Dry run',
     'deploy_push':   'Push',
     'firmware':      'Firmware',
 }
+
+DEPLOY_ACTIONS = ('deploy_dryrun', 'deploy_push')
+
+# 0 keeps details forever.
+AUDIT_DETAIL_DAYS = int(os.environ.get('AUDIT_DETAIL_DAYS', '90'))
 
 # Enough of the run's log to diagnose a failure; the start is mostly
 # Ansible's play banner, the end has the errors and the recap.
@@ -79,6 +93,10 @@ def init_audit(app):
         ''')
         db.execute('CREATE INDEX IF NOT EXISTS audit_by_project '
                    'ON audit_log (username, project, id)')
+        cols = {r['name'] for r in db.execute('PRAGMA table_info(audit_log)')}
+        if 'details_trimmed' not in cols:
+            db.execute('ALTER TABLE audit_log ADD COLUMN '
+                       'details_trimmed INTEGER NOT NULL DEFAULT 0')
 
 
 def file_fingerprint(path):
@@ -109,8 +127,36 @@ def deploy_targets(hosts, config_dir):
     return targets
 
 
+_GENERATED_CONFIG = re.compile(r'_(FULL|PARTIAL_.+)\.ios$')
+
+
+def config_hashes(config_dir):
+    """{file name: sha256} for the FULL/PARTIAL configs in a directory.
+
+    The per-section files are left out: they are intermediate, and the
+    assembled file is what gets deployed.
+    """
+    try:
+        names = os.listdir(config_dir)
+    except OSError:
+        return {}
+    return {n: file_fingerprint(os.path.join(config_dir, n))
+            for n in sorted(names) if _GENERATED_CONFIG.search(n)}
+
+
+def generation_results(before, after):
+    """Per-file results for a generation: hash and whether it changed."""
+    results = []
+    for name, digest in sorted(after.items()):
+        change = ('new' if name not in before
+                  else 'changed' if before[name] != digest else 'unchanged')
+        results.append({'file': name, 'sha256': digest, 'change': change})
+    return results
+
+
 def record_start(app, *, username, project, action, switch_user, targets, params):
     """Open an entry for a run that is starting. Returns its id."""
+    trim_old(app)
     with get_db(app) as db:
         cur = db.execute(
             'INSERT INTO audit_log (started_at, username, project, action, '
@@ -153,6 +199,27 @@ def record_finish(app, entry_id, job):
              mask_secrets(output[-OUTPUT_TAIL_CHARS:]), entry_id))
 
 
+def trim_old(app, now=None):
+    """Drop the log tail and pushed commands from entries older than
+    AUDIT_DETAIL_DAYS, keeping everything else."""
+    if AUDIT_DETAIL_DAYS <= 0:
+        return
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=AUDIT_DETAIL_DAYS)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    with get_db(app) as db:
+        rows = db.execute(
+            "SELECT id, results FROM audit_log WHERE details_trimmed = 0 "
+            "AND status != 'running' AND started_at < ?", (cutoff,)).fetchall()
+        for r in rows:
+            results = json.loads(r['results']) if r['results'] else []
+            for item in results:
+                if isinstance(item, dict):
+                    item.pop('commands', None)
+            db.execute('UPDATE audit_log SET output_tail = NULL, results = ?, '
+                       'details_trimmed = 1 WHERE id = ?',
+                       (json.dumps(results), r['id']))
+
+
 def mark_interrupted(app):
     """Close entries left 'running' by a restart. Called at startup."""
     with get_db(app) as db:
@@ -177,6 +244,12 @@ def _outcome(e):
     if status == 'interrupted':
         return ('Interrupted by restart', 'yellow')
     n = len(e['targets'])
+    if e['action'] == 'generate':
+        if status != 'done':
+            return ('Failed (exit %s)' % e['returncode'], 'red')
+        changed = sum(1 for r in results if r.get('change') in ('new', 'changed'))
+        return ('%d config%s, %d changed' % (len(results),
+                '' if len(results) == 1 else 's', changed), 'green')
     if e['action'] == 'deploy_push' and results:
         ok = sum(1 for r in results if r.get('confirmed') in (True, 'True', 'true'))
         pending = sum(1 for r in results
@@ -196,9 +269,16 @@ def _outcome(e):
             'green' if status == 'done' else 'red')
 
 
-def entries(app, *, username=None, project=None, limit=200):
-    """Newest first, optionally narrowed to one user and/or project."""
+def entries(app, *, username=None, project=None, limit=200,
+            include_generations=True):
+    """Newest first, optionally narrowed to one user and/or project.
+
+    Each deploy target whose file hash matches a logged generation gains
+    'generated_by': the entry that first produced that exact content.
+    """
     where, args = [], []
+    if not include_generations:
+        where.append("action != 'generate'")
     if username is not None:
         where.append('username = ?')
         args.append(username)
@@ -211,4 +291,31 @@ def entries(app, *, username=None, project=None, limit=200):
     sql += ' ORDER BY id DESC LIMIT ?'
     args.append(int(limit))
     with get_db(app) as db:
-        return [_row(r) for r in db.execute(sql, args).fetchall()]
+        rows = [_row(r) for r in db.execute(sql, args).fetchall()]
+        _link_generations(db, rows)
+    return rows
+
+
+def _link_generations(db, rows):
+    cache = {}
+    for e in rows:
+        if e['action'] not in DEPLOY_ACTIONS:
+            continue
+        for t in e['targets']:
+            digest = t.get('sha256')
+            if not digest:
+                continue
+            key = (e['username'], e['project'], digest)
+            if key not in cache:
+                # Hashes are hex, so a substring match on the stored JSON is
+                # exact enough; the earliest entry first produced the content.
+                g = db.execute(
+                    "SELECT id, started_at, username FROM audit_log "
+                    "WHERE action = 'generate' AND status = 'done' "
+                    "AND username = ? AND project = ? AND results LIKE ? "
+                    "ORDER BY id LIMIT 1",
+                    (e['username'], e['project'], '%' + digest + '%')).fetchone()
+                cache[key] = dict(g) if g else None
+            g = cache[key]
+            # Only a generation that ran before this deploy can have made it.
+            t['generated_by'] = g if g and g['id'] < e['id'] else None

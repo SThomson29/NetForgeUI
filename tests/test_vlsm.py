@@ -477,11 +477,13 @@ class TestStrandedContainerRepair:
         from app.project import project_dir
         with app.app_context():
             path = os.path.join(project_dir(app, 'admin', proj), 'allocations.json')
-            data = json.load(open(path))
+            with open(path) as f:
+                data = json.load(f)
             data['vlan_supernet']['sn'] = {'10.50.0.0/18': {
                 'status': 'container', 'vlan_id': None, 'vlan_name': None,
                 'hostname': None, 'peer_hostname': None}}
-            json.dump(data, open(path, 'w'))
+            with open(path, 'w') as f:
+                json.dump(data, f)
 
             blocks = get_carved_subnets(app, 'admin', proj, 'sn')
         assert blocks['10.50.0.0/18']['status'] == 'carved'

@@ -155,12 +155,14 @@ def run_ansible_job(store, lock, job_id, *, playbook_path, repo_dir,
         timer.daemon = True
         timer.start()
         out = OutputBuffer(_publish)
-        try:
-            for line in proc.stdout:
-                out.add(line)
-            proc.wait()
-        finally:
-            timer.cancel()
+        # The with block closes the output pipe as well as waiting.
+        with proc:
+            try:
+                for line in proc.stdout:
+                    out.add(line)
+                proc.wait()
+            finally:
+                timer.cancel()
 
         if timed_out.is_set():
             out.add('\nStopped: the run exceeded %d minutes.\n'

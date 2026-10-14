@@ -140,7 +140,8 @@ class TestHealthz:
 
     def test_dockerfile_probes_it(self):
         import os
-        src = open(os.path.join(os.path.dirname(__file__), '..', 'Dockerfile')).read()
+        with open(os.path.join(os.path.dirname(__file__), '..', 'Dockerfile')) as f:
+            src = f.read()
         assert 'HEALTHCHECK' in src and '/healthz' in src
 
 
@@ -149,8 +150,9 @@ class TestCiGatesRelease:
     def _wf(self, name):
         import os
         import yaml
-        return yaml.safe_load(open(os.path.join(
-            os.path.dirname(__file__), '..', '.github', 'workflows', name)))
+        with open(os.path.join(os.path.dirname(__file__), '..', '.github',
+                               'workflows', name)) as f:
+            return yaml.safe_load(f)
 
     def test_release_waits_for_tests(self):
         jobs = self._wf('release.yml')['jobs']

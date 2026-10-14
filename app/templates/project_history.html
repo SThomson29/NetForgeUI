@@ -4,8 +4,8 @@
 
 {% block content %}
 <p class="text-sm text-secondary" style="margin-bottom:12px">
-  Every dry run, push and firmware run against this project's switches,
-  newest first.
+  Every generation, dry run, push and firmware run for this project,
+  newest first. Pushes show which logged generation produced the config sent.
 </p>
 {% with show_owner=False %}{% include "_audit_entries.html" %}{% endwith %}
 {% endblock %}

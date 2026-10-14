@@ -61,7 +61,9 @@ def test_no_handler_interpolates_inside_a_quoted_string():
     import glob
     offenders = []
     for path in glob.glob('app/templates/*.html'):
-        for i, line in enumerate(open(path), 1):
+        with open(path) as f:
+            lines = f.readlines()
+        for i, line in enumerate(lines, 1):
             if re.search(r'''on[a-z]+=["'][^"']*'\{\{''', line):
                 offenders.append('%s:%d' % (path, i))
     assert not offenders, offenders
@@ -89,7 +91,8 @@ def test_html_built_in_javascript_escapes_its_data():
     import glob
     offenders = []
     for path in glob.glob('app/templates/*.html'):
-        src = open(path).read()
+        with open(path) as f:
+            src = f.read()
         for lit in re.finditer(r'`([^`]*)`', src):
             body = lit.group(1)
             if not re.search(r'<[a-zA-Z/]', body):
@@ -103,7 +106,8 @@ def test_html_built_in_javascript_escapes_its_data():
 
 def test_esc_covers_text_and_attribute_contexts():
     """Text needs & < >; quoted attributes also need both quote styles."""
-    src = open('app/templates/base.html').read()
+    with open('app/templates/base.html') as f:
+        src = f.read()
     fn = re.search(r'function esc\(value\) \{.*?\n\}', src, re.S).group(0)
     for char, entity in (('&', '&amp;'), ('<', '&lt;'), ('>', '&gt;'),
                          ('"', '&quot;'), ("'", '&#39;')):
@@ -116,7 +120,8 @@ def test_esc_is_available_on_every_page():
     """Defined in base.html, which every other template extends."""
     import glob
     for path in glob.glob('app/templates/*.html'):
-        src = open(path).read()
+        with open(path) as f:
+            src = f.read()
         if 'esc(' in src and path != 'app/templates/base.html':
             assert ('{% extends "base' in src or "{% extends 'base" in src), path
 
