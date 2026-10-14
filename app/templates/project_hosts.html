@@ -95,7 +95,7 @@ function renderRecon(data, applied) {
   const out = document.getElementById('recon-out');
   const applyBtn = document.getElementById('recon-apply-btn');
   if (!data.ok) {
-    out.innerHTML = '<span style="color:#dc2626">Error: ' + (data.error || 'unknown') + '</span>';
+    out.innerHTML = '<span style="color:#dc2626">Error: ' + esc(data.error || 'unknown') + '</span>';
     applyBtn.style.display = 'none';
     return;
   }
@@ -107,7 +107,7 @@ function renderRecon(data, applied) {
   let html = '<div style="margin-bottom:6px">'
     + (applied ? 'Added ' : 'Would add ') + data.total + ' file(s):</div><ul style="margin:0 0 0 18px">';
   for (const host in data.hosts) {
-    html += '<li><strong>' + host + '</strong>: ' + data.hosts[host].join(', ') + '</li>';
+    html += '<li><strong>' + esc(host) + '</strong>: ' + data.hosts[host].map(esc).join(', ') + '</li>';
   }
   html += '</ul>';
   out.innerHTML = html;

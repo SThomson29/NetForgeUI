@@ -19,6 +19,12 @@ treated as untrusted: only plain .ios files with safe names are accepted.
 
 The container has no network (network_mode='none') and no Docker socket.
 
+host_vars are user-authored and Ansible templates them, so a value can still
+run commands inside the container. With no network and only a copy of the
+project that cannot reach anything, but it could hang or exhaust the host —
+so the container is capped on memory and process count, holds no Linux
+capabilities, and is killed if a run exceeds GENERATE_TIMEOUT_SECS.
+
 The container is named netforge-generate-<job_id> so the startup cleanup
 in run.py can find and remove any orphaned containers from previous crashes.
 """
@@ -28,6 +34,7 @@ import os
 import re
 import tarfile
 import logging
+import threading
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +57,12 @@ _OUTPUT_NAME = re.compile(r'^[A-Za-z0-9_.\-]+\.ios$')
 
 # The returned archive is untrusted, so cap how much of it is read.
 MAX_OUTPUT_BYTES = 50 * 1024 * 1024
+
+# Resource caps for the ephemeral container. Generous, because large
+# projects take a while; overridable for anything bigger still.
+GENERATE_TIMEOUT_SECS = int(os.environ.get('GENERATE_TIMEOUT_SECS', 30 * 60))
+GENERATE_MEM_LIMIT    = os.environ.get('GENERATE_MEM_LIMIT', '2g')
+GENERATE_PIDS_LIMIT   = int(os.environ.get('GENERATE_PIDS_LIMIT', 512))
 
 
 def _get_client():
@@ -107,9 +120,16 @@ def cleanup_orphaned_containers():
 
 
 def _skip_links(tarinfo):
-    """tarfile filter: never follow or copy symlinks into the container."""
+    """tarfile filter: never follow or copy symlinks into the container.
+
+    Also hands every entry to root. The container runs without
+    CAP_DAC_OVERRIDE, so root inside it can only overwrite files it owns —
+    and a regenerated config overwrites the copy of the previous one.
+    """
     if tarinfo.issym() or tarinfo.islnk():
         return None
+    tarinfo.uid = tarinfo.gid = 0
+    tarinfo.uname = tarinfo.gname = 'root'
     return tarinfo
 
 
@@ -201,6 +221,14 @@ def _mirror_outputs(out_dir, files):
             os.remove(path)
 
 
+def _was_oom_killed(container):
+    try:
+        container.reload()
+        return bool(container.attrs.get('State', {}).get('OOMKilled'))
+    except Exception:
+        return False
+
+
 def run_generate(job_id, username, project_name, data_dir, limit=None, tags=None,
                  progress_callback=None):
     """
@@ -278,22 +306,56 @@ def run_generate(job_id, username, project_name, data_dir, limit=None, tags=None
             environment=environment,
             working_dir='/ansible',
             network_mode='none',
+            mem_limit=GENERATE_MEM_LIMIT,
+            memswap_limit=GENERATE_MEM_LIMIT,   # no swap on top
+            pids_limit=GENERATE_PIDS_LIMIT,
+            cap_drop=['ALL'],
+            security_opt=['no-new-privileges'],
         )
         container.put_archive('/', _build_project_archive(project_root))
         container.start()
 
+        # The log stream below only ends when the container exits, so a run
+        # that never finishes would hold this thread forever. Kill it at the
+        # deadline; the stream then ends and the run is reported as failed.
+        timed_out = threading.Event()
+
+        def _kill():
+            timed_out.set()
+            try:
+                container.kill()
+            except Exception:
+                pass
+
+        timer = threading.Timer(GENERATE_TIMEOUT_SECS, _kill)
+        timer.daemon = True
+        timer.start()
+
         # Stream logs as they arrive so the frontend can show progress
         output_parts = []
-        for chunk in container.logs(stream=True, follow=True):
-            line = chunk.decode('utf-8', errors='replace')
-            output_parts.append(line)
-            if progress_callback:
-                progress_callback(''.join(output_parts))
+        try:
+            for chunk in container.logs(stream=True, follow=True):
+                line = chunk.decode('utf-8', errors='replace')
+                output_parts.append(line)
+                if progress_callback:
+                    progress_callback(''.join(output_parts))
+            result = container.wait()
+        finally:
+            timer.cancel()
 
         output = ''.join(output_parts)
-
-        result = container.wait()
         returncode = result.get('StatusCode', -1)
+
+        if timed_out.is_set():
+            output += ('\nGeneration stopped: it ran longer than %d minutes. '
+                       'Set GENERATE_TIMEOUT_SECS to allow longer runs.\n'
+                       % (GENERATE_TIMEOUT_SECS // 60))
+            return -1, output
+
+        if returncode != 0 and _was_oom_killed(container):
+            output += ('\nGeneration stopped: it used more than %s of memory. '
+                       'Set GENERATE_MEM_LIMIT to allow more.\n'
+                       % GENERATE_MEM_LIMIT)
 
         # Mirror back whatever the run produced, success or not — the same
         # as when it wrote into the real directory directly.

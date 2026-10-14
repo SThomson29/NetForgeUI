@@ -9,6 +9,7 @@ Handles:
 
 import json
 import os
+import re
 import uuid
 import threading
 import subprocess
@@ -17,6 +18,7 @@ import glob
 import yaml
 
 from .ansible_safe import dump_unsafe, validate_targets
+from .security import job_tag, visible_job
 from datetime import datetime
 from flask import (
     render_template, request, jsonify,
@@ -86,6 +88,61 @@ def _build_inventory(hosts, username, password):
             hostvars['deploy_config_file'] = h['config_file']
         inventory['all']['hosts'][h['hostname']] = hostvars
     return inventory
+
+
+# A generated config name, as the download route accepts it: no separators,
+# and no leading dot, so neither '..' nor hidden files can be named.
+_CONFIG_NAME = re.compile(r'^[A-Za-z0-9_\-][A-Za-z0-9_.\-]{0,127}\.ios$')
+
+
+def _resolve_config_files(hosts, config_dir):
+    """Turn each host's config_file name into a path inside config_dir.
+
+    The playbook treats deploy_config_file as a full path on this machine and
+    sends whatever it names to the switch. Taking a path from the request
+    let a user name any file in the container — users.db, other users'
+    projects, the git key — and have it sent to an address they chose. So
+    only a bare file name is accepted, and it must be one of this project's
+    generated configs; the path itself is built here.
+
+    Returns (hosts_with_paths, problems).
+    """
+    resolved, problems = [], []
+    for h in hosts:
+        h = dict(h)
+        name = h.get('config_file')
+        if name:
+            name = str(name)
+            path = os.path.join(config_dir, name)
+            if (not _CONFIG_NAME.match(name) or os.path.islink(path)
+                    or not os.path.isfile(path)):
+                problems.append('unknown config file for %s' % h['hostname'])
+            else:
+                h['config_file'] = path
+        resolved.append(h)
+    return resolved, problems
+
+
+# The playbook does rollback_timeout | int, so anything that is not a number
+# becomes 0 and the rollback fires immediately after the push.
+MAX_ROLLBACK_MINUTES = 60
+
+
+def _rollback_minutes(value):
+    """Whole minutes between 1 and MAX_ROLLBACK_MINUTES, or None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        mins = int(value)
+    except (TypeError, ValueError):
+        return None
+    if mins != value and str(mins) != str(value).strip():
+        return None     # 2.5, '5 mins'
+    return mins if 1 <= mins <= MAX_ROLLBACK_MINUTES else None
+
+
+_ROLLBACK_ERROR = ('Rollback timeout must be a whole number of minutes '
+                   'between 1 and %d.' % MAX_ROLLBACK_MINUTES)
 
 
 # ── Job store ──────────────────────────────────────────────
@@ -184,7 +241,8 @@ def _run_playbook_job(job_id, playbook_name, repo_dir, ansible_bin,
              returncode=rc, results=results)
 
 
-def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts):
+def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts,
+                      owner=None, project_name=None):
     """Kick off a playbook in the background. Returns the job id."""
     job_id = str(uuid.uuid4())
     with _deploy_jobs_lock:
@@ -192,6 +250,7 @@ def _start_deploy_job(app, playbook_name, inventory, extra_vars, limit_hosts):
             'status': 'starting', 'output': '',
             'returncode': None, 'results': [],
             'playbook': playbook_name,
+            **job_tag(owner, project_name),
         }
 
     repo_dir = app.config['CONFIGGEN_REPO']
@@ -377,12 +436,22 @@ def deploy_save_mapping(project_name):
     if not data:
         return jsonify(ok=False, error='No data'), 400
 
+    rows = data.get('mappings', [])
+    problems = validate_targets(rows)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
+    rollback = _rollback_minutes(data.get('rollback_timeout', 5))
+    if rollback is None:
+        return jsonify(ok=False, error=_ROLLBACK_ERROR), 400
+
     app = current_app._get_current_object()
     username = current_user.username
     mapping_data = {
-        'hosts': data.get('mappings', []),
+        # Only the fields the mapping holds — nothing else from the request.
+        'hosts': [{'hostname': str(r.get('hostname')),
+                   'mgmt_ip': str(r.get('mgmt_ip') or '')} for r in rows],
         'settings': {
-            'rollback_timeout': data.get('rollback_timeout', 5)
+            'rollback_timeout': rollback
         }
     }
     _save_mapping(app, username, project_name, mapping_data)
@@ -439,6 +508,9 @@ def deploy_dryrun(project_name):
     config_dir = project_generated_configs_dir(
         app, current_user.username, project_name
     )
+    hosts, problems = _resolve_config_files(hosts, config_dir)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
     inventory = _build_inventory(hosts, username, password)
 
     extra_vars = {
@@ -449,7 +521,8 @@ def deploy_dryrun(project_name):
 
     job_id = _start_deploy_job(
         app, 'deploy_dryrun.yml', inventory, extra_vars,
-        limit_hosts=[h['hostname'] for h in hosts]
+        limit_hosts=[h['hostname'] for h in hosts],
+        owner=current_user.username, project_name=project_name,
     )
     return jsonify(ok=True, job_id=job_id)
 
@@ -458,8 +531,8 @@ def deploy_dryrun(project_name):
 def deploy_status(project_name, job_id):
     """Poll a running or finished deploy job."""
     with _deploy_jobs_lock:
-        job = _deploy_jobs.get(job_id)
-        snapshot = dict(job) if job else None
+        snapshot = visible_job(_deploy_jobs.get(job_id),
+                               current_user.username, project_name)
     if not snapshot:
         abort(404)
     return jsonify(snapshot)
@@ -475,7 +548,9 @@ def deploy_push(project_name):
     hosts = data.get('hosts', [])
     username = data.get('username', '')
     password = data.get('password', '')
-    rollback_timeout = data.get('rollback_timeout', 5)
+    rollback_timeout = _rollback_minutes(data.get('rollback_timeout', 5))
+    if rollback_timeout is None:
+        return jsonify(ok=False, error=_ROLLBACK_ERROR), 400
 
     if not hosts or not username or not password:
         return jsonify(ok=False, error='Missing hosts or credentials'), 400
@@ -488,6 +563,9 @@ def deploy_push(project_name):
     config_dir = project_generated_configs_dir(
         app, current_user.username, project_name
     )
+    hosts, problems = _resolve_config_files(hosts, config_dir)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
     inventory = _build_inventory(hosts, username, password)
 
     extra_vars = {
@@ -499,6 +577,7 @@ def deploy_push(project_name):
 
     job_id = _start_deploy_job(
         app, 'deploy_push.yml', inventory, extra_vars,
-        limit_hosts=[h['hostname'] for h in hosts]
+        limit_hosts=[h['hostname'] for h in hosts],
+        owner=current_user.username, project_name=project_name,
     )
     return jsonify(ok=True, job_id=job_id)

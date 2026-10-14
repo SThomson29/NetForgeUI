@@ -165,6 +165,11 @@ class TestImportValidation:
         '../../../etc/passwd',
         '/etc/passwd',
         'host_vars/../../escape.yml',
+        'host_vars/../escape.yml',
+        'host_vars/./x.yml',
+        'host_vars/.hidden/x.yml',
+        'host_vars/sw1/.x.yml',
+        'host_vars/sw.1/x.yml',
         'evil.sh',
         'host_vars/sw1/evil.sh',
     ])
@@ -201,6 +206,33 @@ class TestImportValidation:
             with pytest.raises(TransferError):
                 import_project(app, 'admin', 'dest',
                                _make_archive({'host_vars/sw1/a.yml': 'x: [un'}))
+
+    @pytest.mark.parametrize('ini', [
+        '[cx]\n../../other-user/projects/p/host_vars/sw1\n',
+        '[cx]\nsw1/../../x\n',
+        '[cx]\n.hidden\n',
+        '[cx]\nsw1 ansible_connection=local\n',
+        '[cx]\nsw1 = x\n',
+        '[all:vars]\nansible_python_interpreter = /tmp/x\n',
+        '[cx:children]\n../escape\n',
+        'not an ini file\n',
+    ])
+    def test_unsafe_hosts_ini_is_rejected(self, app, ini):
+        with app.app_context():
+            with pytest.raises(TransferError):
+                import_project(app, 'admin', 'dest',
+                               _make_archive({'hosts.ini': ini}))
+            assert not os.path.isdir(project_dir(app, 'admin', 'dest'))
+
+    def test_hosts_ini_as_the_app_writes_it_is_accepted(self, app):
+        ini = ('[cx_vsx]\ncore-01\ncore-02\n\n[cx_vsf]\nacc_01\n\n[cx]\n\n'
+               '[cx:children]\ncx_vsx\ncx_vsf\n')
+        with app.app_context():
+            import_project(app, 'admin', 'dest',
+                           _make_archive({'hosts.ini': ini}))
+            from app.utils import read_project_hosts
+            names = [h['hostname'] for h in read_project_hosts(app, 'admin', 'dest')]
+        assert names == ['core-01', 'core-02', 'acc_01']
 
     def test_invalid_target_name_is_rejected(self, app):
         with app.app_context():

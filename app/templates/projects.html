@@ -145,11 +145,13 @@ async function importPreview() {
   if (!data.ok) { importError(data.error); return; }
 
   const m = data.manifest;
-  let html = '<div><strong>' + (m.source_project || 'unknown') + '</strong>'
-           + ' — ' + (m.hosts ? m.hosts.length : 0) + ' host(s)</div>';
-  if (m.exported) html += '<div style="color:#666">Exported ' + m.exported + '</div>';
-  if (m.hosts && m.hosts.length) {
-    html += '<div style="color:#666;margin-top:4px">' + m.hosts.join(', ') + '</div>';
+  // The manifest comes from an uploaded file, so every value is escaped.
+  const hosts = Array.isArray(m.hosts) ? m.hosts : [];
+  let html = '<div><strong>' + esc(m.source_project || 'unknown') + '</strong>'
+           + ' — ' + hosts.length + ' host(s)</div>';
+  if (m.exported) html += '<div style="color:#666">Exported ' + esc(m.exported) + '</div>';
+  if (hosts.length) {
+    html += '<div style="color:#666;margin-top:4px">' + hosts.map(esc).join(', ') + '</div>';
   }
   if (m.credentials_stripped) {
     html += '<div style="margin-top:6px;color:#92400e">Credentials were removed on export'

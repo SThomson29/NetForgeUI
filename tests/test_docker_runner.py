@@ -262,3 +262,77 @@ class TestUntrustedArchive:
         (out / 'old.ios').write_text('stale')
         dr._mirror_outputs(str(out), {'new.ios': b'fresh'})
         assert sorted(os.listdir(out)) == ['keep.txt', 'new.ios']
+
+
+class TestResourceLimits:
+    """host_vars are templated by Ansible, so a value can run commands in the
+    container. It has no network and nothing worth reaching, but without
+    limits it could hang a worker thread forever or exhaust the host."""
+
+    def test_container_is_capped(self, monkeypatch, layout):
+        client, _rc, _ = _run(monkeypatch, layout, _normal_playbook)
+        kw = client.create_kwargs
+        assert kw['mem_limit'] == '2g'
+        assert kw['memswap_limit'] == kw['mem_limit']
+        assert kw['pids_limit'] == 512
+        assert kw['cap_drop'] == ['ALL']
+        assert 'no-new-privileges' in kw['security_opt']
+
+    def test_files_go_in_owned_by_root(self, layout):
+        """Without CAP_DAC_OVERRIDE, root in the container can only overwrite
+        the previous run's configs if it owns them."""
+        data = dr._build_project_archive(layout['project'])
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            members = tar.getmembers()
+        assert members
+        assert all(m.uid == 0 and m.gid == 0 for m in members)
+
+    def test_a_run_that_never_ends_is_killed(self, monkeypatch, layout):
+        import threading
+        monkeypatch.setattr(dr, 'GENERATE_TIMEOUT_SECS', 0.2)
+        killed = threading.Event()
+
+        class Hanging(FakeContainer):
+            def logs(self, stream=True, follow=True):
+                yield b'PLAY [generate] ***\n'
+                killed.wait(5)      # the stream ends only when killed
+
+            def kill(self):
+                killed.set()
+
+            def wait(self):
+                return {'StatusCode': 137}
+
+        client = FakeClient(layout['container_fs'], _normal_playbook)
+        os.makedirs(layout['container_fs'], exist_ok=True)
+        client.containers.create = lambda **kw: setattr(
+            client, 'container', Hanging(client.fs_root, client.run)) \
+            or client.container
+        monkeypatch.setattr(dr, '_get_client', lambda: client)
+
+        rc, out = dr.run_generate('job1', 'alice', 'core', layout['data_dir'])
+        assert killed.is_set()
+        assert rc == -1
+        assert 'longer than' in out
+        assert client.container.removed
+        # a killed run must not replace the project's configs
+        assert os.listdir(os.path.join(layout['project'], 'generated_configs')) \
+            == ['sw1_08_vlans.ios']
+
+    def test_out_of_memory_is_explained(self, monkeypatch, layout):
+        class OOM(FakeContainer):
+            attrs = {}
+
+            def reload(self):
+                self.attrs = {'State': {'OOMKilled': True}}
+
+        client = FakeClient(layout['container_fs'], lambda fs: 137)
+        os.makedirs(layout['container_fs'], exist_ok=True)
+        client.containers.create = lambda **kw: setattr(
+            client, 'container', OOM(client.fs_root, client.run)) \
+            or client.container
+        monkeypatch.setattr(dr, '_get_client', lambda: client)
+
+        rc, out = dr.run_generate('job1', 'alice', 'core', layout['data_dir'])
+        assert rc == 137
+        assert 'more than 2g of memory' in out

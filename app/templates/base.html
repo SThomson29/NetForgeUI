@@ -99,14 +99,18 @@ function esc(value) {
         </svg>
         Settings
       </a>
-      <a href="{{ url_for('auth.logout') }}" class="nav-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px">
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-          <polyline points="16 17 21 12 16 7"/>
-          <line x1="21" y1="12" x2="9" y2="12"/>
-        </svg>
-        Log out
-      </a>
+      {# A form, not a link: a GET logout can be triggered by any page that
+         embeds the URL. POST goes through the cross-site origin check. #}
+      <form method="POST" action="{{ url_for('auth.logout') }}" style="margin:0">
+        <button type="submit" class="nav-item nav-button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+          Log out
+        </button>
+      </form>
     </div>
 
   </nav>

@@ -59,7 +59,7 @@ def app(tmp_data_dir, tmp_path):
 
     @login_manager.user_loader
     def load_user(user_id):
-        return User.get(int(user_id), flask_app)
+        return User.from_session_id(user_id, flask_app)
 
     init_db(flask_app)
 

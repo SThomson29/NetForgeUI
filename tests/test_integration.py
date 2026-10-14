@@ -41,8 +41,14 @@ class TestAuth:
         assert b'Invalid' in res.data
 
     def test_logout(self, auth_client):
-        res = auth_client.get('/logout', follow_redirects=True)
+        res = auth_client.post('/logout', follow_redirects=True)
         assert res.status_code == 200
+        assert auth_client.get('/projects').status_code in (302, 401)
+
+    def test_logout_by_link_is_refused(self, auth_client):
+        """A GET logout can be fired by any page embedding the URL."""
+        assert auth_client.get('/logout').status_code == 405
+        assert auth_client.get('/projects').status_code == 200
 
     def test_projects_page_requires_login(self, client):
         res = client.get('/projects', follow_redirects=False)

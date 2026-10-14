@@ -100,6 +100,29 @@ def install_origin_check(app):
 
 
 # ---------------------------------------------------------------------------
+# Background jobs
+# ---------------------------------------------------------------------------
+
+def job_tag(username, project_name):
+    """Fields recorded on a job so only its owner can poll it."""
+    return {'_owner': username, '_project': project_name}
+
+
+def visible_job(job, username, project_name):
+    """A copy of job without its owner fields, or None if the caller
+    did not start it in this project.
+
+    Job ids are random, but generate, deploy and firmware output carries
+    configs and switch details, so a job is only shown to its owner.
+    """
+    if not job:
+        return None
+    if job.get('_owner') != username or job.get('_project') != project_name:
+        return None
+    return {k: v for k, v in job.items() if not k.startswith('_')}
+
+
+# ---------------------------------------------------------------------------
 # Login throttling
 # ---------------------------------------------------------------------------
 
