@@ -477,3 +477,135 @@ class TestEndToEnd:
         idp.claims = claims()
         res = client.get('/login/sso/callback?code=abc&state=x')
         assert res.headers['Location'].endswith('/login')
+
+
+class TestAdminPage:
+    """Admin → Single sign-on: settings read-only, discovery test, and
+    recent sign-ins with what the provider sent on a refusal."""
+
+    def admin(self, app, client, base_url='http://localhost'):
+        User.create('boss', 'password1', app, is_admin=True)
+        client.post('/login', data={'username': 'boss', 'password': 'password1'},
+                    base_url=base_url)
+
+    def test_off_says_how_to_turn_it_on(self, auth_client):
+        body = auth_client.get('/admin/sso').get_data(as_text=True)
+        assert 'OIDC_ISSUER' in body and 'Test connection' not in body
+        assert 'href="/admin/sso"' in body
+
+    def test_shows_settings_but_never_the_secret(self, sso_app, client):
+        self.admin(sso_app, client)
+        body = client.get('/admin/sso').get_data(as_text=True)
+        assert SSO_CONFIG['OIDC_ISSUER'] in body and 'netforge-users' in body
+        assert 'netforge-admins' in body and '>set<' in body
+        assert 's3cret' not in body
+        assert 'http://localhost/login/sso/callback' in body
+        assert 'Test connection' in body
+
+    def test_http_behind_a_proxy_is_called_out(self, sso_app, client):
+        self.admin(sso_app, client, base_url='http://netforge.corp')
+        body = client.get('/admin/sso', base_url='http://netforge.corp').get_data(as_text=True)
+        assert 'http://netforge.corp/login/sso/callback' in body
+        assert 'TRUSTED_PROXIES' in body
+        sso_app.config['OIDC_REDIRECT_URI'] = 'https://netforge.corp/login/sso/callback'
+        body = client.get('/admin/sso', base_url='http://netforge.corp').get_data(as_text=True)
+        assert 'Set by <code>OIDC_REDIRECT_URI</code>' in body
+        assert 'TRUSTED_PROXIES' not in body
+
+    def test_non_admins_get_403(self, sso_app, client):
+        User.create('plain', 'password1', sso_app)
+        callback(sso_app, client, claims())
+        assert client.get('/admin/sso').status_code == 403
+        assert client.post('/admin/sso/test').status_code == 403
+
+    def test_sign_ins_and_refusals_are_listed(self, sso_app, client):
+        for c in (claims(), claims(),
+                  claims(sub='sub-2', email='eve@corp.com', groups=['g-1234', 'other'])):
+            callback(sso_app, sso_app.test_client(), c)
+        outcomes = [e['outcome'] for e in sso.recent_events(sso_app)]
+        assert outcomes == ['refused', 'signed_in', 'created']
+        self.admin(sso_app, client)
+        body = client.get('/admin/sso').get_data(as_text=True)
+        assert 'eve@corp.com' in body and 'Groups sent: g-1234, other' in body
+        assert 'not in the group allowed' in body
+        assert 'new account' in body and 'sam-thomson' in body
+
+    def test_failures_are_listed(self, sso_app, client):
+        from authlib.integrations.base_client import OAuthError
+        oidc = sso_app.extensions['netforge_oidc']
+        with patch.object(oidc, 'authorize_access_token',
+                          side_effect=OAuthError('invalid_client', 'bad secret')):
+            client.get('/login/sso/callback')
+        [e] = sso.recent_events(sso_app)
+        assert e['outcome'] == 'failed' and 'invalid_client' in e['detail']
+
+    def test_only_the_latest_are_kept(self, sso_app):
+        for i in range(sso.KEEP_EVENTS + 5):
+            sso.record_event(sso_app, 'refused', email='u%d@corp.com' % i)
+        events = sso.recent_events(sso_app, limit=1000)
+        assert len(events) == sso.KEEP_EVENTS
+        assert events[0]['email'] == 'u%d@corp.com' % (sso.KEEP_EVENTS + 4)
+
+
+class TestDiscoveryCheck:
+
+    META = {
+        'issuer': SSO_CONFIG['OIDC_ISSUER'],
+        'authorization_endpoint': 'https://idp.example.com/auth',
+        'token_endpoint': 'https://idp.example.com/token',
+        'userinfo_endpoint': 'https://idp.example.com/userinfo',
+        'jwks_uri': 'https://idp.example.com/certs',
+        'code_challenge_methods_supported': ['S256'],
+        'claims_supported': ['sub', 'email', 'groups'],
+    }
+
+    def run(self, app, meta=None, status=200, exc=None):
+        import requests
+        resp = requests.Response()
+        resp.status_code = status
+        resp._content = (__import__('json').dumps(meta) if meta is not None else 'nope').encode()
+        with patch('requests.get', side_effect=exc, return_value=resp) as get:
+            result = sso.check_discovery(app)
+        if exc is None:
+            assert get.call_args[0][0] == SSO_CONFIG['OIDC_ISSUER'] + '/.well-known/openid-configuration'
+        return result
+
+    def test_good(self, sso_app):
+        r = self.run(sso_app, self.META)
+        assert r['ok'] and not r['problems'] and not r['notes']
+        assert r['endpoints']['token_endpoint'] == 'https://idp.example.com/token'
+
+    def test_issuer_mismatch(self, sso_app):
+        r = self.run(sso_app, dict(self.META, issuer='https://idp.example.com/realms/other'))
+        assert not r['ok'] and 'realms/other' in r['problems'][0]
+
+    def test_trailing_slash_is_not_a_mismatch(self, sso_app):
+        assert self.run(sso_app, dict(self.META, issuer=SSO_CONFIG['OIDC_ISSUER'] + '/'))['ok']
+
+    def test_no_pkce_or_endpoints(self, sso_app):
+        meta = dict(self.META, code_challenge_methods_supported=['plain'])
+        del meta['jwks_uri']
+        r = self.run(sso_app, meta)
+        assert not r['ok'] and len(r['problems']) == 2
+
+    def test_groups_claim_not_advertised_is_a_note(self, sso_app):
+        r = self.run(sso_app, dict(self.META, claims_supported=['sub', 'email']))
+        assert r['ok'] and '"groups"' in r['notes'][0]
+
+    def test_http_error_and_not_json(self, sso_app):
+        assert '404' in self.run(sso_app, self.META, status=404)['error']
+        assert 'not JSON' in self.run(sso_app, None)['error']
+
+    def test_unreachable(self, sso_app):
+        import requests
+        r = self.run(sso_app, exc=requests.ConnectionError('no route'))
+        assert not r['ok'] and 'ConnectionError' in r['error']
+
+    def test_route(self, sso_app, client):
+        User.create('boss', 'password1', sso_app, is_admin=True)
+        client.post('/login', data={'username': 'boss', 'password': 'password1'})
+        with patch.object(sso, 'check_discovery', return_value={'ok': True}):
+            assert client.post('/admin/sso/test').get_json() == {'ok': True}
+
+    def test_route_when_off(self, auth_client):
+        assert auth_client.post('/admin/sso/test').status_code == 400

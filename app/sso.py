@@ -21,8 +21,13 @@ account and its projects. Password sign-in stays available to local
 admins only, as the way in when the provider is unavailable.
 
 Signing out ends the NetForgeUI session only.
+
+Settings stay in the environment, never the database, so the client
+secret isn't in users.db or its backups. Admin → Single sign-on shows
+them read-only, tests discovery, and lists recent sign-ins and refusals.
 """
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -30,7 +35,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, current_app, flash, redirect, url_for
 from flask_login import login_user
 
-from .models import User
+from .models import User, get_db
 from .utils import ensure_workspace
 
 log = logging.getLogger(__name__)
@@ -63,6 +68,7 @@ def init_sso(app):
     """Register the provider with Authlib. Nothing is fetched until the
     first sign-in, so the app starts even if the provider is unreachable."""
     check_settings(app)
+    _init_events(app)
     if not enabled(app):
         return
     from authlib.integrations.flask_client import OAuth
@@ -77,6 +83,136 @@ def init_sso(app):
                        'code_challenge_method': 'S256'},
     )
     app.extensions['netforge_oidc'] = oauth.oidc
+
+
+# ── Recent sign-ins, for Admin → Single sign-on ───────────
+
+KEEP_EVENTS = 100
+
+
+def _init_events(app):
+    with get_db(app) as db:
+        db.execute('''
+            CREATE TABLE IF NOT EXISTS sso_events (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                at       TEXT NOT NULL,
+                outcome  TEXT NOT NULL,     -- signed_in | created | linked | refused | failed
+                username TEXT,
+                email    TEXT,
+                detail   TEXT,
+                groups   TEXT               -- JSON list, what the provider sent
+            )
+        ''')
+
+
+def _now():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def record_event(app, outcome, *, username=None, email=None, detail=None, groups=None):
+    """Keep the last KEEP_EVENTS sign-in attempts. Never lets a failure to
+    record get in the way of signing in."""
+    try:
+        with get_db(app) as db:
+            db.execute('INSERT INTO sso_events (at, outcome, username, email, detail, groups) '
+                       'VALUES (?,?,?,?,?,?)',
+                       (_now(), outcome, username, email, detail,
+                        json.dumps(sorted(groups)[:50]) if groups is not None else None))
+            db.execute('DELETE FROM sso_events WHERE id <= '
+                       '(SELECT id FROM sso_events ORDER BY id DESC LIMIT 1 OFFSET ?)',
+                       (KEEP_EVENTS,))
+    except Exception:                               # noqa: BLE001
+        log.exception('Could not record SSO sign-in event')
+
+
+def recent_events(app, limit=50):
+    import sqlite3
+    try:
+        with get_db(app) as db:
+            rows = db.execute('SELECT * FROM sso_events ORDER BY id DESC LIMIT ?',
+                              (limit,)).fetchall()
+    except sqlite3.OperationalError:                # table not made yet
+        return []
+    out = []
+    for r in rows:
+        e = dict(r)
+        e['groups'] = json.loads(e['groups']) if e['groups'] else None
+        out.append(e)
+    return out
+
+
+# ── Settings, read-only, for Admin → Single sign-on ────────
+
+def settings_summary(app):
+    """The effective settings, with the secret reduced to set / not set."""
+    cfg = app.config
+    return {
+        'enabled':       enabled(app),
+        'issuer':        cfg.get('OIDC_ISSUER') or None,
+        'client_id':     cfg.get('OIDC_CLIENT_ID') or None,
+        'secret_set':    bool(cfg.get('OIDC_CLIENT_SECRET')),
+        'allowed_group': cfg.get('OIDC_ALLOWED_GROUP') or None,
+        'admin_group':   cfg.get('OIDC_ADMIN_GROUP') or None,
+        'groups_claim':  cfg.get('OIDC_GROUPS_CLAIM') or 'groups',
+        'scopes':        cfg.get('OIDC_SCOPES') or 'openid email profile',
+        'redirect_override': cfg.get('OIDC_REDIRECT_URI') or None,
+        'button_label':  cfg.get('OIDC_BUTTON_LABEL') or 'Sign in with SSO',
+    }
+
+
+def discovery_url(issuer):
+    return issuer.rstrip('/') + '/.well-known/openid-configuration'
+
+
+def check_discovery(app, timeout=8):
+    """Fetch the provider's discovery document and check it against what
+    sign-in needs. Returns {ok, url, error?, issuer?, endpoints?, problems,
+    notes} — problems would stop sign-in, notes might not."""
+    import requests
+    issuer = app.config.get('OIDC_ISSUER') or ''
+    url = discovery_url(issuer)
+    result = {'ok': False, 'url': url, 'problems': [], 'notes': []}
+    try:
+        res = requests.get(url, timeout=timeout, headers={'Accept': 'application/json'})
+    except requests.RequestException as e:
+        result['error'] = 'Could not reach the provider: %s' % e.__class__.__name__
+        if str(e):
+            result['error'] += ' (%s)' % str(e)[:300]
+        return result
+    if res.status_code != 200:
+        result['error'] = 'The provider answered HTTP %d. Check OIDC_ISSUER.' % res.status_code
+        return result
+    try:
+        meta = res.json()
+        if not isinstance(meta, dict):
+            raise ValueError
+    except ValueError:
+        result['error'] = 'The provider did not return a discovery document (not JSON).'
+        return result
+
+    result['issuer'] = meta.get('issuer')
+    result['endpoints'] = {k: meta.get(k) for k in
+                           ('authorization_endpoint', 'token_endpoint',
+                            'userinfo_endpoint', 'jwks_uri')}
+    problems, notes = result['problems'], result['notes']
+    if (meta.get('issuer') or '').rstrip('/') != issuer.rstrip('/'):
+        problems.append('The provider calls itself %s, not %s. ID tokens will fail '
+                        'the issuer check; set OIDC_ISSUER to exactly what it reports.'
+                        % (meta.get('issuer') or 'nothing', issuer))
+    for k in ('authorization_endpoint', 'token_endpoint', 'jwks_uri'):
+        if not meta.get(k):
+            problems.append('The discovery document has no %s.' % k)
+    methods = meta.get('code_challenge_methods_supported')
+    if methods is not None and 'S256' not in methods:
+        problems.append('The provider does not list PKCE S256, which sign-in uses.')
+    claim = app.config.get('OIDC_GROUPS_CLAIM') or 'groups'
+    supported = meta.get('claims_supported')
+    if supported is not None and claim not in supported:
+        notes.append('The provider does not advertise a "%s" claim. Many send it '
+                     'anyway once configured; if sign-ins are refused for the '
+                     'group, check the refusals below for what was sent.' % claim)
+    result['ok'] = not problems
+    return result
 
 
 # ── Deciding who gets in ───────────────────────────────────
@@ -99,6 +235,15 @@ def _groups(claims, claim_name):
     if isinstance(value, str):
         value = [value]
     return {str(g).lstrip('/') for g in value if g}
+
+
+def _groups_or_none(app, claims):
+    """The groups sent, for the refusal record, or None if there were none
+    to read (no claims yet, or an Entra overage pointer)."""
+    try:
+        return _groups(claims, app.config.get('OIDC_GROUPS_CLAIM') or 'groups') or None
+    except SSOError:
+        return None
 
 
 def _email(claims):
@@ -151,13 +296,19 @@ def sign_in(app, claims):
             name = username_for(email, lambda n: User.get_by_username(n, app) is not None)
             user = User.create_sso(name, sub, app)
             log.info('SSO: created %s for %s', user.username, email)
+            outcome = 'created'
         else:
             log.info('SSO: linked %s to %s', user.username, email)
+            outcome = 'linked'
+    else:
+        outcome = 'signed_in'
 
     User.record_sso_login(
         user.id, sub=sub, email=email or user.email, groups=groups,
         sso_admin=bool(admin_group) and admin_group in groups,
-        when=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), app=app)
+        when=_now(), app=app)
+    record_event(app, outcome, username=user.username, email=email or user.email,
+                 groups=groups)
     return User.get(user.id, app)
 
 
@@ -186,6 +337,7 @@ def callback():
     from authlib.integrations.base_client import OAuthError
     client = _client()
     app = current_app._get_current_object()
+    claims = {}
     try:
         token = client.authorize_access_token()
         claims = dict(token.get('userinfo') or {})
@@ -200,14 +352,20 @@ def callback():
                 pass
         user = sign_in(app, claims)
     except SSOError as e:
+        record_event(app, 'refused', email=_email(claims), detail=str(e),
+                     groups=_groups_or_none(app, claims))
         flash(str(e), 'error')
         return redirect(url_for('auth.login'))
     except OAuthError as e:
         log.warning('SSO sign-in failed: %s', e)
+        record_event(app, 'failed', email=_email(claims),
+                     detail='%s: %s' % (e.error, e.description or ''))
         flash('Single sign-on failed: %s' % (e.description or e.error), 'error')
         return redirect(url_for('auth.login'))
-    except Exception:                               # noqa: BLE001
+    except Exception as e:                          # noqa: BLE001
         log.exception('SSO sign-in failed')
+        record_event(app, 'failed', email=_email(claims),
+                     detail='%s (see the server log)' % e.__class__.__name__)
         flash('Single sign-on failed. Check the server log for details.', 'error')
         return redirect(url_for('auth.login'))
 

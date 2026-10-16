@@ -190,7 +190,7 @@ up by their bare names.
 | `FIRMWARE_DIR` | No | `<app>/firmware` | Where `.swi` images are read from |
 | `PORT` | No | `5000` | Port the Flask app listens on inside the container |
 | `FLASK_DEBUG` | No | `false` | Enable Flask debug mode — never use in production |
-| `FLASK_PROXY_FIX` | No | `false` | Set to `true` when running behind a reverse proxy |
+| `TRUSTED_PROXIES` | No | `0` | Number of reverse proxies in front (usually `1`), so the app trusts their forwarded scheme, host and client address |
 | `OIDC_ISSUER` | No | — | Turns on single sign-on — see [Single sign-on](#single-sign-on) |
 
 `REPO_VOLUME_NAME` and `DATA_VOLUME_NAME` only need setting if your volumes are
@@ -201,7 +201,7 @@ project prefix.
 
 ## Reverse Proxy
 
-NetForgeUI is designed to sit behind a reverse proxy for TLS termination. Set `FLASK_PROXY_FIX=true` when doing so. Do not expose the published port directly.
+NetForgeUI is designed to sit behind a reverse proxy for TLS termination. Set `TRUSTED_PROXIES=1` when doing so. Do not expose the published port directly.
 
 ---
 
@@ -231,8 +231,9 @@ values, rather than run with sign-in open to anyone the provider knows.
 
 - Application type: web, confidential client, authorization code flow (PKCE is used).
 - Redirect URI: `https://<your NetForgeUI address>/login/sso/callback`. Behind a
-  reverse proxy, set `FLASK_PROXY_FIX=true` so the URL is built with the
+  reverse proxy, set `TRUSTED_PROXIES=1` so the URL is built with the
   public `https` address, or set `OIDC_REDIRECT_URI` explicitly.
+  **Admin → Single sign-on** shows the exact URL to register.
 - Groups must be in the ID token or the userinfo response:
   - **Entra ID:** add a *groups* claim to the ID token (Token configuration).
     Entra sends group **Object IDs**, so `OIDC_ALLOWED_GROUP` and
@@ -258,6 +259,11 @@ values, rather than run with sign-in open to anyone the provider knows.
   SSO sign-in lands in that account. If they already signed in and got a new,
   empty account, linking moves their SSO identity across and removes the empty one.
 - Signing out ends the NetForgeUI session only, not the provider's.
+- **Admin → Single sign-on** shows the settings in use (the client secret only
+  as set or not set), tests the provider's discovery document, and lists the
+  last 100 SSO sign-ins. A refusal shows the groups the provider sent, which is
+  usually enough to see a wrong group name or a missing groups claim. Settings
+  are changed in the environment, not here, so the secret stays out of `users.db`.
 - Taking someone out of `OIDC_ALLOWED_GROUP` stops new sign-ins; a session
   already open lasts until they sign out or close the browser. Deleting the
   account in Admin ends it at once, but also removes their workspace.
