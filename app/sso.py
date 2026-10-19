@@ -21,7 +21,8 @@ existing local account to that email, in which case it attaches to that
 account and its projects. Password sign-in stays available to local
 admins only, as the way in when the provider is unavailable.
 
-Signing out ends the NetForgeUI session only.
+Signing out ends the NetForgeUI session only, unless OIDC_LOGOUT=provider,
+when an SSO session also ends at the provider (RP-initiated logout).
 
 Settings stay in the environment, never the database, so the client
 secret isn't in users.db or its backups. Admin → Single sign-on shows
@@ -33,7 +34,9 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from flask import Blueprint, current_app, flash, redirect, url_for
+from urllib.parse import urlencode
+
+from flask import Blueprint, current_app, flash, redirect, session, url_for
 from flask_login import login_user
 
 from .models import User, get_db
@@ -44,6 +47,11 @@ log = logging.getLogger(__name__)
 sso_bp = Blueprint('sso', __name__)
 
 _REQUIRED = ('OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_ALLOWED_GROUP')
+_LOGOUT_MODES = ('local', 'provider')
+
+# Kept in the session cookie for the logout hint; a token bigger than this
+# (a long group list) is left out rather than risk the 4 KB cookie limit.
+_MAX_ID_TOKEN = 2500
 
 
 class SSOError(Exception):
@@ -63,6 +71,9 @@ def check_settings(app):
     if missing:
         raise RuntimeError('OIDC_ISSUER is set, so SSO is on, but %s %s not set.'
                            % (', '.join(missing), 'is' if len(missing) == 1 else 'are'))
+    mode = (app.config.get('OIDC_LOGOUT') or 'local').lower()
+    if mode not in _LOGOUT_MODES:
+        raise RuntimeError('OIDC_LOGOUT must be local or provider, not %r.' % mode)
 
 
 def init_sso(app):
@@ -158,6 +169,7 @@ def settings_summary(app):
         'scopes':        cfg.get('OIDC_SCOPES') or 'openid email profile',
         'redirect_override': cfg.get('OIDC_REDIRECT_URI') or None,
         'button_label':  cfg.get('OIDC_BUTTON_LABEL') or 'Sign in with SSO',
+        'logout':        (cfg.get('OIDC_LOGOUT') or 'local').lower(),
     }
 
 
@@ -415,6 +427,43 @@ def callback():
         return redirect(url_for('auth.login'))
 
     login_user(user)
+    session['oidc_login'] = True
+    id_token = token.get('id_token')
+    if id_token and len(id_token) <= _MAX_ID_TOKEN:
+        session['oidc_id_token'] = id_token
     ensure_workspace(app, user.username)
     return redirect(url_for('projects.projects_page'))
+
+
+def end_session():
+    """Forget this session's SSO details. Returns the provider's logout URL
+    to send the browser to, or None to just show the login page.
+
+    Only for sessions that came from SSO with OIDC_LOGOUT=provider; a local
+    admin's password session never touches the provider. If the provider
+    has no end_session_endpoint, or discovery fails, sign-out stays local
+    rather than stranding the user.
+    """
+    app = current_app._get_current_object()
+    from_sso = session.pop('oidc_login', False)
+    id_token = session.pop('oidc_id_token', None)
+    if not (from_sso and enabled(app)
+            and (app.config.get('OIDC_LOGOUT') or 'local').lower() == 'provider'):
+        return None
+    client = app.extensions.get('netforge_oidc')
+    try:
+        endpoint = client.load_server_metadata().get('end_session_endpoint')
+    except Exception:                               # noqa: BLE001
+        log.warning('SSO logout: could not read discovery; signed out locally only',
+                    exc_info=True)
+        return None
+    if not endpoint:
+        log.warning('SSO logout: the provider has no end_session_endpoint; '
+                    'signed out locally only')
+        return None
+    params = {'client_id': app.config['OIDC_CLIENT_ID'],
+              'post_logout_redirect_uri': url_for('auth.login', _external=True)}
+    if id_token:
+        params['id_token_hint'] = id_token
+    return endpoint + ('&' if '?' in endpoint else '?') + urlencode(params)
 

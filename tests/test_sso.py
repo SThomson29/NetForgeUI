@@ -672,3 +672,77 @@ class TestDiscoveryCheck:
 
     def test_route_when_off(self, auth_client):
         assert auth_client.post('/admin/sso/test').status_code == 400
+
+
+class TestLogout:
+    """OIDC_LOGOUT: local by default; provider also ends the provider's
+    session, for SSO sign-ins only."""
+
+    END = 'https://idp.example.com/end-session/'
+
+    def sign_in(self, app, client, id_token='header.payload.sig'):
+        oidc = app.extensions['netforge_oidc']
+        with patch.object(oidc, 'authorize_access_token',
+                          return_value={'userinfo': claims(), 'id_token': id_token}), \
+             patch.object(oidc, 'userinfo', return_value={}):
+            client.get('/login/sso/callback')
+        assert whoami(client)[0] == 200
+
+    def provider(self, app, endpoint=END):
+        app.config['OIDC_LOGOUT'] = 'provider'
+        meta = app.extensions['netforge_oidc'].server_metadata
+        if endpoint:
+            meta['end_session_endpoint'] = endpoint
+        else:
+            meta.pop('end_session_endpoint', None)
+
+    def test_local_by_default(self, sso_app, client):
+        self.sign_in(sso_app, client)
+        res = client.post('/logout')
+        assert res.headers['Location'].endswith('/login')
+        assert whoami(client)[0] in (302, 401)
+
+    def test_provider_logout(self, sso_app, client):
+        self.provider(sso_app)
+        self.sign_in(sso_app, client)
+        res = client.post('/logout')
+        url = urlparse(res.headers['Location'])
+        q = parse_qs(url.query)
+        assert res.headers['Location'].startswith(self.END)
+        assert q['id_token_hint'] == ['header.payload.sig']
+        assert q['client_id'] == ['netforge']
+        assert q['post_logout_redirect_uri'] == ['http://localhost/login']
+        assert whoami(client)[0] in (302, 401)
+        # The session's SSO details went with it.
+        with client.session_transaction() as s:
+            assert 'oidc_id_token' not in s and 'oidc_login' not in s
+
+    def test_oversized_id_token_is_not_kept(self, sso_app, client):
+        self.provider(sso_app)
+        self.sign_in(sso_app, client, id_token='x' * 5000)
+        q = parse_qs(urlparse(client.post('/logout').headers['Location']).query)
+        assert 'id_token_hint' not in q and q['client_id'] == ['netforge']
+
+    def test_password_sign_in_stays_local(self, sso_app, client):
+        self.provider(sso_app)
+        User.create('root', 'password1', sso_app, is_admin=True)
+        client.post('/login', data={'username': 'root', 'password': 'password1'})
+        assert client.post('/logout').headers['Location'].endswith('/login')
+
+    def test_no_end_session_endpoint_stays_local(self, sso_app, client):
+        self.provider(sso_app, endpoint=None)
+        self.sign_in(sso_app, client)
+        assert client.post('/logout').headers['Location'].endswith('/login')
+        assert whoami(client)[0] in (302, 401)
+
+    def test_bad_setting_refuses_to_start(self, app):
+        app.config.update(SSO_CONFIG, OIDC_LOGOUT='everywhere')
+        with pytest.raises(RuntimeError, match='OIDC_LOGOUT'):
+            sso.init_sso(app)
+
+    def test_shown_on_the_admin_page(self, sso_app, client):
+        self.provider(sso_app)
+        User.create('root', 'password1', sso_app, is_admin=True)
+        client.post('/login', data={'username': 'root', 'password': 'password1'})
+        assert 'NetForgeUI and the identity provider' in \
+            client.get('/admin/sso').get_data(as_text=True)

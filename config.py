@@ -80,3 +80,6 @@ class Config:
     # TRUSTED_PROXIES set.
     OIDC_REDIRECT_URI    = os.environ.get('OIDC_REDIRECT_URI', '').strip()
     OIDC_BUTTON_LABEL    = os.environ.get('OIDC_BUTTON_LABEL', 'Sign in with SSO').strip()
+    # 'local' signs out of NetForgeUI only; 'provider' also ends the
+    # identity provider session (OIDC RP-initiated logout).
+    OIDC_LOGOUT          = os.environ.get('OIDC_LOGOUT', 'local').strip().lower()
