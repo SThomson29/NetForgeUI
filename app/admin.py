@@ -107,29 +107,38 @@ _EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 @admin_bp.route('/admin/link/<int:user_id>', methods=['POST'])
 @login_required
 def link_sso(user_id):
-    """Link a local account to an SSO email.
+    """Link a local account to someone's SSO identity.
 
-    Normally done before the person's first SSO sign-in, which then lands
-    in this account and its projects. If they have already signed in and
-    got a new account, its identity moves here — provided that account has
-    no projects to lose.
+    With an email, normally before the person's first SSO sign-in, which
+    then lands in this account and its projects. With the username of an
+    SSO account — for people the provider knows by username alone — after
+    it. Either way, if they already have an SSO account, its identity moves
+    here, provided that account has no projects to lose.
     """
     _require_admin()
     from .project import list_projects
     app   = current_app._get_current_object()
     user  = User.get(user_id, app)
-    email = request.form.get('email', '').strip().lower()
+    value = request.form.get('email', '').strip().lower()
     if not user or user.source != 'local' or user.oidc_sub:
         flash('Only an unlinked local account can be linked.', 'error')
         return redirect(url_for('admin.admin_page'))
-    if not _EMAIL.match(email):
-        flash('Enter the email address the person signs in to SSO with.', 'error')
-        return redirect(url_for('admin.admin_page'))
 
-    existing = User.get_sso_by_email(email, app)
+    if '@' in value:
+        if not _EMAIL.match(value):
+            flash('Enter the SSO email address, or the username of their SSO account.', 'error')
+            return redirect(url_for('admin.admin_page'))
+        existing = User.get_sso_by_email(value, app)
+    else:
+        existing = User.get_by_username(value, app) if value else None
+        if not existing or existing.source != 'sso':
+            flash(f'There is no SSO account called {value or "that"}. They need to sign '
+                  f'in by SSO once first, or enter their SSO email instead.', 'error')
+            return redirect(url_for('admin.admin_page'))
+
     if existing:
         if list_projects(app, existing.username):
-            flash(f'{email} has already signed in as {existing.username}, which has '
+            flash(f'{value} has already signed in as {existing.username}, which has '
                   f'projects. Export and remove them, or delete that account, '
                   f'then link again.', 'error')
             return redirect(url_for('admin.admin_page'))
@@ -137,12 +146,12 @@ def link_sso(user_id):
         workspace = user_dir(app, existing.username)
         if os.path.isdir(workspace):
             shutil.rmtree(workspace)
-        flash(f'{user.username} is now linked to {email}; the empty account '
+        flash(f'{user.username} is now linked to that SSO identity; the empty account '
               f'{existing.username} was removed.', 'success')
         return redirect(url_for('admin.admin_page'))
 
-    User.set_link_email(user.id, email, app)
-    flash(f'{user.username} will be linked when {email} next signs in by SSO.', 'success')
+    User.set_link_email(user.id, value, app)
+    flash(f'{user.username} will be linked when {value} next signs in by SSO.', 'success')
     return redirect(url_for('admin.admin_page'))
 
 

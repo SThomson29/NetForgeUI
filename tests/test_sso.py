@@ -179,6 +179,32 @@ class TestWhoGetsIn:
         assert User.get_by_username('jo-bloggs', sso_app).email == 'jo.bloggs@corp.com'
 
 
+    def test_username_when_there_is_no_email(self, sso_app, client):
+        callback(sso_app, client, claims(email=None, preferred_username='Jo.Bloggs'))
+        user = User.get_by_username('jo-bloggs', sso_app)
+        assert user.source == 'sso' and user.email is None
+        assert whoami(client)[0] == 200
+        [e] = sso.recent_events(sso_app)
+        assert e['outcome'] == 'created' and e['email'] == 'Jo.Bloggs'
+
+    def test_username_clash_gets_a_suffix_not_the_account(self, sso_app, client):
+        User.create('admin2', 'password1', sso_app, is_admin=True)
+        callback(sso_app, client, claims(email=None, preferred_username='admin2'))
+        assert User.get_by_sub('sub-1', sso_app).username == 'admin2-2'
+        assert User.get_by_username('admin2', sso_app).oidc_sub is None
+
+    def test_neither_email_nor_username(self, sso_app, client):
+        callback(sso_app, client, claims(email=None))
+        assert 'neither an email address nor a username' in \
+            client.get('/login').get_data(as_text=True)
+        assert User.get_by_sub('sub-1', sso_app) is None
+
+    def test_refusal_records_the_username(self, sso_app, client):
+        callback(sso_app, client, claims(email=None, preferred_username='jo', groups=[]))
+        [e] = sso.recent_events(sso_app)
+        assert e['outcome'] == 'refused' and e['email'] == 'jo'
+
+
 class TestAccounts:
 
     def test_same_subject_same_account_even_if_email_changes(self, sso_app, client):
@@ -297,6 +323,26 @@ class TestLinking:
         assert not os.path.isdir(user_dir(sso_app, 'sam-thomson'))
         # The old session belonged to the removed account.
         assert other.get('/account').status_code in (302, 401)
+
+    def test_link_by_sso_account_name_when_there_is_no_email(self, sso_app, admin, client):
+        from flask.testing import FlaskClient
+        callback(sso_app, FlaskClient(sso_app, use_cookies=True),
+                 claims(email=None, preferred_username='jo'))
+        User.create('joanne', 'password1', sso_app)
+        jo = User.get_by_username('joanne', sso_app)
+        admin.post('/admin/link/%d' % jo.id, data={'email': 'JO'})
+        assert User.get(jo.id, sso_app).oidc_sub == 'sub-1'
+        assert User.get_by_username('jo', sso_app) is None
+
+    @pytest.mark.parametrize('name', ['nobody', 'admin'])
+    def test_link_by_name_needs_an_existing_sso_account(self, sso_app, admin, client, name):
+        User.create('joanne', 'password1', sso_app)
+        jo = User.get_by_username('joanne', sso_app)
+        body = admin.post('/admin/link/%d' % jo.id, data={'email': name},
+                          follow_redirects=True).get_data(as_text=True)
+        assert 'There is no SSO account called %s' % name in body
+        assert User.get(jo.id, sso_app).oidc_sub is None
+        assert User.get(jo.id, sso_app).link_email is None
 
     def test_link_refused_when_the_sso_account_has_projects(self, sso_app, admin, client):
         from app.project import create_project
