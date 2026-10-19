@@ -248,6 +248,8 @@ values, rather than run with sign-in open to anyone the provider knows.
 
 - A first SSO sign-in creates an account named from the email:
   `sam.thomson@corp.com` becomes `sam-thomson` (`sam-thomson-2` if taken).
+  An email isn't required: without one, the provider's username
+  (`preferred_username`) is used instead.
   Accounts are matched on the provider's subject ID afterwards, so a changed
   email or name doesn't create a new account.
 - Removing someone from `OIDC_ADMIN_GROUP` removes their admin role at their
@@ -257,7 +259,9 @@ values, rather than run with sign-in open to anyone the provider knows.
 - Someone with an existing local account keeps their projects by being linked:
   in **Admin → Users**, enter their SSO email against their account. Their next
   SSO sign-in lands in that account. If they already signed in and got a new,
-  empty account, linking moves their SSO identity across and removes the empty one.
+  empty account, enter that account's name (or their email) instead: linking
+  moves their SSO identity across and removes the empty one. For people the
+  provider knows by username only, that second way is the one to use.
 - Signing out ends the NetForgeUI session only, not the provider's.
 - **Admin → Single sign-on** shows the settings in use (the client secret only
   as set or not set), tests the provider's discovery document, and lists the

@@ -15,7 +15,8 @@ and nonce. This module decides who gets in:
     changes, rather than by email, which can
 
 A first sign-in creates an account named from the email's local part
-(sam.thomson@corp.com -> sam-thomson), unless an admin has linked an
+(sam.thomson@corp.com -> sam-thomson), or from the provider's username
+when it sends no email, unless an admin has linked an
 existing local account to that email, in which case it attaches to that
 account and its projects. Password sign-in stays available to local
 admins only, as the way in when the provider is unavailable.
@@ -254,8 +255,24 @@ def _email(claims):
     return None
 
 
+def _login_name(claims):
+    """The provider's username for this person, for naming an account
+    when it sends no email. Only names the account; never matches one."""
+    for key in ('preferred_username', 'nickname'):
+        value = str(claims.get(key) or '').strip()
+        if value:
+            return value
+    return None
+
+
+def _who(claims):
+    """Email or provider username, for the sign-in record."""
+    return _email(claims) or _login_name(claims)
+
+
 def username_for(email, taken):
     """sam.thomson@corp.com -> 'sam-thomson', or 'sam-thomson-2' if taken.
+    A provider username without an @ is used as it is: 'Jo.Bloggs' -> 'jo-bloggs'.
 
     Usernames are folder names and must match what Admin allows: lowercase
     letters, numbers, hyphens and underscores.
@@ -285,17 +302,18 @@ def sign_in(app, claims):
     email = _email(claims)
     user = User.get_by_sub(sub, app)
     if user is None:
-        if not email:
-            raise SSOError('The identity provider did not send an email address, '
-                           'which a first sign-in needs.')
+        name_from = email or _login_name(claims)
+        if not name_from:
+            raise SSOError('The identity provider sent neither an email address nor '
+                           'a username, and a first sign-in needs one to name the account.')
         # An admin-linked local account claims the first sign-in with its
         # email — but not on an address the provider says is unverified.
-        if claims.get('email_verified') is not False:
+        if email and claims.get('email_verified') is not False:
             user = User.get_by_link_email(email, app)
         if user is None:
-            name = username_for(email, lambda n: User.get_by_username(n, app) is not None)
+            name = username_for(name_from, lambda n: User.get_by_username(n, app) is not None)
             user = User.create_sso(name, sub, app)
-            log.info('SSO: created %s for %s', user.username, email)
+            log.info('SSO: created %s for %s', user.username, name_from)
             outcome = 'created'
         else:
             log.info('SSO: linked %s to %s', user.username, email)
@@ -307,7 +325,7 @@ def sign_in(app, claims):
         user.id, sub=sub, email=email or user.email, groups=groups,
         sso_admin=bool(admin_group) and admin_group in groups,
         when=_now(), app=app)
-    record_event(app, outcome, username=user.username, email=email or user.email,
+    record_event(app, outcome, username=user.username, email=email or _login_name(claims),
                  groups=groups)
     return User.get(user.id, app)
 
@@ -379,19 +397,19 @@ def callback():
                 pass
         user = sign_in(app, claims)
     except SSOError as e:
-        record_event(app, 'refused', email=_email(claims), detail=str(e),
+        record_event(app, 'refused', email=_who(claims), detail=str(e),
                      groups=_groups_or_none(app, claims))
         flash(str(e), 'error')
         return redirect(url_for('auth.login'))
     except OAuthError as e:
         log.warning('SSO sign-in failed: %s', e)
-        record_event(app, 'failed', email=_email(claims),
+        record_event(app, 'failed', email=_who(claims),
                      detail='%s: %s' % (e.error, e.description or ''))
         flash('Single sign-on failed: %s' % (e.description or e.error), 'error')
         return redirect(url_for('auth.login'))
     except Exception as e:                          # noqa: BLE001
         log.exception('SSO sign-in failed')
-        record_event(app, 'failed', email=_email(claims),
+        record_event(app, 'failed', email=_who(claims),
                      detail='%s (see the server log)' % e.__class__.__name__)
         flash('Single sign-on failed. Check the server log for details.', 'error')
         return redirect(url_for('auth.login'))

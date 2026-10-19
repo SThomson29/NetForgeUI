@@ -14,7 +14,8 @@
     SSO is on: people get an account on their first SSO sign-in. Local accounts
     are for admins, who can still sign in with a password if the identity
     provider is unavailable. To keep someone's existing projects, link their
-    local account to their SSO email below.
+    local account below: to their SSO email before they first sign in, or to
+    the SSO account they get when they do.
   </p>
   {% endif %}
   <form method="POST" action="{{ url_for('admin.create_user') }}">
@@ -85,7 +86,9 @@
           {% endif %}
           {% else %}
           <form method="POST" action="{{ url_for('admin.link_sso', user_id=user.id) }}" style="display:inline-flex;gap:6px">
-            <input class="form-input" type="email" name="email" placeholder="SSO email" required style="width:180px;height:28px;font-size:12px">
+            <input class="form-input" type="text" name="email" placeholder="SSO email or SSO account" required
+                   title="Their SSO email, before they first sign in; or the username of the SSO account they already have"
+                   style="width:190px;height:28px;font-size:12px">
             <button type="submit" class="btn btn-sm btn-ghost">Link SSO</button>
           </form>
           {% endif %}
