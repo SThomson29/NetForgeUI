@@ -1,13 +1,17 @@
 name: Tests
 
+# Once per release: on the PR into main, which tests the merged result.
+# Pushes to dev, the merge itself and the tag build don't re-run the same
+# code. Run it by hand from the Actions tab when wanted.
 on:
-  push:
-    branches: [main, dev]
   pull_request:
-    branches: [main, dev]
-  # Called by release.yml so an image is never published from a commit
-  # whose tests fail.
-  workflow_call:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same PR makes the running one pointless.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -20,6 +24,8 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements*.txt
 
       - name: Install dependencies
         run: |
