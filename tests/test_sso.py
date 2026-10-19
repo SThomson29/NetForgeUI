@@ -95,6 +95,23 @@ class TestSettings:
         assert q['redirect_uri'] == ['http://localhost/login/sso/callback']
         assert 'openid' in q['scope'][0]
 
+    @pytest.mark.parametrize('exc, says', [
+        ('SSLError', "certificate isn't trusted"),
+        ('ConnectionError', "can't be reached"),
+        ('ReadTimeout', 'did not answer in time'),
+    ])
+    def test_provider_unavailable_is_not_a_500(self, sso_app, client, exc, says):
+        import requests
+        oidc = sso_app.extensions['netforge_oidc']
+        with patch.object(oidc, 'authorize_redirect',
+                          side_effect=getattr(requests.exceptions, exc)('boom')):
+            res = client.get('/login/sso')
+        assert res.status_code == 302 and res.headers['Location'].endswith('/login')
+        body = client.get('/login').get_data(as_text=True)
+        assert says.replace("'", '&#39;') in body
+        [e] = sso.recent_events(sso_app)
+        assert e['outcome'] == 'failed' and says in e['detail']
+
     def test_redirect_uri_override(self, sso_app, client):
         sso_app.config['OIDC_REDIRECT_URI'] = 'https://netforge.corp/login/sso/callback'
         q = parse_qs(urlparse(client.get('/login/sso').headers['Location']).query)

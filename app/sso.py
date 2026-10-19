@@ -329,7 +329,34 @@ def _redirect_uri():
 
 @sso_bp.route('/login/sso')
 def start():
-    return _client().authorize_redirect(_redirect_uri())
+    """Redirect to the provider. The first call fetches its discovery
+    document; if that fails (unreachable, DNS, untrusted certificate) the
+    login page says so instead of an Internal Server Error."""
+    client = _client()
+    try:
+        return client.authorize_redirect(_redirect_uri())
+    except Exception as e:                          # noqa: BLE001
+        app = current_app._get_current_object()
+        log.exception('SSO sign-in could not start')
+        reason = _start_failure(e)
+        record_event(app, 'failed', detail='Could not start sign-in: %s' % reason)
+        flash('Single sign-on is unavailable: %s. An admin can see more under '
+              'Admin → Single sign-on.' % reason, 'error')
+        return redirect(url_for('auth.login'))
+
+
+def _start_failure(exc):
+    """A short reason for a failed discovery fetch, without the URL soup."""
+    import requests
+    if isinstance(exc, requests.exceptions.SSLError):
+        return "the identity provider's certificate isn't trusted"
+    if isinstance(exc, requests.exceptions.Timeout):
+        return 'the identity provider did not answer in time'
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "the identity provider can't be reached"
+    if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None:
+        return 'the identity provider answered HTTP %d' % exc.response.status_code
+    return 'the sign-in request failed (%s)' % exc.__class__.__name__
 
 
 @sso_bp.route('/login/sso/callback')
