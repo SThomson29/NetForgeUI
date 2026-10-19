@@ -102,6 +102,15 @@ function esc(value) {
         </svg>
         Config repo
       </a>
+
+      <a href="{{ url_for('admin.sso_page') }}"
+         class="nav-item {% if request.endpoint == 'admin.sso_page' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="11" width="18" height="11" rx="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+        Single sign-on
+      </a>
       {% endif %}
 
     </div>

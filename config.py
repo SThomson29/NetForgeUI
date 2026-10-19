@@ -77,6 +77,6 @@ class Config:
     OIDC_SCOPES          = os.environ.get('OIDC_SCOPES', 'openid email profile').strip()
     # Only needed when the address the identity provider redirects back to
     # differs from what the app sees, e.g. behind a proxy without
-    # FLASK_PROXY_FIX or TRUSTED_PROXIES set.
+    # TRUSTED_PROXIES set.
     OIDC_REDIRECT_URI    = os.environ.get('OIDC_REDIRECT_URI', '').strip()
     OIDC_BUTTON_LABEL    = os.environ.get('OIDC_BUTTON_LABEL', 'Sign in with SSO').strip()

@@ -1,0 +1,184 @@
+{% extends 'base.html' %}
+{% block title %}Single sign-on — NetForgeUI{% endblock %}
+{% block page_title %}Single sign-on{% endblock %}
+
+{% block extra_head %}
+<style>
+.sso-meta{display:grid;grid-template-columns:150px 1fr;gap:8px 12px;font-size:13px}
+.sso-meta .key{color:var(--text-secondary);font-size:12px;font-weight:500}
+.sso-meta .val{font-family:'Courier New',monospace;font-size:12px;overflow-wrap:anywhere}
+.copy-row{display:flex;gap:8px;align-items:center}
+.copy-row code{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px;padding:6px 8px;
+               background:var(--bg-subtle, #f6f6f3);border-radius:6px}
+.warn-box{background:#fef3c7;border:1px solid #fde68a;color:#92400e;padding:10px 14px;
+          border-radius:6px;font-size:13px;margin-top:10px}
+#test-result{margin-top:12px;font-size:13px;display:none}
+#test-result.visible{display:block}
+#test-result ul{margin:6px 0 0 18px;padding:0}
+.ev-groups{font-family:'Courier New',monospace;font-size:11px;color:var(--text-secondary);
+           overflow-wrap:anywhere;margin-top:3px}
+</style>
+{% endblock %}
+
+{% block content %}
+<p class="text-sm text-secondary" style="margin-bottom:14px">
+  Single sign-on is configured with <code>OIDC_*</code> environment variables, so the
+  client secret stays out of the database. Change them and restart the container to
+  apply. See README "Single sign-on".
+</p>
+
+{% if not s.enabled %}
+<div class="card">
+  <div class="card-header">Off</div>
+  <p class="text-sm">
+    Single sign-on is off because <code>OIDC_ISSUER</code> isn't set. Everyone signs
+    in with a username and password from <strong>Users</strong>. To turn it on, set
+    <code>OIDC_ISSUER</code>, <code>OIDC_CLIENT_ID</code>, <code>OIDC_CLIENT_SECRET</code>
+    and <code>OIDC_ALLOWED_GROUP</code>, and register this callback URL with the provider:
+  </p>
+  {% if redirect_uri %}
+  <div class="copy-row" style="margin-top:10px"><code id="redirect-uri">{{ redirect_uri }}</code></div>
+  {% endif %}
+</div>
+{% else %}
+
+<div class="card">
+  <div class="card-header">Settings</div>
+  <div class="sso-meta">
+    <span class="key">Issuer</span>        <span class="val">{{ s.issuer }}</span>
+    <span class="key">Client ID</span>     <span class="val">{{ s.client_id }}</span>
+    <span class="key">Client secret</span>
+    <span class="val">{% if s.secret_set %}<span class="badge badge-green">set</span>{% else %}<span class="badge badge-red">not set</span>{% endif %}</span>
+    <span class="key">Allowed group</span> <span class="val">{{ s.allowed_group }}</span>
+    <span class="key">Admin group</span>   <span class="val">{{ s.admin_group or '— none (admins are granted in Users)' }}</span>
+    <span class="key">Groups claim</span>  <span class="val">{{ s.groups_claim }}</span>
+    <span class="key">Scopes</span>        <span class="val">{{ s.scopes }}</span>
+    <span class="key">Button label</span>  <span class="val">{{ s.button_label }}</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">Callback URL</div>
+  <p class="text-sm text-secondary" style="margin-bottom:8px">
+    Register this exactly as a redirect URI with the provider.
+    {% if s.redirect_override %}Set by <code>OIDC_REDIRECT_URI</code>.{% else %}Worked out from the address you're using now.{% endif %}
+  </p>
+  <div class="copy-row">
+    <code id="redirect-uri">{{ redirect_uri }}</code>
+    <button class="btn btn-sm" type="button" onclick="copyRedirect(this)">Copy</button>
+  </div>
+  {% if redirect_uri.startswith('http://') and not (request.host.startswith('localhost') or request.host.startswith('127.0.0.1')) %}
+  <div class="warn-box">
+    This is an <strong>http</strong> address. If people reach NetForgeUI over https
+    through a proxy, the provider will reject the sign-in as a redirect mismatch. Set
+    <code>TRUSTED_PROXIES</code> so the app sees the original scheme, or set
+    <code>OIDC_REDIRECT_URI</code> to the https address.
+  </div>
+  {% endif %}
+  {% if s.redirect_override and derived_redirect and derived_redirect != s.redirect_override %}
+  <p class="text-sm text-secondary" style="margin-top:8px">
+    Without the override it would be <code>{{ derived_redirect }}</code>.
+  </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-header">Test connection</div>
+  <p class="text-sm text-secondary" style="margin-bottom:10px">
+    Fetches <code>{{ discovery_url }}</code> from this server and checks it has what
+    sign-in needs. It doesn't test the client secret or group membership. A real
+    sign-in does that, and its result shows up below.
+  </p>
+  <button class="btn btn-primary" id="test-btn" type="button" onclick="testConnection()">Test connection</button>
+  <div id="test-result"></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header">Recent SSO sign-ins</div>
+  {% if events %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>When</th><th>Result</th><th>Who</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for e in events %}
+    <tr>
+      <td class="text-sm" style="white-space:nowrap">{{ e.at|replace('T', ' ')|replace('Z', '') }}</td>
+      <td>
+        {% if e.outcome == 'refused' %}<span class="badge badge-red">refused</span>
+        {% elif e.outcome == 'failed' %}<span class="badge badge-red">failed</span>
+        {% elif e.outcome == 'created' %}<span class="badge badge-blue">new account</span>
+        {% elif e.outcome == 'linked' %}<span class="badge badge-blue">linked</span>
+        {% else %}<span class="badge badge-green">signed in</span>{% endif %}
+      </td>
+      <td class="text-sm">
+        {% if e.username %}<strong>{{ e.username }}</strong><br>{% endif %}
+        <span class="text-secondary">{{ e.email or '—' }}</span>
+      </td>
+      <td class="text-sm">
+        {{ e.detail or '' }}
+        {% if e.outcome == 'refused' %}
+        <div class="ev-groups">
+          {% if e.groups %}Groups sent: {{ e.groups|join(', ') }}{% else %}No groups were sent.{% endif %}
+        </div>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-secondary">No SSO sign-ins yet.</p>
+  {% endif %}
+</div>
+
+<script>
+function copyRedirect(btn) {
+  const text = document.getElementById('redirect-uri').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  });
+}
+
+function addLine(parent, tag, text) {
+  const el = document.createElement(tag);
+  el.textContent = text;
+  parent.appendChild(el);
+  return el;
+}
+
+async function testConnection() {
+  const btn = document.getElementById('test-btn');
+  const out = document.getElementById('test-result');
+  btn.disabled = true;
+  out.replaceChildren();
+  out.classList.add('visible');
+  addLine(out, 'span', 'Testing…');
+  let data;
+  try {
+    const res = await fetch('/admin/sso/test', {method: 'POST'});
+    data = await res.json();
+  } catch (e) {
+    data = {ok: false, error: e.message};
+  }
+  btn.disabled = false;
+  out.replaceChildren();
+  const head = addLine(out, 'div', '');
+  const badge = addLine(head, 'span', data.ok ? 'Reachable' : 'Problem');
+  badge.className = 'badge ' + (data.ok ? 'badge-green' : 'badge-red');
+  if (data.error) addLine(head, 'span', ' ' + data.error);
+  if (data.issuer) addLine(out, 'div', 'Issuer: ' + data.issuer).className = 'text-secondary';
+  for (const [name, url] of Object.entries(data.endpoints || {})) {
+    if (url) addLine(out, 'div', name.replace(/_/g, ' ') + ': ' + url).className = 'text-secondary';
+  }
+  for (const [list, cls] of [[data.problems, 'color:var(--danger, #991b1b)'], [data.notes, '']]) {
+    if (list && list.length) {
+      const ul = addLine(out, 'ul', '');
+      for (const p of list) addLine(ul, 'li', p).style.cssText = cls;
+    }
+  }
+}
+</script>
+{% endblock %}

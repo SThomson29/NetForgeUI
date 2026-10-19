@@ -216,6 +216,38 @@ def repo_page():
                            behind=_projects_missing_skeleton_files(app))
 
 
+@admin_bp.route('/admin/sso')
+@login_required
+def sso_page():
+    """Single sign-on settings, read-only: they come from the environment
+    so the client secret stays out of users.db."""
+    _require_admin()
+    app = current_app._get_current_object()
+    from . import sso
+    settings = sso.settings_summary(app)
+    from werkzeug.routing import BuildError
+    try:
+        derived = url_for('sso.callback', _external=True)
+    except BuildError:
+        derived = None
+    return render_template('admin_sso.html', s=settings,
+                           redirect_uri=settings['redirect_override'] or derived,
+                           derived_redirect=derived,
+                           discovery_url=sso.discovery_url(settings['issuer'] or ''),
+                           events=sso.recent_events(app))
+
+
+@admin_bp.route('/admin/sso/test', methods=['POST'])
+@login_required
+def sso_test():
+    _require_admin()
+    app = current_app._get_current_object()
+    from . import sso
+    if not sso.enabled(app):
+        return jsonify({'ok': False, 'error': 'Single sign-on is off.'}), 400
+    return jsonify(sso.check_discovery(app))
+
+
 def _projects_missing_skeleton_files(app):
     """[{owner, project, hosts, files}] for projects whose switches lack
     skeleton files — what each project's Hosts page offers to add."""
