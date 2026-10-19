@@ -9,12 +9,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/netforge-ui
 
+# Tests run on the PR into main; tags are cut from main after it merges,
+# so the build doesn't repeat them.
 jobs:
-  tests:
-    uses: ./.github/workflows/test.yml
-
   build-and-push:
-    needs: tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
