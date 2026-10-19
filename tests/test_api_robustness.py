@@ -154,14 +154,25 @@ class TestCiGatesRelease:
                                'workflows', name)) as f:
             return yaml.safe_load(f)
 
-    def test_release_waits_for_tests(self):
-        jobs = self._wf('release.yml')['jobs']
-        assert jobs['tests']['uses'] == './.github/workflows/test.yml'
-        assert jobs['build-and-push']['needs'] == 'tests'
+    # Tests run once per release, on the PR into main, which tests the
+    # merged result; tags are cut from main afterwards, so the image build
+    # doesn't repeat them.
 
-    def test_tests_run_on_dev_and_are_callable(self):
+    def test_tests_run_on_prs_into_main(self):
         # PyYAML reads the bare key `on` as True.
         on = self._wf('test.yml')[True]
-        assert 'dev' in on['push']['branches']
-        assert 'dev' in on['pull_request']['branches']
-        assert 'workflow_call' in on
+        assert on['pull_request']['branches'] == ['main']
+        assert 'workflow_dispatch' in on
+        assert 'push' not in on
+
+    def test_tests_are_cached_and_superseded_runs_cancelled(self):
+        wf = self._wf('test.yml')
+        assert wf['concurrency']['cancel-in-progress'] is True
+        python = next(s for s in wf['jobs']['test']['steps']
+                      if s.get('uses', '').startswith('actions/setup-python'))
+        assert python['with']['cache'] == 'pip'
+
+    def test_release_builds_only_from_version_tags(self):
+        wf = self._wf('release.yml')
+        assert wf[True] == {'push': {'tags': ['v*.*.*']}}
+        assert list(wf['jobs']) == ['build-and-push']
