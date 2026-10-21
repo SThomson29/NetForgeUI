@@ -223,6 +223,7 @@ claim (Google's own sign-in can't, so it isn't suitable). It is off unless
 | `OIDC_SCOPES` | No | `openid email profile` | Add a groups scope here if your provider needs one |
 | `OIDC_REDIRECT_URI` | No | derived | Override the callback URL if the derived one is wrong |
 | `OIDC_BUTTON_LABEL` | No | `Sign in with SSO` | Text on the login page button |
+| `OIDC_LOGOUT` | No | `local` | `local` signs out of NetForgeUI only; `provider` also signs out of the identity provider |
 
 The app refuses to start if `OIDC_ISSUER` is set without the other required
 values, rather than run with sign-in open to anyone the provider knows.
@@ -262,7 +263,12 @@ values, rather than run with sign-in open to anyone the provider knows.
   empty account, enter that account's name (or their email) instead: linking
   moves their SSO identity across and removes the empty one. For people the
   provider knows by username only, that second way is the one to use.
-- Signing out ends the NetForgeUI session only, not the provider's.
+- Signing out ends the NetForgeUI session only, not the provider's, unless
+  `OIDC_LOGOUT=provider`. Then someone who signed in by SSO is also signed out
+  at the provider, which signs them out of every other app using it in that
+  browser, and is sent back to the NetForgeUI login page. Register
+  `https://<your NetForgeUI address>/login` with the provider as a post-logout
+  redirect URI. A local admin's password sign-in only ever signs out locally.
 - **Admin → Single sign-on** shows the settings in use (the client secret only
   as set or not set), tests the provider's discovery document, and lists the
   last 100 SSO sign-ins. A refusal shows the groups the provider sent, which is

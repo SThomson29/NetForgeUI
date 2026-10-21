@@ -86,7 +86,9 @@ def _login_throttle():
 @login_required
 def logout():
     logout_user()
-    return redirect(url_for('auth.login'))
+    # With OIDC_LOGOUT=provider, an SSO session ends at the provider too.
+    provider = sso.end_session()
+    return redirect(provider or url_for('auth.login'))
 
 
 @auth_bp.route('/account', methods=['GET', 'POST'])
