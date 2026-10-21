@@ -746,3 +746,87 @@ class TestLogout:
         client.post('/login', data={'username': 'root', 'password': 'password1'})
         assert 'NetForgeUI and the identity provider' in \
             client.get('/admin/sso').get_data(as_text=True)
+
+
+class TestSessionLength:
+    """OIDC_SESSION_HOURS: an SSO session goes back through the provider
+    after this long, so leaving a group takes effect."""
+
+    def sign_in(self, app, client):
+        callback(app, client, claims())
+        assert whoami(client)[0] == 200
+
+    def age(self, client, hours):
+        import time
+        with client.session_transaction() as s:
+            s['oidc_login_at'] = int(time.time() - hours * 3600)
+
+    def test_fresh_session_is_fine(self, sso_app, client):
+        self.sign_in(sso_app, client)
+        self.age(client, 11.9)
+        assert whoami(client)[0] == 200
+
+    def test_expired_session_is_signed_out(self, sso_app, client):
+        self.sign_in(sso_app, client)
+        self.age(client, 12.1)
+        res = client.get('/projects')
+        assert res.status_code == 302 and res.headers['Location'].endswith('/login')
+        assert 'Your sign-in has expired' in client.get('/login').get_data(as_text=True)
+        assert whoami(client)[0] in (302, 401)
+        with client.session_transaction() as s:
+            assert 'oidc_login' not in s and 'oidc_login_at' not in s
+
+    def test_expired_fetch_gets_json(self, sso_app, client):
+        self.sign_in(sso_app, client)
+        self.age(client, 13)
+        res = client.get('/projects', headers={'Accept': 'application/json'})
+        assert res.status_code == 401 and 'expired' in res.get_json()['error']
+
+    def test_sso_account_without_a_sign_in_time_is_expired(self, sso_app, client):
+        # Sessions from before the limit existed carry no time.
+        self.sign_in(sso_app, client)
+        with client.session_transaction() as s:
+            del s['oidc_login_at']
+            del s['oidc_login']
+        assert client.get('/projects').status_code == 302
+
+    def test_local_admin_password_session_is_not_limited(self, sso_app, client):
+        User.create('root', 'password1', sso_app, is_admin=True)
+        client.post('/login', data={'username': 'root', 'password': 'password1'})
+        self.age(client, 100)
+        assert whoami(client)[0] == 200
+
+    def test_signing_in_again_still_works(self, sso_app, client):
+        self.sign_in(sso_app, client)
+        self.age(client, 24)
+        assert client.get('/login/sso').status_code == 302
+        self.sign_in(sso_app, client)
+        assert whoami(client)[0] == 200
+
+    def test_zero_means_no_limit(self, sso_app, client):
+        sso_app.config['OIDC_SESSION_HOURS'] = '0'
+        self.sign_in(sso_app, client)
+        self.age(client, 1000)
+        assert whoami(client)[0] == 200
+
+    def test_configurable(self, sso_app, client):
+        sso_app.config['OIDC_SESSION_HOURS'] = '1'
+        self.sign_in(sso_app, client)
+        self.age(client, 1.5)
+        assert client.get('/projects').status_code == 302
+
+    @pytest.mark.parametrize('value', ['twelve', '-1'])
+    def test_bad_setting_refuses_to_start(self, app, value):
+        app.config.update(SSO_CONFIG, OIDC_SESSION_HOURS=value)
+        with pytest.raises(RuntimeError, match='OIDC_SESSION_HOURS'):
+            sso.init_sso(app)
+
+    def test_off_when_sso_is_off(self, auth_client):
+        with auth_client.session_transaction() as s:
+            s['oidc_login'] = True
+        assert auth_client.get('/projects').status_code == 200
+
+    def test_shown_on_the_admin_page(self, sso_app, client):
+        User.create('root', 'password1', sso_app, is_admin=True)
+        client.post('/login', data={'username': 'root', 'password': 'password1'})
+        assert '12 hours, then sign in again' in client.get('/admin/sso').get_data(as_text=True)

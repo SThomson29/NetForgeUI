@@ -223,6 +223,7 @@ claim (Google's own sign-in can't, so it isn't suitable). It is off unless
 | `OIDC_SCOPES` | No | `openid email profile` | Add a groups scope here if your provider needs one |
 | `OIDC_REDIRECT_URI` | No | derived | Override the callback URL if the derived one is wrong |
 | `OIDC_BUTTON_LABEL` | No | `Sign in with SSO` | Text on the login page button |
+| `OIDC_SESSION_HOURS` | No | `12` | How long an SSO sign-in lasts before going back through the provider; `0` for no limit |
 | `OIDC_LOGOUT` | No | `local` | `local` signs out of NetForgeUI only; `provider` also signs out of the identity provider |
 
 The app refuses to start if `OIDC_ISSUER` is set without the other required
@@ -275,8 +276,10 @@ values, rather than run with sign-in open to anyone the provider knows.
   usually enough to see a wrong group name or a missing groups claim. Settings
   are changed in the environment, not here, so the secret stays out of `users.db`.
 - Taking someone out of `OIDC_ALLOWED_GROUP` stops new sign-ins; a session
-  already open lasts until they sign out or close the browser. Deleting the
-  account in Admin ends it at once, but also removes their workspace.
+  already open lasts at most `OIDC_SESSION_HOURS` (12 by default), when they
+  are sent back through the provider and its groups are checked again. The
+  same applies to `OIDC_ADMIN_GROUP`. Deleting the account in Admin ends a
+  session at once, but also removes their workspace.
 
 ---
 

@@ -24,6 +24,9 @@ admins only, as the way in when the provider is unavailable.
 Signing out ends the NetForgeUI session only, unless OIDC_LOGOUT=provider,
 when an SSO session also ends at the provider (RP-initiated logout).
 
+An SSO session lasts OIDC_SESSION_HOURS (12) at most, then goes back
+through the provider, so leaving a group takes effect within that time.
+
 Settings stay in the environment, never the database, so the client
 secret isn't in users.db or its backups. Admin → Single sign-on shows
 them read-only, tests discovery, and lists recent sign-ins and refusals.
@@ -32,12 +35,14 @@ them read-only, tests discovery, and lists recent sign-ins and refusals.
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 
 from urllib.parse import urlencode
 
-from flask import Blueprint, current_app, flash, redirect, session, url_for
-from flask_login import login_user
+from flask import (Blueprint, current_app, flash, jsonify, redirect, request,
+                   session, url_for)
+from flask_login import current_user, login_user, logout_user
 
 from .models import User, get_db
 from .utils import ensure_workspace
@@ -74,6 +79,19 @@ def check_settings(app):
     mode = (app.config.get('OIDC_LOGOUT') or 'local').lower()
     if mode not in _LOGOUT_MODES:
         raise RuntimeError('OIDC_LOGOUT must be local or provider, not %r.' % mode)
+    session_hours(app)          # raises if not a number
+
+
+def session_hours(app):
+    """OIDC_SESSION_HOURS as a number; 0 means no limit."""
+    raw = app.config.get('OIDC_SESSION_HOURS', 12)
+    try:
+        hours = float(raw if raw not in (None, '') else 12)
+    except (TypeError, ValueError):
+        raise RuntimeError('OIDC_SESSION_HOURS must be a number of hours, not %r.' % raw)
+    if hours < 0:
+        raise RuntimeError('OIDC_SESSION_HOURS cannot be negative.')
+    return hours
 
 
 def init_sso(app):
@@ -170,6 +188,7 @@ def settings_summary(app):
         'redirect_override': cfg.get('OIDC_REDIRECT_URI') or None,
         'button_label':  cfg.get('OIDC_BUTTON_LABEL') or 'Sign in with SSO',
         'logout':        (cfg.get('OIDC_LOGOUT') or 'local').lower(),
+        'session_hours': session_hours(app),
     }
 
 
@@ -428,6 +447,7 @@ def callback():
 
     login_user(user)
     session['oidc_login'] = True
+    session['oidc_login_at'] = int(time.time())
     id_token = token.get('id_token')
     if id_token and len(id_token) <= _MAX_ID_TOKEN:
         session['oidc_id_token'] = id_token
@@ -447,6 +467,7 @@ def end_session():
     app = current_app._get_current_object()
     from_sso = session.pop('oidc_login', False)
     id_token = session.pop('oidc_id_token', None)
+    session.pop('oidc_login_at', None)
     if not (from_sso and enabled(app)
             and (app.config.get('OIDC_LOGOUT') or 'local').lower() == 'provider'):
         return None
@@ -467,3 +488,46 @@ def end_session():
         params['id_token_hint'] = id_token
     return endpoint + ('&' if '?' in endpoint else '?') + urlencode(params)
 
+
+
+# ── Session length ─────────────────────────────────────────
+
+# Reachable with an expired session: signing in again, signing out, and
+# what the login page itself needs.
+_ALWAYS_ALLOWED = {'static', 'auth.login', 'auth.logout', 'auth.healthz',
+                   'sso.start', 'sso.callback'}
+
+
+@sso_bp.before_app_request
+def _expire_sso_session():
+    """End an SSO session older than OIDC_SESSION_HOURS.
+
+    Applies to sessions that came through SSO, and to any session on an
+    SSO-only account, so sessions from before the limit existed (which
+    carry no sign-in time) are treated as expired too. A local admin's
+    password session is never limited here.
+    """
+    app = current_app._get_current_object()
+    if request.endpoint in _ALWAYS_ALLOWED or not enabled(app):
+        return None
+    if not current_user.is_authenticated:
+        return None
+    if not (session.get('oidc_login') or not current_user.has_password):
+        return None
+    hours = session_hours(app)
+    if not hours:
+        return None
+    started = session.get('oidc_login_at')
+    if isinstance(started, (int, float)) and time.time() - started < hours * 3600:
+        return None
+
+    logout_user()
+    for key in ('oidc_login', 'oidc_login_at', 'oidc_id_token'):
+        session.pop(key, None)
+    message = 'Your sign-in has expired. Sign in again to continue.'
+    wants_json = request.is_json or (request.accept_mimetypes.accept_json
+                                     and not request.accept_mimetypes.accept_html)
+    if wants_json:
+        return jsonify({'ok': False, 'error': message}), 401
+    flash(message, 'info')
+    return redirect(url_for('auth.login'))
