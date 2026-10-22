@@ -186,6 +186,25 @@ button.nav-button {
   color: var(--text-primary);
   font-weight: 600;
 }
+/* Search box under Projects; Enter submits. */
+.sidebar-search { margin: 4px 0 6px; }
+.sidebar-search input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+.sidebar-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-ring);
+  background: var(--bg-surface);
+}
 .nav-item svg,
 .nav-item .nav-icon {
   width: 16px;

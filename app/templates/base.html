@@ -67,6 +67,14 @@ function esc(value) {
         Projects
       </a>
 
+      <form method="get" action="{{ url_for('projects.search') }}" class="sidebar-search" role="search">
+        <input type="search" name="q" placeholder="Search IP, VLAN, name…" aria-label="Search projects"
+               value="{{ request.args.get('q', '') if request.endpoint == 'projects.search' else '' }}" maxlength="200">
+        {% if project_owner is defined and request.view_args and request.view_args.get('project_name') %}
+        <input type="hidden" name="in" value="{{ project_owner }}/{{ request.view_args.get('project_name') }}">
+        {% endif %}
+      </form>
+
       {% if current_user.is_admin %}
       <div class="sidebar-divider"></div>
       <div class="sidebar-section">

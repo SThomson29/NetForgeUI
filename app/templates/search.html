@@ -1,0 +1,101 @@
+{% extends 'base.html' %}
+{% block title %}Search — NetForgeUI{% endblock %}
+{% block page_title %}Search{% endblock %}
+
+{% block extra_head %}
+<style>
+.search-form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.search-form .form-input{flex:1;min-width:220px}
+.search-opts{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--text-secondary);margin-bottom:16px}
+.search-opts label{display:inline-flex;gap:6px;align-items:center}
+.hit-host{font-weight:600;font-size:13px;padding:10px 14px 4px}
+.hit{display:flex;gap:10px;align-items:baseline;padding:5px 14px;font-size:13px;text-decoration:none;color:inherit;
+     border-radius:6px}
+.hit:hover{background:var(--bg-hover)}
+.hit-where{color:var(--text-secondary);font-size:12px;flex:1;min-width:0;overflow-wrap:anywhere}
+.hit-value{font-family:'Courier New',monospace;font-size:12px;overflow-wrap:anywhere;max-width:45%}
+.hit .badge{flex:none}
+.search-help{font-size:13px;color:var(--text-secondary);line-height:1.7}
+.search-help code{font-size:12px}
+</style>
+{% endblock %}
+
+{% block content %}
+<form class="search-form" method="get" action="{{ url_for('projects.search') }}">
+  <input class="form-input" type="search" name="q" value="{{ text }}" autofocus
+         placeholder="IP, subnet, VLAN, VNI or name" maxlength="200">
+  {% if scope %}<input type="hidden" name="in" value="{{ scope }}" id="scope-field">{% endif %}
+  {% if include_all %}<input type="hidden" name="all" value="1">{% endif %}
+  <button class="btn btn-primary">Search</button>
+</form>
+<div class="search-opts">
+  {% if scope %}
+  <label><input type="checkbox" checked onchange="widen(this)"> Only {{ scope }}</label>
+  {% endif %}
+  {% if current_user.is_admin and not scope %}
+  <label><input type="checkbox" {{ 'checked' if include_all }} onchange="toggleAll(this)"> Search all users' projects</label>
+  {% endif %}
+  {% if found.query.usable %}<span>Matching {{ found.query.describe }}</span>{% endif %}
+</div>
+
+{% if not text %}
+<div class="card search-help">
+  <div class="card-header">What you can search for</div>
+  <code>10.20.30.5</code> finds that address, and interfaces and pools whose subnet contains it.<br>
+  <code>10.20.30.0/24</code> finds every address inside the subnet, and pools overlapping it.<br>
+  <code>30</code> finds VLAN 30 and VNI 30, including in trunk lists and ranges like <code>10,20-40</code>.<br>
+  Anything else finds switch names and text in their settings, ignoring case.<br>
+  Searched: each switch's settings, Resources pools and Deployment IPs.
+</div>
+{% elif not found.query.usable %}
+<p class="text-sm text-secondary">Type at least two characters, or an IP address, subnet or number.</p>
+{% elif not found.results %}
+<p class="text-sm text-secondary">Nothing found for <strong>{{ text }}</strong>.</p>
+{% else %}
+<p class="text-sm text-secondary" style="margin-bottom:12px">
+  {{ found.total }} match{{ 'es' if found.total != 1 }} in {{ found.results|length }} project{{ 's' if found.results|length != 1 }}.
+  {% if found.truncated %}Showing the first {{ max_hits }}; narrow the search to see the rest.{% endif %}
+</p>
+{% for r in found.results %}
+<div class="card" style="padding-bottom:8px">
+  <div class="card-header">
+    {{ r.owner }} / {{ r.project }}
+    {% if r.level != 'owner' %}<span class="badge badge-neutral" style="margin-left:6px">{{ level_labels[r.level] }}</span>{% endif %}
+  </div>
+  {% set ns = namespace(last=None) %}
+  {% for h in r.hits %}
+    {% set group = h.host if h.kind == 'switch' else ('Resources' if h.kind == 'pool' else 'Deployment IPs') %}
+    {% if group != ns.last %}<div class="hit-host">{{ group }}</div>{% set ns.last = group %}{% endif %}
+    {% if h.kind == 'switch' %}
+      {% set href = url_for('projects.editor', owner=r.owner, project_name=r.project, host=h.host) %}
+    {% elif h.kind == 'pool' %}
+      {% set href = url_for('projects.resources_page', owner=r.owner, project_name=r.project) %}
+    {% else %}
+      {% set href = url_for('projects.deployment_ips', owner=r.owner, project_name=r.project) %}
+    {% endif %}
+    <a class="hit" href="{{ href }}">
+      <span class="badge {{ 'badge-green' if h.match in ('exact', 'VLAN', 'VNI') else 'badge-none' }}">{{ h.match }}</span>
+      <span class="hit-where">{% if h.kind == 'deploy' %}{{ h.host }}{% else %}{{ h.where }}{% endif %}</span>
+      <span class="hit-value">{{ h.value }}</span>
+    </a>
+  {% endfor %}
+</div>
+{% endfor %}
+{% endif %}
+
+<script>
+function widen(box) {
+  if (box.checked) return;
+  document.getElementById('scope-field').remove();
+  document.querySelector('.search-form').submit();
+}
+function toggleAll(box) {
+  const form = document.querySelector('.search-form');
+  let f = form.querySelector('input[name=all]');
+  if (box.checked && !f) {
+    f = document.createElement('input'); f.type = 'hidden'; f.name = 'all'; f.value = '1'; form.appendChild(f);
+  } else if (!box.checked && f) { f.remove(); }
+  form.submit();
+}
+</script>
+{% endblock %}
