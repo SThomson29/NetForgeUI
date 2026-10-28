@@ -20,6 +20,8 @@
   color: var(--text-primary);
   outline: none;
 }
+.push-state { font-size: 11px; color: var(--accent-text); margin-top: 3px; }
+.push-state.muted { color: var(--text-tertiary); }
 .mapping-table input[type="checkbox"] {
   width: 14px;
   height: 14px;
@@ -148,6 +150,10 @@
       <div class="flex items-center justify-between" style="margin-bottom:12px">
         <span class="form-label" style="margin-bottom:0">Select switches to deploy to</span>
         <div class="flex items-center gap-2">
+          <button class="btn btn-sm" onclick="selectChanged()"
+                  title="Tick the switches whose config is new or has changed since their last confirmed push">
+            Select changed
+          </button>
           <button class="btn btn-sm" id="reach-btn"
                   onclick="checkReachability(getSelectedMappings().map(m => m.hostname),
                                              document.getElementById('reach-results'), this)">
@@ -160,6 +166,14 @@
         </div>
       </div>
 
+      {% set n_new = mappings|selectattr('push_state', 'in', ['changed', 'never'])|list|length %}
+      {% set n_same = mappings|selectattr('push_state', 'equalto', 'same')|list|length %}
+      {% if n_same %}
+      <p class="text-sm text-secondary" style="margin-bottom:8px">
+        {{ n_new }} switch{{ 'es' if n_new != 1 }} with a new or changed config {{ 'is' if n_new == 1 else 'are' }} ticked.
+        {{ n_same }} already {{ 'has' if n_same == 1 else 'have' }} {{ 'its' if n_same == 1 else 'their' }} current config from the last push.
+      </p>
+      {% endif %}
       <div class="table-wrap">
         <table class="mapping-table">
           <thead>
@@ -175,8 +189,8 @@
           </thead>
           <tbody id="mapping-body">
             {% for m in mappings %}
-            <tr data-hostname="{{ m.hostname }}">
-              <td><input type="checkbox" class="map-check" checked></td>
+            <tr data-hostname="{{ m.hostname }}" data-push-state="{{ m.push_state }}">
+              <td><input type="checkbox" class="map-check" {{ 'checked' if m.push_state in ('changed', 'never') }}></td>
               <td><input type="text" class="map-hostname" value="{{ m.hostname }}" readonly></td>
               <td><input type="text" class="map-ip" value="{{ m.mgmt_ip }}" placeholder="not set" readonly></td>
               <td>
@@ -184,6 +198,13 @@
                 <span class="badge badge-green">{{ m.hostname }}_FULL.ios</span>
                 {% else %}
                 <span class="badge badge-yellow">Not generated</span>
+                {% endif %}
+                {% if m.push_state == 'changed' %}
+                <div class="push-state" title="Last confirmed push {{ m.last_push.at|replace('T', ' ')|replace('Z', '') }} by {{ m.last_push.by }}">Changed since last push</div>
+                {% elif m.push_state == 'never' %}
+                <div class="push-state">Never pushed</div>
+                {% elif m.push_state == 'same' %}
+                <div class="push-state muted" title="Pushed {{ m.last_push.at|replace('T', ' ')|replace('Z', '') }} by {{ m.last_push.by }}">Same as last push</div>
                 {% endif %}
               </td>
               <td>
@@ -313,6 +334,16 @@ function getSelectedMappings() {
     }
   });
   return selected.filter(m => m.hostname && m.mgmt_ip);
+}
+
+/* Tick switches whose config is new or changed since their last confirmed
+   push; untick the rest. */
+function selectChanged() {
+  document.querySelectorAll('#mapping-body tr').forEach(row => {
+    const check = row.querySelector('.map-check');
+    if (check) check.checked = ['changed', 'never'].includes(row.dataset.pushState);
+  });
+  document.getElementById('select-all').checked = false;
 }
 
 function toggleAllMapping(el) {

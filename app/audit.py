@@ -313,6 +313,36 @@ def entries(app, *, username=None, project=None, owner=None, limit=200,
     return rows
 
 
+def _truthy(v):
+    return v in (True, 'True', 'true')
+
+
+def last_pushed(app, owner, project):
+    """{hostname: {sha256, config_file, at, by}} for the newest push each
+    switch confirmed, so the Deploy page can tell which configs have
+    changed since. A switch that rolled back or failed doesn't count."""
+    with get_db(app) as db:
+        rows = db.execute(
+            "SELECT targets, results, started_at, username FROM audit_log "
+            "WHERE action = 'deploy_push' AND owner = ? AND project = ? "
+            "ORDER BY id DESC", (owner, project)).fetchall()
+    found = {}
+    for r in rows:
+        try:
+            targets = json.loads(r['targets'] or '[]')
+            results = json.loads(r['results'] or '[]')
+        except ValueError:
+            continue
+        confirmed = {str(x.get('hostname')) for x in results
+                     if isinstance(x, dict) and _truthy(x.get('confirmed'))}
+        for t in targets:
+            host = t.get('hostname') if isinstance(t, dict) else None
+            if host in confirmed and host not in found and t.get('sha256'):
+                found[host] = {'sha256': t['sha256'], 'config_file': t.get('config_file'),
+                               'at': r['started_at'], 'by': r['username']}
+    return found
+
+
 def _link_generations(db, rows):
     cache = {}
     for e in rows:

@@ -242,16 +242,31 @@ def project_deploy(project_name):
     mapping = _load_mapping(app, username, project_name)
     config_dir = project_generated_configs_dir(app, username, project_name)
 
+    # Each switch's config against what it last confirmed from a push:
+    # 'changed' and 'never' start selected, 'same' doesn't.
+    pushed = audit.last_pushed(app, username, project_name)
     enriched = []
     for h in mapping['hosts']:
         # NetForge names a full generation <hostname>_FULL.ios; tag-filtered
         # runs produce <hostname>_PARTIAL_<tags>.ios. There is no bare
         # <hostname>.ios, so match the full-run name.
         config_file = os.path.join(config_dir, f"{h['hostname']}_FULL.ios")
+        has_config = os.path.exists(config_file)
+        last = pushed.get(h['hostname'])
+        if not has_config:
+            state = 'none'
+        elif not last:
+            state = 'never'
+        elif last['sha256'] == audit.file_fingerprint(config_file):
+            state = 'same'
+        else:
+            state = 'changed'
         enriched.append({
             'hostname': h['hostname'],
             'mgmt_ip': h.get('mgmt_ip', ''),
-            'has_config': os.path.exists(config_file)
+            'has_config': has_config,
+            'push_state': state,
+            'last_push': last,
         })
 
     return render_template(

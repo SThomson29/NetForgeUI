@@ -21,6 +21,24 @@
 
 {% block content %}
 {% include "_checks_banner.html" %}
+{% if stale_full %}
+<div class="card" id="stale-card">
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <span>{{ stale_full|length }} switch{{ 'es have' if stale_full|length != 1 else ' has' }} changed since {{ 'their configs were' if stale_full|length != 1 else 'its config was' }} generated</span>
+    {% if project_level in ('owner', 'deploy', 'edit') %}
+    <button class="btn btn-primary btn-sm" id="stale-btn" onclick="regenerateStale()">Regenerate {{ 'these' if stale_full|length != 1 else 'it' }}</button>
+    {% endif %}
+  </div>
+  <p class="text-sm" style="font-family:'JetBrains Mono',monospace;overflow-wrap:anywhere">{{ stale_full|join(', ') }}</p>
+  <p class="text-sm text-secondary" style="margin-top:6px">Generates full configs for just these switches.
+    {% if stale_partial %}Partial configs are also out of date for {{ stale_partial|join(', ') }}; regenerate those sections from the form below.{% endif %}
+  </p>
+</div>
+{% elif stale_partial %}
+<p class="text-sm text-secondary" style="margin-bottom:12px">
+  Partial configs are out of date for {{ stale_partial|join(', ') }}. Regenerate those sections from the form below.
+</p>
+{% endif %}
 <div class="card">
   <div class="card-header">Run config generation</div>
   <div class="run-controls">
@@ -98,12 +116,23 @@
 
 <script>
 const PROJECT_NAME = {{ project_name | tojson }};
+const STALE_HOSTS = {{ stale_full | tojson }};
 let currentJobId = null;
 let pollInterval = null;
+let staleRun = false;
 
-async function runGenerate() {
-  const limit  = document.getElementById('limit-select').value;
-  const tags   = Array.from(document.querySelectorAll('#tags-container input[type=checkbox]:checked')).map(cb => cb.value).join(',');
+/* Full configs for the switches changed since their last generation. */
+function regenerateStale() {
+  staleRun = true;
+  const b = document.getElementById('stale-btn');
+  if (b) b.disabled = true;
+  runGenerate({limit: STALE_HOSTS.join(','), tags: ''});
+}
+
+async function runGenerate(override) {
+  const limit  = override ? override.limit : document.getElementById('limit-select').value;
+  const tags   = override ? override.tags
+    : Array.from(document.querySelectorAll('#tags-container input[type=checkbox]:checked')).map(cb => cb.value).join(',');
   const btn    = document.getElementById('run-btn');
   const output = document.getElementById('output-box');
   const status = document.getElementById('run-status');
@@ -127,6 +156,9 @@ async function runGenerate() {
   } catch (e) {
     output.textContent += 'Error: ' + e.message;
     btn.disabled = false;
+    staleRun = false;
+    const sb = document.getElementById('stale-btn');
+    if (sb) sb.disabled = false;
     status.innerHTML = '<span class="status-badge status-failed">Error</span>';
   }
 }
@@ -168,8 +200,13 @@ async function pollStatus() {
       if (data.status === 'done') {
         status.innerHTML = '<span class="status-badge status-done">Complete</span>';
         refreshConfigs();
+        // The stale list and the checks banner are now out of date.
+        if (staleRun) setTimeout(() => location.reload(), 1200);
       } else {
         status.innerHTML = '<span class="status-badge status-failed">Failed</span>';
+        staleRun = false;
+        const sb = document.getElementById('stale-btn');
+        if (sb) sb.disabled = false;
       }
     }
   } catch (e) {

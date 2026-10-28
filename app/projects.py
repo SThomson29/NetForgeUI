@@ -543,10 +543,18 @@ def generate_page(project_name):
     app     = current_app._get_current_object()
     hosts   = read_project_hosts(app, _owner(), project_name)
     configs = list_project_generated_configs(app, _owner(), project_name)
+    # Switches changed since their full config was generated, which the
+    # page offers to regenerate in one go. A stale PARTIAL config alone
+    # doesn't count: a full run wouldn't refresh it.
+    stale = checks.stale_configs(app, _owner(), project_name)
+    stale_full = sorted(h for h, files in stale.items() if '%s_FULL.ios' % h in files)
+    stale_partial = sorted(h for h in stale if h not in stale_full)
     return render_template('project_generate.html',
                            project_name=project_name,
                            hosts=hosts,
                            configs=configs,
+                           stale_full=stale_full,
+                           stale_partial=stale_partial,
                            checks_summary=checks.summary(
                                app, _owner(), project_name))
 
