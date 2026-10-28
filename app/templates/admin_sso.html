@@ -54,6 +54,8 @@
     <span class="key">Groups claim</span>  <span class="val">{{ s.groups_claim }}</span>
     <span class="key">Scopes</span>        <span class="val">{{ s.scopes }}</span>
     <span class="key">Button label</span>  <span class="val">{{ s.button_label }}</span>
+    <span class="key">Session length</span>
+    <span class="val">{% if s.session_hours %}{{ '%g' % s.session_hours }} hours, then sign in again{% else %}no limit{% endif %}</span>
     <span class="key">Sign out</span>
     <span class="val">{% if s.logout == 'provider' %}NetForgeUI and the identity provider{% else %}NetForgeUI only{% endif %}</span>
   </div>

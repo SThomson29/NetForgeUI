@@ -83,3 +83,6 @@ class Config:
     # 'local' signs out of NetForgeUI only; 'provider' also ends the
     # identity provider session (OIDC RP-initiated logout).
     OIDC_LOGOUT          = os.environ.get('OIDC_LOGOUT', 'local').strip().lower()
+    # An SSO session lasts at most this long, then goes back through the
+    # provider, which re-checks group membership. 0 turns the limit off.
+    OIDC_SESSION_HOURS   = os.environ.get('OIDC_SESSION_HOURS', '12').strip()

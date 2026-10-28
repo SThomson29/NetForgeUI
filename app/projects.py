@@ -197,6 +197,26 @@ def projects_page():
                            others=others, level_labels=sharing.LEVEL_LABELS)
 
 
+@projects_bp.route('/search')
+@login_required
+def search():
+    """Where an IP, subnet, VLAN, VNI or name is used, across the projects
+    the caller can see. ?in=owner/project limits it to one; admins can add
+    ?all=1 for every project."""
+    from . import search as search_mod
+    app = current_app._get_current_object()
+    text = request.args.get('q', '')
+    only = None
+    scope = request.args.get('in', '')
+    if scope.count('/') == 1:
+        only = tuple(scope.split('/'))
+    include_all = bool(request.args.get('all')) and current_user.is_admin
+    found = search_mod.run(app, current_user, text, include_all=include_all, only=only)
+    return render_template('search.html', found=found, text=text, scope=scope if only else '',
+                           include_all=include_all, max_hits=search_mod.MAX_HITS,
+                           level_labels=sharing.LEVEL_LABELS)
+
+
 @projects_bp.route('/projects/<owner>/<project_name>/export')
 @login_required
 def export_project_route(project_name):
