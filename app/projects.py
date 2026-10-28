@@ -94,6 +94,7 @@ _REQUIRED = {
     'projects.deploy_dryrun':       sharing.DEPLOY,
     'projects.deploy_push':         sharing.DEPLOY,
     'projects.firmware_run':        sharing.DEPLOY,
+    'projects.firmware_versions':   sharing.DEPLOY,
     'projects.reachability':        sharing.DEPLOY,
     # A GET that writes the mapping.
     'projects.deploy_auto_populate': sharing.EDIT,
@@ -1159,6 +1160,7 @@ projects_bp.add_url_rule(
 from .firmware_routes import (
     project_firmware,
     firmware_images,
+    firmware_versions,
     firmware_run,
     firmware_status,
 )
@@ -1173,6 +1175,12 @@ projects_bp.add_url_rule(
     '/projects/<owner>/<project_name>/firmware/images',
     'firmware_images',
     firmware_images
+)
+projects_bp.add_url_rule(
+    '/projects/<owner>/<project_name>/firmware/versions',
+    'firmware_versions',
+    firmware_versions,
+    methods=['POST']
 )
 projects_bp.add_url_rule(
     '/projects/<owner>/<project_name>/firmware/run',

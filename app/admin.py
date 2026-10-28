@@ -257,6 +257,61 @@ def sso_test():
     return jsonify(sso.check_discovery(app))
 
 
+# ---------------------------------------------------------------------------
+# Firmware images — the .swi files every project's Firmware page offers
+# ---------------------------------------------------------------------------
+
+def _images_in_use():
+    from .firmware_routes import _fw_jobs, _fw_jobs_lock
+    with _fw_jobs_lock:
+        return {j.get('image') for j in _fw_jobs.values() if j.get('_finished_at') is None}
+
+
+@admin_bp.route('/admin/firmware')
+@login_required
+def firmware_page():
+    _require_admin()
+    from .firmware_images import catalogue, writable
+    app = current_app._get_current_object()
+    return render_template('admin_firmware.html', images=catalogue(app),
+                           writable=writable(app),
+                           firmware_dir=app.config.get('FIRMWARE_DIR', ''),
+                           max_mb=app.config.get('FIRMWARE_MAX_UPLOAD_MB', 2048))
+
+
+@admin_bp.route('/admin/firmware/upload', methods=['POST'])
+@login_required
+def firmware_upload():
+    """The raw file as the request body, its name in ?name=. Streamed to
+    disk in chunks rather than parsed as a form, so a 700 MB image is
+    written once and never held in memory."""
+    _require_admin()
+    from .firmware_images import ImageError, save_upload
+    app = current_app._get_current_object()
+    try:
+        row = save_upload(app, request.args.get('name', '').strip(), request.stream,
+                          length=request.content_length, by=current_user.username,
+                          max_bytes=app.config.get('FIRMWARE_MAX_UPLOAD_MB', 2048) * 1024 * 1024)
+    except ImageError as e:
+        return jsonify(ok=False, error=str(e)), 400
+    return jsonify(ok=True, image=row)
+
+
+@admin_bp.route('/admin/firmware/delete', methods=['POST'])
+@login_required
+def firmware_delete():
+    _require_admin()
+    from .firmware_images import ImageError, delete_image
+    app = current_app._get_current_object()
+    name = request.form.get('name', '')
+    try:
+        delete_image(app, name, in_use=_images_in_use())
+        flash(f'{name} deleted.', 'success')
+    except ImageError as e:
+        flash(str(e), 'error')
+    return redirect(url_for('admin.firmware_page'))
+
+
 def _projects_missing_skeleton_files(app):
     """[{owner, project, hosts, files}] for projects whose switches lack
     skeleton files — what each project's Hosts page offers to add."""

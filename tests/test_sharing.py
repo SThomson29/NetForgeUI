@@ -96,8 +96,9 @@ class TestRouteSweep:
 
     def test_editors_cannot_touch_switches_or_share(self, app, people):
         share(app, 'bob', 'edit')
-        touching = {'deploy_dryrun', 'deploy_push', 'firmware_run', 'reachability',
-                    'delete', 'share_project', 'unshare_project', 'transfer_project'}
+        touching = {'deploy_dryrun', 'deploy_push', 'firmware_run', 'firmware_versions',
+                    'reachability', 'delete', 'share_project', 'unshare_project',
+                    'transfer_project'}
         for rule in _project_rules(app):
             for method in rule.methods - {'HEAD', 'OPTIONS', 'GET'}:
                 res = _call(people['bob'], method, _url(rule))

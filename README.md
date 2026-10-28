@@ -13,7 +13,7 @@ A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — 
 - **Skeleton sync** — existing projects can pick up host_vars files added to NetForge after the project was created
 - **Common infrastructure** — per-project DNS, NTP, DHCP, RADIUS, and syslog server lists that feed into editor field suggestions
 - **Deployment** — push generated configs to live switches over SSH, with a diff-first dry run and automatic on-box rollback if a push breaks connectivity
-- **Firmware** — upload an AOS-CX image to a chosen partition and boot to it, with optional permission for non-failsafe subcomponent updates
+- **Firmware** — upload AOS-CX images from the browser, check what each switch runs, then install an image to a chosen partition and boot to it, with optional permission for non-failsafe subcomponent updates
 - **Multi-user** — per-user data isolation with an admin panel for user management
 - **Shared projects** — share a project with users or SSO groups at view, edit or deploy level, with protection against two people overwriting each other
 - **Single sign-on** — optional OpenID Connect sign-in (Entra ID, Okta, Keycloak, ...), limited to a group, with admins by group
@@ -150,7 +150,7 @@ services:
       - netforgeui_data:/app/service/data
       - netforgeui_repo:/app/service/configgen
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./firmware:/app/service/firmware:ro
+      - ./firmware:/app/service/firmware
     restart: unless-stopped
 
 volumes:
@@ -165,7 +165,7 @@ volumes:
 - `netforgeui_data` — persists all user and project data across restarts
 - `netforgeui_repo` — persists the cloned NetForge repo
 - `/var/run/docker.sock` — required so generation can start the Ansible container
-- `./firmware` — AOS-CX `.swi` images for the Firmware tab, read-only
+- `./firmware` — AOS-CX `.swi` images for the Firmware tab; read-write so admins can upload them
 
 The explicit `name:` on each volume matters. Compose would otherwise prefix them
 with the project directory name, and the ephemeral Ansible container looks them
@@ -188,7 +188,8 @@ up by their bare names.
 | `GENERATE_MEM_LIMIT` | No | `2g` | Memory cap for the generation container (Docker size syntax) |
 | `GENERATE_PIDS_LIMIT` | No | `512` | Process cap for the generation container |
 | `SSH_KEY_PATH` | No | `/root/.ssh/id_rsa` | Deploy key used for git over SSH |
-| `FIRMWARE_DIR` | No | `<app>/firmware` | Where `.swi` images are read from |
+| `FIRMWARE_DIR` | No | `<app>/firmware` | Where `.swi` images are kept |
+| `FIRMWARE_MAX_UPLOAD_MB` | No | `2048` | Largest image an admin can upload |
 | `PORT` | No | `5000` | Port the Flask app listens on inside the container |
 | `FLASK_DEBUG` | No | `false` | Enable Flask debug mode — never use in production |
 | `TRUSTED_PROXIES` | No | `0` | Number of reverse proxies in front (usually `1`), so the app trusts their forwarded scheme, host and client address |
@@ -203,6 +204,10 @@ project prefix.
 ## Reverse Proxy
 
 NetForgeUI is designed to sit behind a reverse proxy for TLS termination. Set `TRUSTED_PROXIES=1` when doing so. Do not expose the published port directly.
+
+Firmware images are uploaded through the proxy and are typically 300–700 MB, well
+over most proxies' default upload limit (Nginx: 1 MB). Raise it for NetForgeUI, for
+example `client_max_body_size 2048m;` in its Nginx or SWAG site config.
 
 ---
 
@@ -376,14 +381,19 @@ Go to **Generate**. Optionally filter by switch or by section. Section filters m
 
 A bench commissioning step, intended before a switch carries traffic.
 
-Drop AOS-CX `.swi` images into `./firmware` on the host — they are mounted
-read-only into the container, not uploaded through the browser. Then go to the
-project → **Firmware**:
+An admin uploads AOS-CX `.swi` images under **Admin → Firmware images**, which
+shows each image's version and SHA-256 to compare with the checksum HPE
+publishes. Images copied into `./firmware` on the host are listed too. Then go to
+the project → **Firmware**:
 
-1. Pick an image and the target partition (default `secondary` — upload to the partition the switch is *not* running)
-2. Optionally tick **Allow non-failsafe updates** and set a window in minutes
-3. Select the switches — the list and management IPs come from the Deploy tab mapping
-4. Enter switch credentials, which are used for the run only and never stored
+1. Pick an image, then **Check versions**: it reads each switch's running version
+   over REST and unticks switches already on that version or of a different
+   platform (an image's two-letter prefix, e.g. `FL`, must match the switch's),
+   and sets the target partition to the one the switches aren't running from
+2. Check the target partition (default `secondary` — upload to the partition the switch is *not* running)
+3. Optionally tick **Allow non-failsafe updates** and set a window in minutes
+4. Select the switches — the list and management IPs come from the Deploy tab mapping
+5. Enter switch credentials, which are used for the check and the run only and never stored
 
 Output streams live and the page can be left or refreshed; per-host results
 appear when it finishes.
