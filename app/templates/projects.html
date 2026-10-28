@@ -14,7 +14,10 @@
 {% block content %}
 
 {% macro project_card(p) %}
-  <div class="card" style="padding:0;overflow:hidden">
+  <div class="card project-card" style="padding:0;overflow:hidden"
+       data-status-url="{{ url_for('projects.project_status', owner=p.owner, project_name=p.name) }}"
+       data-generate-url="{{ url_for('projects.generate_page', owner=p.owner, project_name=p.name) }}"
+       data-deploy-url="{{ url_for('projects.project_deploy', owner=p.owner, project_name=p.name) }}">
     <div style="padding:16px 18px 14px">
       <div style="display:flex;align-items:start;justify-content:space-between;margin-bottom:8px">
         <div>
@@ -32,6 +35,7 @@
           <span style="font-weight:600;color:#1a1a1a">{{ p.config_count }}</span> config{{ 's' if p.config_count != 1 }}
         </div>
       </div>
+      <div class="project-status"></div>
     </div>
     <div style="padding:10px 18px;border-top:1px solid #f0efe8;display:flex;align-items:center;justify-content:space-between;background:#faf9f7">
       <a href="{{ url_for('projects.hosts_page', owner=p.owner, project_name=p.name) }}" class="btn btn-primary btn-sm">Open</a>
@@ -136,7 +140,59 @@
   </div>
 </div>
 
+<style>
+.project-status { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 0; }
+.project-status a, .project-status span { font-size: 11px; text-decoration: none; }
+.project-status .last { color: var(--text-tertiary); }
+</style>
 <script>
+/* Status badges: fetched after the list renders, a few at a time, so a
+   long list (an admin's view of every project) still appears at once. */
+(function () {
+  const cards = Array.from(document.querySelectorAll('.project-card[data-status-url]'));
+  const ago = iso => {
+    const mins = Math.round((Date.now() - Date.parse(iso)) / 60000);
+    if (!(mins >= 0)) return '';
+    if (mins < 60) return mins <= 1 ? 'just now' : mins + ' minutes ago';
+    const hours = Math.round(mins / 60);
+    if (hours < 48) return hours + ' hour' + (hours === 1 ? '' : 's') + ' ago';
+    return Math.round(hours / 24) + ' days ago';
+  };
+  const badge = (href, cls, text, title) => {
+    const a = document.createElement('a');
+    a.className = 'badge ' + cls;
+    a.href = href;
+    a.textContent = text;
+    if (title) a.title = title;
+    return a;
+  };
+  async function fill(card) {
+    let s;
+    try {
+      const res = await fetch(card.dataset.statusUrl);
+      s = await res.json();
+      if (!res.ok || !s.ok) return;
+    } catch (e) { return; }
+    const box = card.querySelector('.project-status');
+    if (s.out_of_date) box.append(badge(card.dataset.generateUrl, 'badge-yellow',
+      s.out_of_date + ' out of date', 'Switches changed since their config was generated'));
+    if (s.changed) box.append(badge(card.dataset.deployUrl, 'badge-blue',
+      s.changed + ' changed since last push', 'Generated configs that differ from what was last pushed'));
+    if (s.never) box.append(badge(card.dataset.deployUrl, 'badge-neutral',
+      s.never + ' never pushed', 'Generated configs with no confirmed push'));
+    if (s.last_push) {
+      const span = document.createElement('span');
+      span.className = 'last';
+      span.textContent = 'Pushed ' + ago(s.last_push.at) + ' by ' + s.last_push.by;
+      span.title = s.last_push.at.replace('T', ' ').replace('Z', ' UTC');
+      box.append(span);
+    }
+  }
+  let next = 0;
+  const worker = async () => { while (next < cards.length) await fill(cards[next++]); };
+  for (let i = 0; i < 4; i++) worker();
+})();
+
 document.getElementById('new-project-modal').addEventListener('click', function(e) {
   if (e.target === this) this.style.display = 'none';
 });

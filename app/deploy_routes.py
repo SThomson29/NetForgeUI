@@ -234,18 +234,16 @@ def switches_in_use(project_key, hostnames):
 
 # ── Routes ─────────────────────────────────────────────────
 
-@login_required
-def project_deploy(project_name):
-    """Render the deploy tab."""
-    app = current_app._get_current_object()
-    username = g.project_owner
-    mapping = _load_mapping(app, username, project_name)
+def push_states(app, username, project_name, mapping=None):
+    """Each mapped switch's config against what it last confirmed from a
+    push: push_state is 'changed', 'never', 'same' or 'none' (no config).
+    The Deploy page ticks 'changed' and 'never'; the projects list counts
+    them."""
+    if mapping is None:
+        mapping = _load_mapping(app, username, project_name)
     config_dir = project_generated_configs_dir(app, username, project_name)
-
-    # Each switch's config against what it last confirmed from a push:
-    # 'changed' and 'never' start selected, 'same' doesn't.
     pushed = audit.last_pushed(app, username, project_name)
-    enriched = []
+    out = []
     for h in mapping['hosts']:
         # NetForge names a full generation <hostname>_FULL.ios; tag-filtered
         # runs produce <hostname>_PARTIAL_<tags>.ios. There is no bare
@@ -261,13 +259,23 @@ def project_deploy(project_name):
             state = 'same'
         else:
             state = 'changed'
-        enriched.append({
+        out.append({
             'hostname': h['hostname'],
             'mgmt_ip': h.get('mgmt_ip', ''),
             'has_config': has_config,
             'push_state': state,
             'last_push': last,
         })
+    return out
+
+
+@login_required
+def project_deploy(project_name):
+    """Render the deploy tab."""
+    app = current_app._get_current_object()
+    username = g.project_owner
+    mapping = _load_mapping(app, username, project_name)
+    enriched = push_states(app, username, project_name, mapping)
 
     return render_template(
         'project_deploy.html',

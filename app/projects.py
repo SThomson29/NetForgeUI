@@ -225,6 +225,27 @@ def search():
                            level_labels=sharing.LEVEL_LABELS)
 
 
+@projects_bp.route('/projects/<owner>/<project_name>/status')
+@login_required
+def project_status(project_name):
+    """What needs doing, for the badges on the projects list: switches
+    whose config is out of date, configs changed since their last push or
+    never pushed, and the latest push. Fetched after the list renders, so
+    a long list stays quick."""
+    from .deploy_routes import push_states
+    app = current_app._get_current_object()
+    owner = _owner()
+    stale = checks.stale_configs(app, owner, project_name)
+    states = push_states(app, owner, project_name)
+    pushes = [s['last_push'] for s in states if s['last_push']]
+    last = max(pushes, key=lambda p: p['at'], default=None)
+    return jsonify(ok=True,
+                   out_of_date=len(stale),
+                   changed=sum(1 for s in states if s['push_state'] == 'changed'),
+                   never=sum(1 for s in states if s['push_state'] == 'never'),
+                   last_push={'at': last['at'], 'by': last['by']} if last else None)
+
+
 @projects_bp.route('/projects/<owner>/<project_name>/export')
 @login_required
 def export_project_route(project_name):

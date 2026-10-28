@@ -19,6 +19,7 @@ A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — 
 - **Single sign-on** — optional OpenID Connect sign-in (Entra ID, Okta, Keycloak, ...), limited to a group, with admins by group
 - **Project checks** — cross-switch mistakes (duplicate addresses, mismatched VSX pairs, undefined VLANs and VRFs, stale configs) flagged as warnings
 - **Search** — find where an IP, subnet, VLAN, VNI or name is used across every project you can see, from the box in the sidebar
+- **Project status at a glance** — the projects list shows configs out of date, changes not yet pushed and the last push for each project
 
 ---
 
