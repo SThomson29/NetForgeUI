@@ -13,7 +13,7 @@ from flask_login import login_required, current_user
 from .project import (
     sync_allocations as _sync_allocations,
     list_projects, create_project, delete_project,
-    get_project_config,
+    get_project_config, get_inventory, record_inventory,
     add_pool, remove_pool, update_pool, convert_supernet_to_mixed,
     PoolOverlapError,
     get_available_ips, allocate_unique, release_unique,
@@ -96,6 +96,7 @@ _REQUIRED = {
     'projects.deploy_push':         sharing.DEPLOY,
     'projects.firmware_run':        sharing.DEPLOY,
     'projects.firmware_versions':   sharing.DEPLOY,
+    'projects.verify_read':         sharing.DEPLOY,
     'projects.reachability':        sharing.DEPLOY,
     # A GET that writes the mapping.
     'projects.deploy_auto_populate': sharing.EDIT,
@@ -350,7 +351,8 @@ def hosts_page(project_name):
     app   = current_app._get_current_object()
     hosts = read_project_hosts(app, _owner(), project_name)
     return render_template('project_hosts.html',
-                           project_name=project_name, hosts=hosts)
+                           project_name=project_name, hosts=hosts,
+                           inventory=get_inventory(app, _owner(), project_name))
 
 
 @projects_bp.route('/projects/<owner>/<project_name>/hosts/add', methods=['POST'])
@@ -831,6 +833,72 @@ def change_summary(project_name, entry_id):
                                  '"change-summary-%s-%d.txt"' % (project_name, entry_id)})
     return render_template('change_summary.html', s=summary, ref=ref, notes=notes,
                            project_name=project_name, entry_id=entry_id)
+
+
+# ---------------------------------------------------------------------------
+# Verify — inventory and cabling, read from the switches
+# ---------------------------------------------------------------------------
+
+@projects_bp.route('/projects/<owner>/<project_name>/verify')
+@login_required
+def verify_page(project_name):
+    from .deploy_routes import _load_mapping
+    app = current_app._get_current_object()
+    hosts = _load_mapping(app, _owner(), project_name).get('hosts', [])
+    return render_template('project_verify.html', project_name=project_name,
+                           hosts=hosts, inventory=get_inventory(app, _owner(), project_name))
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/verify/read', methods=['POST'])
+@login_required
+def verify_read(project_name):
+    """Read every mapped switch's inventory and LLDP neighbours, store the
+    inventory, and compare the neighbours with the links the design implies.
+
+    POST {switch_username, switch_password}. Addresses come from the saved
+    mapping; the request names nothing.
+    """
+    from . import cabling, switch_read
+    from .ansible_safe import validate_targets
+    from .deploy_routes import _load_mapping
+    app = current_app._get_current_object()
+    owner = _owner()
+    body = json_body()
+    user = str(body.get('switch_username') or '').strip()
+    password = body.get('switch_password') or ''
+    if not user or not password:
+        return jsonify(ok=False, error='Enter the switch username and password.'), 400
+    hosts = [h for h in _load_mapping(app, owner, project_name).get('hosts', [])
+             if isinstance(h, dict) and h.get('hostname') and h.get('mgmt_ip')]
+    if not hosts:
+        return jsonify(ok=False, error='No switches have a management IP. '
+                                       'Add them on the Deployment IPs page.'), 400
+    problems = validate_targets(hosts)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
+
+    reads = switch_read.read_all(hosts, user, str(password))
+    swapped = record_inventory(app, owner, project_name,
+                               {h: r['inventory'] for h, r in reads.items() if r.get('ok')},
+                               current_user.username)
+    inventory = get_inventory(app, owner, project_name)
+
+    d = checks._load(app, owner, project_name)
+    pairs, _vsx, _findings = checks._vsx_pairs(d)
+    expected = cabling.expectations(d['states'], pairs)
+    known_macs = {inv['base_mac']: host for host, inv in inventory.items()
+                  if inv.get('base_mac')}
+    rows = cabling.compare(d['states'], expected, reads, known_macs)
+    return jsonify(
+        ok=True,
+        switches=[{'hostname': h['hostname'], 'mgmt_ip': h['mgmt_ip'],
+                   'ok': reads[h['hostname']]['ok'],
+                   'error': reads[h['hostname']].get('error'),
+                   'inventory': inventory.get(h['hostname']) if reads[h['hostname']]['ok'] else None,
+                   'swapped_from': swapped.get(h['hostname']),
+                   'neighbors': reads[h['hostname']].get('neighbors', {})}
+                  for h in hosts],
+        cabling=rows)
 
 
 # ---------------------------------------------------------------------------

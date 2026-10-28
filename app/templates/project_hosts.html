@@ -84,6 +84,7 @@
       <tr>
         <th>Hostname</th>
         <th>Stacking</th>
+        {% if inventory %}<th>Hardware</th>{% endif %}
         <th></th>
       </tr>
     </thead>
@@ -97,6 +98,15 @@
         <td>
           <span class="badge badge-{{ host.stacking | lower }}">{{ host.stacking }}</span>
         </td>
+        {% if inventory %}
+        {% set inv = inventory.get(host.hostname) %}
+        <td class="text-sm">
+          {% if inv %}{{ inv.model or '' }}
+            <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-secondary)">{{ inv.serials|join(', ') }}</span>
+            {% if inv.previous_serials %}<span class="badge badge-red" title="Was {{ inv.previous_serials|join(', ') }}">hardware changed</span>{% endif %}
+          {% else %}<span class="text-secondary">not read</span>{% endif %}
+        </td>
+        {% endif %}
         <td style="text-align:right">
           <form method="post"
                 action="{{ url_for('projects.delete_host', project_name=project_name, hostname=host.hostname) }}"

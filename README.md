@@ -21,6 +21,7 @@ A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — 
 - **Search** — find where an IP, subnet, VLAN, VNI or name is used across every project you can see, from the box in the sidebar
 - **Change summaries** — turn any dry run into a printable or plain-text summary of each switch's commands (secrets masked), with backout and a warning if configs were regenerated since, for a change request
 - **Project status at a glance** — the projects list shows configs out of date, changes not yet pushed and the last push for each project
+- **Verify** — read every switch's serial, model, base MAC and firmware, flag hardware that's changed since the last read, and check cabling over LLDP against the links the design implies
 
 ---
 
@@ -411,6 +412,28 @@ Firmware needs both REST (`https-server`, for upload and boot) and SSH (for the
 non-failsafe command) reachable on the management IP.
 
 ---
+
+## Verifying switches
+
+Project → **Verify** → **Read switches** (deploy access, switch credentials not
+stored) reads each switch with a management IP over its REST API:
+
+- **Inventory:** serial number (every member of a VSF stack), model, part
+  number, base MAC and firmware. It's kept with the project, shown on the Hosts
+  page and in change summaries. A switch whose serial differs from the last read
+  is flagged: the wrong box on the bench, or a replacement nobody recorded.
+- **Cabling:** the LLDP neighbour on every port with link, checked against the
+  links the design already implies. Nothing extra is entered:
+  - two routed ports on different switches sharing a /31 or /30 (both ends exact)
+  - the VSX ISL between a VSX pair
+  - a project switch named in a port's description, with the far port checked
+    too if it follows the name (`Uplink to CORE-01 1/1/49`)
+  - a project switch named in a LAG's description, for each member port
+
+  Each link is shown as correct, wrong port, wrong switch, missing or not read,
+  and project switches seen on ports the design says nothing about are listed
+  too. A neighbour is recognised by its LLDP system name or, before its config
+  is on, by its MAC matching another switch's inventory.
 
 ## Updating NetForge Templates
 

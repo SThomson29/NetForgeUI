@@ -22,13 +22,14 @@ def build(app, owner, project, entry_id):
     """The summary for one dry run, or None if entry_id isn't a dry run
     of this project."""
     from .deploy_routes import _load_mapping
-    from .project import project_generated_configs_dir
+    from .project import get_inventory, project_generated_configs_dir
     e = audit.entry(app, entry_id)
     if not e or e['action'] != 'deploy_dryrun' or e['owner'] != owner \
             or e['project'] != project:
         return None
 
     config_dir = project_generated_configs_dir(app, owner, project)
+    inventory = get_inventory(app, owner, project)
     results = {str(r.get('hostname')): r for r in e['results'] if isinstance(r, dict)}
     switches, regenerated = [], []
     for t in e['targets']:
@@ -52,6 +53,8 @@ def build(app, owner, project, entry_id):
             'commands': commands if isinstance(commands, list) else None,
             'regenerated': changed_since,
             'config_missing': bool(name) and current is None,
+            'serials': (inventory.get(host) or {}).get('serials') or [],
+            'model': (inventory.get(host) or {}).get('model'),
         })
 
     order = {'changes': 0, 'no result': 1, 'no changes': 2}
@@ -94,6 +97,8 @@ def as_text(s, ref='', notes=''):
     for sw in s['switches']:
         out.append('=' * 72)
         out.append('%s  (%s)  %s' % (sw['hostname'], sw['mgmt_ip'] or 'no address', sw['state'].upper()))
+        if sw['serials']:
+            out.append('Hardware: %s  serial %s' % (sw['model'] or '-', ', '.join(sw['serials'])))
         out.append('Config: %s  sha256 %s' % (sw['config_file'] or '-', sw['sha256'] or '-'))
         g = sw['generated_by']
         if g:

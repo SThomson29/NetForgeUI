@@ -129,3 +129,12 @@ class TestSummary:
     def test_deploy_page_links_after_a_dry_run(self, mapped, auth_client):
         body = auth_client.get('/projects/admin/%s/deploy' % P).get_data(as_text=True)
         assert '/summary`' in body and "link.textContent = 'Change summary'" in body
+
+
+def test_serials_appear_when_inventory_was_read(mapped, auth_client):
+    from app.project import record_inventory
+    record_inventory(mapped, 'admin', P, {'SW1': {'serials': ['SG123'], 'model': '6300M'}}, 'sam')
+    e = dry_run(mapped, RESULTS)
+    assert 'SG123' in auth_client.get(url(e)).get_data(as_text=True)
+    assert 'Hardware: 6300M  serial SG123' in \
+        auth_client.get(url(e, format='text')).get_data(as_text=True)

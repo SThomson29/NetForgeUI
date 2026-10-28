@@ -100,6 +100,7 @@ within {{ s.rollback_minutes }} minutes, the switch rolls back to that checkpoin
     <span class="tag {{ 'changes' if sw.state == 'changes' }}">{{ sw.state }}</span>
     {% if sw.regenerated %}<span class="tag regen">regenerated since</span>{% endif %}
   </div>
+  {% if sw.serials %}<div class="meta">{{ sw.model or 'Hardware' }} · serial <span class="mono">{{ sw.serials|join(', ') }}</span></div>{% endif %}
   <div class="meta mono">{{ sw.config_file or '—' }} · sha256 {{ sw.sha256 or '—' }}</div>
   {% if sw.generated_by %}<div class="meta">Generated {{ sw.generated_by.started_at|replace('T', ' ')|replace('Z', ' UTC') }} by {{ sw.generated_by.username }}</div>{% endif %}
   {% if sw.state == 'changes' %}

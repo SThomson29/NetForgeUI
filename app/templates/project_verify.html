@@ -1,0 +1,229 @@
+{% extends "base_project.html" %}
+{% block title %}Verify — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}Verify{% endblock %}
+
+{% block project_extra_head %}
+<style>
+.v-table td, .v-table th { font-size: 12px; }
+.v-table .mono { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.v-swap { color: var(--danger); font-size: 12px; }
+.v-summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.v-err { color: var(--danger); font-size: 12px; }
+.v-src { color: var(--text-tertiary); font-size: 11px; }
+details.v-nb summary { cursor: pointer; font-size: 13px; padding: 6px 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<p class="text-sm text-secondary" style="margin-bottom:14px">
+  Reads each switch with a management IP over its REST API: serial number,
+  model, base MAC and firmware, and who is on the other end of each cable (LLDP).
+  Cabling is checked against the links the design already implies:
+  point-to-point /31 subnets, the VSX ISL, and switch names in port and LAG
+  descriptions (with a port, as in <code>CORE-01 1/1/49</code>, the far port is
+  checked too).
+</p>
+
+<div class="card">
+  <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <span>Read switches</span>
+    {% if project_level in ('owner', 'deploy') %}
+    <button class="btn btn-primary" id="read-btn" onclick="readSwitches()">Read switches</button>
+    {% endif %}
+  </div>
+  <div id="read-status" class="text-sm text-secondary">
+    {% if not hosts|selectattr('mgmt_ip')|list %}No switches have a management IP yet. Add them on the
+    <a href="{{ url_for('projects.deployment_ips', project_name=project_name) }}">Deployment IPs</a> page.
+    {% elif project_level not in ('owner', 'deploy') %}Reading switches needs deploy access to this project.
+    {% else %}{{ hosts|selectattr('mgmt_ip')|list|length }} switch{{ 'es' if hosts|selectattr('mgmt_ip')|list|length != 1 }} will be read. Credentials are used for the read only.{% endif %}
+  </div>
+</div>
+
+<div class="card" id="cabling-card" style="display:none">
+  <div class="card-header">Cabling</div>
+  <div class="v-summary" id="cabling-summary"></div>
+  <div class="table-wrap"><table class="v-table">
+    <thead><tr><th>Switch</th><th>Port</th><th>Expected</th><th>Seen</th><th>Result</th></tr></thead>
+    <tbody id="cabling-body"></tbody>
+  </table></div>
+  <details class="v-nb" id="neighbors-box"><summary>Everything LLDP saw</summary><div id="neighbors"></div></details>
+</div>
+
+<div class="card">
+  <div class="card-header">Inventory</div>
+  <div id="swap-warnings"></div>
+  <div class="table-wrap"><table class="v-table">
+    <thead><tr><th>Switch</th><th>Serial</th><th>Model</th><th>Base MAC</th><th>Firmware</th><th>Read</th></tr></thead>
+    <tbody id="inventory-body">
+    {% for h in hosts %}
+      {% set inv = inventory.get(h.hostname) %}
+      <tr data-hostname="{{ h.hostname }}">
+        <td><strong>{{ h.hostname }}</strong><br><span class="mono">{{ h.mgmt_ip or 'no IP' }}</span></td>
+        {% if inv %}
+        <td class="mono">{{ inv.serials|join(', ') if inv.serials else '—' }}
+          {% if inv.previous_serials %}<div class="v-swap">Changed from {{ inv.previous_serials|join(', ') }}</div>{% endif %}</td>
+        <td>{{ inv.model or '—' }}{% if inv.part_number %}<br><span class="mono">{{ inv.part_number }}</span>{% endif %}</td>
+        <td class="mono">{{ inv.base_mac or '—' }}</td>
+        <td class="mono">{{ inv.firmware or '—' }}</td>
+        <td class="text-secondary">{{ inv.read_at|replace('T', ' ')|replace('Z', '') }}<br>{{ inv.read_by }}</td>
+        {% else %}
+        <td colspan="5" class="text-secondary">Not read yet</td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
+<div class="modal-overlay" id="credModal">
+  <div class="modal">
+    <div class="modal-header">Switch credentials</div>
+    <div class="modal-body">
+      <p class="text-sm text-secondary" style="margin-bottom:16px">Used for this read only and not stored.</p>
+      <div style="display:grid;gap:12px">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label" for="cred-user">Username</label>
+          <input type="text" id="cred-user" class="form-input" placeholder="admin" autocomplete="off">
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label" for="cred-pass">Password</label>
+          <input type="password" id="cred-pass" class="form-input" autocomplete="off">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('credModal').classList.remove('visible')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitRead()">Read</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const RESULT = {
+  ok:            ['badge-green',   'Correct'],
+  wrong_port:    ['badge-red',     'Wrong port'],
+  wrong_switch:  ['badge-red',     'Wrong switch'],
+  missing:       ['badge-red',     'Missing'],
+  not_in_design: ['badge-yellow',  'Not in the design'],
+  not_read:      ['badge-neutral', 'Not read'],
+};
+
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  for (const c of children) e.append(c && c.nodeType ? c : document.createTextNode(c == null ? '' : String(c)));
+  return e;
+}
+
+function readSwitches() {
+  document.getElementById('credModal').classList.add('visible');
+  document.getElementById('cred-user').focus();
+}
+
+async function submitRead() {
+  const user = document.getElementById('cred-user').value.trim();
+  const pass = document.getElementById('cred-pass').value;
+  if (!user || !pass) return;
+  document.getElementById('credModal').classList.remove('visible');
+  const btn = document.getElementById('read-btn');
+  const status = document.getElementById('read-status');
+  btn.disabled = true;
+  status.textContent = 'Reading switches…';
+  let data;
+  try {
+    const res = await fetch(PROJECT_BASE + '/verify/read', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({switch_username: user, switch_password: pass})});
+    data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || ('server returned ' + res.status));
+  } catch (e) {
+    status.textContent = 'Read failed: ' + e.message;
+    btn.disabled = false;
+    return;
+  }
+  btn.disabled = false;
+  document.getElementById('cred-pass').value = '';
+  const failed = data.switches.filter(s => !s.ok);
+  status.textContent = 'Read ' + (data.switches.length - failed.length) + ' of '
+    + data.switches.length + ' switches.';
+  renderInventory(data.switches);
+  renderCabling(data.cabling, data.switches);
+}
+
+function renderInventory(switches) {
+  const swaps = document.getElementById('swap-warnings');
+  swaps.replaceChildren();
+  for (const s of switches) {
+    const row = Array.from(document.querySelectorAll('#inventory-body tr'))
+      .find(r => r.dataset.hostname === s.hostname);
+    if (!row) continue;
+    const cells = [el('td', {}, el('strong', {}, s.hostname), el('br'), el('span', {class: 'mono'}, s.mgmt_ip))];
+    if (!s.ok) {
+      cells.push(el('td', {colspan: '5', class: 'v-err'}, "Couldn't read: " + s.error));
+    } else {
+      const inv = s.inventory || {};
+      const serial = el('td', {class: 'mono'}, (inv.serials || []).join(', ') || '—');
+      if (s.swapped_from) {
+        serial.append(el('div', {class: 'v-swap'}, 'Changed from ' + s.swapped_from.join(', ')));
+        swaps.append(el('div', {class: 'alert alert-danger', style: 'margin-bottom:10px'},
+          el('span', {}, 'Different hardware at ' + s.hostname + ' (' + s.mgmt_ip + ') than last time: '
+             + s.swapped_from.join(', ') + ' → ' + (inv.serials || []).join(', ')
+             + '. Check this is the switch you meant.')));
+      }
+      cells.push(serial,
+        el('td', {}, inv.model || '—', ...(inv.part_number ? [el('br'), el('span', {class: 'mono'}, inv.part_number)] : [])),
+        el('td', {class: 'mono'}, inv.base_mac || '—'),
+        el('td', {class: 'mono'}, inv.firmware || '—'),
+        el('td', {class: 'text-secondary'}, 'just now'));
+    }
+    row.replaceChildren(...cells);
+  }
+}
+
+function renderCabling(rows, switches) {
+  const card = document.getElementById('cabling-card');
+  const body = document.getElementById('cabling-body');
+  const summary = document.getElementById('cabling-summary');
+  card.style.display = '';
+  body.replaceChildren();
+  summary.replaceChildren();
+  const counts = {};
+  for (const r of rows) counts[r.result] = (counts[r.result] || 0) + 1;
+  for (const [k, n] of Object.entries(counts)) {
+    summary.append(el('span', {class: 'badge ' + RESULT[k][0]}, n + ' ' + RESULT[k][1].toLowerCase()));
+  }
+  if (!rows.length) {
+    body.append(el('tr', {}, el('td', {colspan: '5', class: 'text-secondary'},
+      'The design implies no links between these switches, and LLDP saw none to other project switches.')));
+  }
+  const order = {wrong_switch: 0, wrong_port: 1, missing: 2, not_in_design: 3, not_read: 4, ok: 5};
+  rows.sort((a, b) => order[a.result] - order[b.result] || a.host.localeCompare(b.host));
+  for (const r of rows) {
+    const expected = r.result === 'not_in_design' ? '—'
+      : r.peer + (r.peer_port ? ' ' + r.peer_port : '');
+    body.append(el('tr', {},
+      el('td', {}, r.host), el('td', {class: 'mono'}, r.port),
+      el('td', {}, expected, r.source ? el('div', {class: 'v-src'}, r.source) : ''),
+      el('td', {class: 'mono'}, r.seen || '—'),
+      el('td', {}, el('span', {class: 'badge ' + RESULT[r.result][0]}, RESULT[r.result][1]))));
+  }
+  const nb = document.getElementById('neighbors');
+  nb.replaceChildren();
+  for (const s of switches.filter(s => s.ok)) {
+    const ports = Object.entries(s.neighbors || {});
+    const t = el('table', {class: 'v-table'}, el('thead', {}, el('tr', {},
+      el('th', {}, 'Port'), el('th', {}, 'Neighbour'), el('th', {}, 'Its port'), el('th', {}, 'Chassis ID'))));
+    const tb = el('tbody');
+    for (const [port, list] of ports) for (const n of list) {
+      tb.append(el('tr', {}, el('td', {class: 'mono'}, port), el('td', {}, n.sys_name || '—'),
+        el('td', {class: 'mono'}, n.port_id || '—'), el('td', {class: 'mono'}, n.chassis_id || '—')));
+    }
+    t.append(tb);
+    nb.append(el('h4', {style: 'font-size:13px;margin:12px 0 4px'}, s.hostname + ' (' + ports.length + ' port'
+      + (ports.length === 1 ? '' : 's') + ' with a neighbour)'), t);
+  }
+}
+</script>
+{% endblock %}

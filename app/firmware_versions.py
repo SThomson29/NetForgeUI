@@ -2,93 +2,27 @@
 What each switch is running, read over the AOS-CX REST API, and how that
 compares with the image chosen on the Firmware page.
 
-One short session per switch: discover the API version (GET /rest needs no
-login), log in, read /firmware (and the platform name), log out. AOS-CX
-allows only a few REST sessions per user, so logout always runs.
-
-The certificate isn't verified: switches serve self-signed ones, the same
-trust the deploy and firmware playbooks already extend. Credentials are
-used for the call and not kept.
+One short session per switch (see aoscx_rest): read /firmware and the
+platform name. Credentials are used for the call and not kept.
 """
 
 import concurrent.futures
-import warnings
 
+from .aoscx_rest import SwitchError, run
 from .firmware_images import parse_version
 
-TIMEOUT = (5, 15)          # connect, read
 MAX_PARALLEL = 16
-FALLBACK_PREFIX = '/rest/v10.04'
-
-
-class SwitchError(Exception):
-    """A switch that couldn't be read, with a short reason."""
-
-
-def _base(ip):
-    return 'https://[%s]' % ip if ':' in ip else 'https://%s' % ip
-
-
-def _prefix(session, base):
-    """The newest REST API the switch offers, e.g. /rest/v10.13."""
-    try:
-        res = session.get(base + '/rest', timeout=TIMEOUT)
-        data = res.json() if res.ok else {}
-    except ValueError:
-        data = {}
-    latest = data.get('latest') if isinstance(data, dict) else None
-    if isinstance(latest, dict) and str(latest.get('prefix', '')).startswith('/rest/'):
-        return latest['prefix']
-    versions = sorted(k for k in (data or {}) if str(k).startswith('v10.'))
-    return '/rest/' + versions[-1] if versions else FALLBACK_PREFIX
 
 
 def read_versions(ip, username, password):
     """{current, primary, secondary, booted, platform_name} for one switch.
     Raises SwitchError."""
-    import requests
-    import urllib3
-    base = _base(ip)
-    session = requests.Session()
-    session.verify = False
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', urllib3.exceptions.InsecureRequestWarning)
-        try:
-            prefix = _prefix(session, base)
-            res = session.post(base + prefix + '/login', timeout=TIMEOUT,
-                               data={'username': username, 'password': password})
-            if res.status_code in (401, 403):
-                raise SwitchError('the switch refused the username or password')
-            if not res.ok:
-                raise SwitchError('login failed (HTTP %d)' % res.status_code)
-            try:
-                fw = session.get(base + prefix + '/firmware', timeout=TIMEOUT)
-                if not fw.ok:
-                    raise SwitchError('could not read firmware details (HTTP %d)' % fw.status_code)
-                fw = fw.json()
-                platform_name = None
-                try:
-                    sysinfo = session.get(base + prefix + '/system', timeout=TIMEOUT,
-                                          params={'attributes': 'platform_name'})
-                    if sysinfo.ok:
-                        platform_name = sysinfo.json().get('platform_name')
-                except (requests.RequestException, ValueError):
-                    pass
-            finally:
-                try:
-                    session.post(base + prefix + '/logout', timeout=TIMEOUT)
-                except requests.RequestException:
-                    pass
-        except requests.exceptions.SSLError:
-            raise SwitchError('TLS handshake failed')
-        except requests.exceptions.Timeout:
-            raise SwitchError('timed out')
-        except requests.exceptions.ConnectionError:
-            raise SwitchError("can't connect on port 443; is the REST API (https-server) enabled?")
-        except ValueError:
-            raise SwitchError('unexpected response from the switch')
-        finally:
-            session.close()
+    def reads(get):
+        fw = get('/firmware')
+        sysinfo = get('/system', params={'attributes': 'platform_name'}, optional=True)
+        return fw, sysinfo
+
+    fw, sysinfo = run(ip, username, password, reads)
     if not isinstance(fw, dict):
         raise SwitchError('unexpected response from the switch')
     return {
@@ -96,7 +30,7 @@ def read_versions(ip, username, password):
         'primary':   fw.get('primary_version'),
         'secondary': fw.get('secondary_version'),
         'booted':    fw.get('booted_image'),
-        'platform_name': platform_name,
+        'platform_name': (sysinfo or {}).get('platform_name') if isinstance(sysinfo, dict) else None,
     }
 
 
