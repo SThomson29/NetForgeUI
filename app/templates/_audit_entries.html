@@ -51,6 +51,11 @@
     </summary>
 
     <div class="audit-body">
+      {% if e.action == 'deploy_dryrun' and e.status != 'running' %}
+      <div style="margin:4px 0 8px">
+        <a class="btn btn-sm" href="{{ url_for('projects.change_summary', owner=e.owner or e.username, project_name=e.project, entry_id=e.id) }}">Change summary</a>
+      </div>
+      {% endif %}
       <div class="audit-kv">
         <span class="k">Started</span><span>{{ e.started_at }}</span>
         <span class="k">Finished</span><span>{{ e.finished_at or '—' }}</span>

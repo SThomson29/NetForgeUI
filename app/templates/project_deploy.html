@@ -473,6 +473,16 @@ async function startDryRun() {
        the log available so a failure can be read. */
     if (job.results && job.results.length) {
       renderDryRunResults(job.results);
+      if (start.audit_id) {
+        const link = document.createElement('a');
+        link.className = 'btn btn-sm';
+        link.style.marginBottom = '12px';
+        link.target = '_blank';
+        link.href = `${PROJECT_BASE}/history/${encodeURIComponent(start.audit_id)}/summary`;
+        link.textContent = 'Change summary';
+        link.title = 'The commands each switch would receive, for a change request';
+        container.prepend(link);
+      }
       if (job.status !== 'done') {
         container.insertAdjacentHTML('beforeend',
           `<details style="margin-top:12px"><summary class="text-sm text-secondary">Playbook output</summary>

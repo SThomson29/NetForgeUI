@@ -313,6 +313,17 @@ def entries(app, *, username=None, project=None, owner=None, limit=200,
     return rows
 
 
+def entry(app, entry_id):
+    """One entry by id, as entries() returns them, or None."""
+    with get_db(app) as db:
+        r = db.execute('SELECT * FROM audit_log WHERE id = ?', (entry_id,)).fetchone()
+        if r is None:
+            return None
+        rows = [_row(r)]
+        _link_generations(db, rows)
+    return rows[0]
+
+
 def _truthy(v):
     return v in (True, 'True', 'true')
 

@@ -6,7 +6,8 @@ import uuid
 import threading
 
 from flask import (Blueprint, render_template, redirect, url_for,
-                   request, flash, current_app, jsonify, send_file, abort, g)
+                   request, flash, current_app, jsonify, send_file, abort, g,
+                   Response)
 from flask_login import login_required, current_user
 
 from .project import (
@@ -810,6 +811,26 @@ def transfer_project(project_name):
     flash('%s now belongs to %s.' % (project_name, new_owner), 'success')
     return redirect(url_for('projects.sharing_page', owner=new_owner,
                             project_name=project_name))
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/history/<int:entry_id>/summary')
+@login_required
+def change_summary(project_name, entry_id):
+    """A dry run as a change summary: printable, or ?format=text to paste
+    into a ticket. ?ref= and ?notes= add a change reference and notes."""
+    from . import change_summary as cs
+    app = current_app._get_current_object()
+    summary = cs.build(app, _owner(), project_name, entry_id)
+    if summary is None:
+        abort(404)
+    ref = request.args.get('ref', '').strip()[:200]
+    notes = request.args.get('notes', '').strip()[:4000]
+    if request.args.get('format') == 'text':
+        return Response(cs.as_text(summary, ref, notes), mimetype='text/plain',
+                        headers={'Content-Disposition': 'attachment; filename='
+                                 '"change-summary-%s-%d.txt"' % (project_name, entry_id)})
+    return render_template('change_summary.html', s=summary, ref=ref, notes=notes,
+                           project_name=project_name, entry_id=entry_id)
 
 
 # ---------------------------------------------------------------------------

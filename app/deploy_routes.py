@@ -431,7 +431,8 @@ def deploy_dryrun(project_name):
         owner=current_user.username, project_name=_project_key(project_name),
         audit_id=audit_id,
     )
-    return jsonify(ok=True, job_id=job_id)
+    # The audit entry is what a change summary is built from.
+    return jsonify(ok=True, job_id=job_id, audit_id=audit_id)
 
 
 @login_required
