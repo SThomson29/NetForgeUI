@@ -315,7 +315,7 @@ class TestSecretFieldDrift:
         """
         import re
         editor = os.path.join(os.path.dirname(__file__), '..', 'app',
-                              'templates', 'project_editor.html')
+                              'static', 'js', 'editor.js')
         with open(editor) as f:
             src = f.read()
 

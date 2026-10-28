@@ -16,6 +16,7 @@ from app.project import (
     get_all_allocations, project_host_vars_dir,
     PoolOverlapError,
 )
+from tests.conftest import editor_page
 
 SUPERNET = {'id': 'sn1', 'type': 'vlan_supernet', 'name': 'VLANs',
             'subnet': '10.100.0.0/16', 'carve_prefix': '24'}
@@ -441,7 +442,6 @@ class TestSubnetFormatValidation:
         with app.app_context():
             hv = os.path.join(project_host_vars_dir(app, 'admin', proj), 'sw1')
             os.makedirs(hv, exist_ok=True)
-        body = auth_client.get(
-            '/projects/admin/%s/editor?host=sw1' % proj).data.decode()
+        body = editor_page(auth_client, '/projects/admin/%s/editor?host=sw1' % proj)
         assert 'MAX_ENUMERATED_IPS' in body
         assert 'isNaN(subnetPrefix)' in body

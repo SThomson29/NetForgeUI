@@ -142,6 +142,13 @@ def _check_project_access():
     g.project_level = level
 
 
+@projects_bp.app_template_global()
+def static_url(filename):
+    """A static file's URL with a content fingerprint; see assets.py."""
+    from .assets import static_url as _static_url
+    return _static_url(filename)
+
+
 @projects_bp.app_context_processor
 def _project_context():
     if 'project_owner' not in g:

@@ -11,6 +11,7 @@ import tempfile
 import shutil
 
 from app.hostvars import _parse_state, _load_yaml
+from tests.conftest import editor_page
 
 
 # ---------------------------------------------------------------------------
@@ -894,8 +895,7 @@ class TestSviAllocationVisibility:
                                '100', 'Users', 'sw1', 'sw2')
             hv = os.path.join(project_host_vars_dir(app, 'admin', 'svi'), 'sw1')
             os.makedirs(hv, exist_ok=True)
-        return auth_client.get(
-            '/projects/admin/svi/editor?host=sw1').data.decode()
+        return editor_page(auth_client, '/projects/admin/svi/editor?host=sw1')
 
     def test_picker_reads_svi_allocations(self, app, auth_client):
         body = self._page(app, auth_client)
@@ -1036,7 +1036,7 @@ vlan_interfaces: []
             create_project(app, 'admin', 'lagp')
             hv = os.path.join(project_host_vars_dir(app, 'admin', 'lagp'), 'sw1')
             os.makedirs(hv, exist_ok=True)
-        body = auth_client.get('/projects/admin/lagp/editor?host=sw1').data.decode()
+        body = editor_page(auth_client, '/projects/admin/lagp/editor?host=sw1')
         assert "placeholder:'lag1 or leave empty'" not in body
         assert 'not lag1' in body, 'hint should say what not to type'
 
@@ -1072,8 +1072,7 @@ class TestCopyVlansBetweenSwitches:
 
     def test_control_is_offered_when_other_switches_exist(self, app, auth_client):
         proj = self._project(app, auth_client)
-        body = auth_client.get(
-            '/projects/admin/%s/editor?host=sw2' % proj).data.decode()
+        body = editor_page(auth_client, '/projects/admin/%s/editor?host=sw2' % proj)
         assert 'copyFrom' in body
         assert "copy-src-' + key" in body
 
@@ -1081,8 +1080,7 @@ class TestCopyVlansBetweenSwitches:
         """VLANs, banner, SNMP, logging, AAA, VRFs and the VNI map."""
         import re
         proj = self._project(app, auth_client)
-        body = auth_client.get(
-            '/projects/admin/%s/editor?host=sw2' % proj).data.decode()
+        body = editor_page(auth_client, '/projects/admin/%s/editor?host=sw2' % proj)
         keys = set(re.findall(r"copyPanel\('(\w+)'", body))
         assert keys == {'vlans', 'banner', 'snmp', 'logging',
                         'aaa', 'vrfs', 'vxlan', 'svis'}
@@ -1097,8 +1095,7 @@ class TestCopyVlansBetweenSwitches:
         import re, os
         from app.hostvars import _parse_state
         proj = self._project(app, auth_client)
-        body = auth_client.get(
-            '/projects/admin/%s/editor?host=sw2' % proj).data.decode()
+        body = editor_page(auth_client, '/projects/admin/%s/editor?host=sw2' % proj)
 
         d = tmp_path / 'hv'
         d.mkdir()
@@ -1139,7 +1136,7 @@ class TestSviAutoFill:
                                '100', 'Users')
             hv = os.path.join(project_host_vars_dir(app, 'admin', 'af'), 'sw1')
             os.makedirs(hv, exist_ok=True)
-        return auth_client.get('/projects/admin/af/editor?host=sw1').data.decode()
+        return editor_page(auth_client, '/projects/admin/af/editor?host=sw1')
 
     def test_autofill_runs_on_subnet_selection(self, app, auth_client):
         body = self._page(app, auth_client)
@@ -1215,8 +1212,7 @@ class TestCopySvisBetweenSwitches:
                         '    description: Users\n    subnet: "10.50.5.0/24"\n'
                         '    ip_address: "10.50.5.1"\n    ip_prefix: "24"\n'
                         '    active_gateway_ip: "10.50.5.254"\n')
-        return auth_client.get(
-            '/projects/admin/cs/editor?host=core-02').data.decode()
+        return editor_page(auth_client, '/projects/admin/cs/editor?host=core-02')
 
     def test_panel_is_offered(self, app, auth_client):
         body = self._page(app, auth_client)
@@ -1268,7 +1264,7 @@ class TestSubnetDerivation:
                         'lag_interfaces: []\nloopback_interfaces: []\n'
                         'vlan_interfaces:\n  - name: vlan100\n'
                         '    ip_address: "10.50.5.1"\n    ip_prefix: "24"\n')
-        return auth_client.get('/projects/admin/sd/editor?host=sw1').data.decode()
+        return editor_page(auth_client, '/projects/admin/sd/editor?host=sw1')
 
     def test_derivation_helper_is_present(self, app, auth_client):
         body = self._page(app, auth_client)
