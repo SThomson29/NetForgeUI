@@ -360,8 +360,8 @@ class TestVlanAssignment:
                 'id': 'ptp1', 'type': 'point_to_point', 'name': 'P2P',
                 'subnet': '10.100.5.0/24', 'parent_pool_id': 'sn1'})
         body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
-        assert 'openVlanAssign("sn1", "10.100.6.0/24")' in body
-        assert 'openVlanAssign("sn1", "10.100.5.0/24")' in body
+        assert 'data-click="openVlanAssign" data-args=\'["sn1", "10.100.6.0/24"]\'' in body
+        assert 'data-click="openVlanAssign" data-args=\'["sn1", "10.100.5.0/24"]\'' in body
 
 
 class TestPoolTypeLabels:

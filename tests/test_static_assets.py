@@ -57,6 +57,7 @@ class TestEditorPage:
         body = auth_client.get('/projects/admin/p/editor?host=SW1').get_data(as_text=True)
         srcs = re.findall(r'<script src="([^"]+)"', body)
         assert [s.split('?')[0] for s in srcs] == [
+            '/static/js/actions.js',
             '/static/vendor/react-18.2.0.production.min.js',
             '/static/vendor/react-dom-18.2.0.production.min.js',
             '/static/js/editor.js',

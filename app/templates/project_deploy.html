@@ -120,7 +120,7 @@
 {% endblock %}
 
 {% block topbar_actions %}
-<button class="btn btn-secondary btn-sm" onclick="saveMappings()">
+<button class="btn btn-secondary btn-sm" data-click="saveMappings">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
   Save settings
 </button>
@@ -150,13 +150,12 @@
       <div class="flex items-center justify-between" style="margin-bottom:12px">
         <span class="form-label" style="margin-bottom:0">Select switches to deploy to</span>
         <div class="flex items-center gap-2">
-          <button class="btn btn-sm" onclick="selectChanged()"
+          <button class="btn btn-sm" data-click="selectChanged"
                   title="Tick the switches whose config is new or has changed since their last confirmed push">
             Select changed
           </button>
           <button class="btn btn-sm" id="reach-btn"
-                  onclick="checkReachability(getSelectedMappings().map(m => m.hostname),
-                                             document.getElementById('reach-results'), this)">
+                  data-click="reachSelected">
             Check reachability
           </button>
           <a class="btn btn-ghost btn-sm"
@@ -179,7 +178,7 @@
           <thead>
             <tr>
               <th style="width:30px">
-                <input type="checkbox" id="select-all" onchange="toggleAllMapping(this)">
+                <input type="checkbox" id="select-all" data-change="toggleAllMapping">
               </th>
               <th>Hostname</th>
               <th>Management IP</th>
@@ -208,7 +207,7 @@
                 {% endif %}
               </td>
               <td>
-                <button class="btn btn-ghost btn-icon btn-sm" onclick="this.closest('tr').remove()">
+                <button class="btn btn-ghost btn-icon btn-sm" data-click="removeRow">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px">
                     <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                   </svg>
@@ -249,7 +248,7 @@
   </div>
 
   <div class="flex gap-2" style="justify-content:flex-end">
-    <button class="btn btn-accent" onclick="startDryRun()">
+    <button class="btn btn-accent" data-click="startDryRun">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
       Dry Run — show diffs
     </button>
@@ -262,11 +261,11 @@
   <div id="dryrun-results"></div>
 
   <div class="flex gap-2" style="justify-content:flex-end;margin-top:16px">
-    <button class="btn btn-secondary" onclick="goToStep(1)">
+    <button class="btn btn-secondary" data-click=\"goToStep\" data-args='[1]'>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
       Back to mapping
     </button>
-    <button class="btn btn-primary" onclick="confirmDeploy()" id="deploy-btn">
+    <button class="btn btn-primary" data-click="confirmDeploy" id="deploy-btn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
       Confirm &amp; Deploy
     </button>
@@ -279,7 +278,7 @@
   <div id="deploy-results"></div>
 
   <div class="flex gap-2" style="justify-content:flex-end;margin-top:16px">
-    <button class="btn btn-secondary" onclick="goToStep(1)">
+    <button class="btn btn-secondary" data-click=\"goToStep\" data-args='[1]'>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
       Start over
     </button>
@@ -306,7 +305,7 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="hideCredModal()">Cancel</button>
+      <button class="btn btn-ghost" data-click="hideCredModal">Cancel</button>
       <button class="btn btn-primary" id="cred-submit">Continue</button>
     </div>
   </div>
@@ -315,7 +314,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
+<script nonce="{{ csp_nonce() }}">
 const PROJECT = {{ project_name | tojson }};
 let sessionCreds = null;  // held in memory only, never persisted
 
@@ -346,8 +345,17 @@ function selectChanged() {
   document.getElementById('select-all').checked = false;
 }
 
-function toggleAllMapping(el) {
-  document.querySelectorAll('.map-check').forEach(c => c.checked = el.checked);
+function toggleHostCard() {
+  this.nextElementSibling.classList.toggle('open');
+}
+
+function reachSelected() {
+  checkReachability(getSelectedMappings().map(m => m.hostname),
+                    document.getElementById('reach-results'), this);
+}
+
+function toggleAllMapping() {
+  document.querySelectorAll('.map-check').forEach(c => c.checked = this.checked);
 }
 
 async function autoPopulate() {
@@ -516,7 +524,7 @@ function renderDryRunResults(results) {
 
     html += `
     <div class="deploy-host-card">
-      <div class="deploy-host-header" onclick="this.nextElementSibling.classList.toggle('open')">
+      <div class="deploy-host-header" data-click="toggleHostCard">
         <div class="host-info">
           <span style="font-weight:600;font-size:13px">${esc(r.hostname)}</span>
           <span class="text-sm text-tertiary mono">${esc(r.mgmt_ip)}</span>

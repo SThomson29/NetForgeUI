@@ -9,11 +9,12 @@ Application-wide hardening that does not belong to any one blueprint.
 Each piece is separate so it can be tested without building the whole app.
 """
 
+import secrets
 import threading
 import time
 from urllib.parse import urlsplit
 
-from flask import abort, request
+from flask import abort, g, request
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +115,11 @@ def _origin(url):
 def content_security_policy(config):
     """The CSP for every response.
 
+    Scripts run only from this site's files or from <script> blocks that
+    carry this response's nonce, so injected markup can't run code: no
+    inline handlers (onclick=...) and no javascript: URLs. Pages use
+    data-click and friends instead (static/js/actions.js).
+
     Fonts come from Google Fonts (design.css imports them). Inline style
     attributes are allowed: the templates use them throughout and injected
     CSS can't run code. Forms may only submit here, except that sign-out
@@ -127,7 +133,7 @@ def content_security_policy(config):
             form_action.append(provider)
     directives = [
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline'",
+        "script-src 'self'%(nonce)s",
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
         "font-src 'self' https://fonts.gstatic.com",
         "img-src 'self' data:",
@@ -140,13 +146,23 @@ def content_security_policy(config):
     return '; '.join(directives)
 
 
+def csp_nonce():
+    """This response's script nonce, for templates: <script nonce="{{ csp_nonce() }}">."""
+    if 'csp_nonce' not in g:
+        g.csp_nonce = secrets.token_urlsafe(18)
+    return g.csp_nonce
+
+
 def install_headers(app):
     csp = content_security_policy(app.config)
+    app.jinja_env.globals['csp_nonce'] = csp_nonce
 
     @app.after_request
     def _security_headers(response):
         h = response.headers
-        h['Content-Security-Policy'] = csp
+        nonce = g.get('csp_nonce')
+        h['Content-Security-Policy'] = csp % {
+            'nonce': " 'nonce-%s'" % nonce if nonce else ''}
         h['X-Content-Type-Options'] = 'nosniff'
         # frame-ancestors covers current browsers; this covers the rest.
         h['X-Frame-Options'] = 'DENY'

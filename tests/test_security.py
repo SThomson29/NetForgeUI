@@ -394,3 +394,53 @@ class TestResponseHeaders:
         d = _directives(content_security_policy({
             'OIDC_ISSUER': 'https://auth.example.com/', 'OIDC_LOGOUT': 'local'}))
         assert d['form-action'] == ["'self'"]
+
+
+class TestScriptNonce:
+    """Inline scripts run only with this response's nonce; anything
+    injected into the page, inline handlers included, doesn't."""
+
+    def _pages(self, app):
+        """Every GET page that needs at most an owner and project name."""
+        urls = []
+        for rule in app.url_map.iter_rules():
+            if 'GET' not in rule.methods or rule.endpoint == 'static':
+                continue
+            if not set(rule.arguments) <= {'owner', 'project_name'}:
+                continue
+            urls.append(rule.build({'owner': 'admin', 'project_name': 'csp'}
+                                   if rule.arguments else {}, append_unknown=False)[1])
+        return urls
+
+    def test_every_inline_script_carries_the_nonce(self, app, auth_client, skeleton_dir):
+        import re
+        from app.project import create_project
+        from app.utils import add_project_hosts
+        with app.app_context():
+            create_project(app, 'admin', 'csp')
+            add_project_hosts(app, 'admin', 'csp', ['SW1'], 'none')
+        checked = 0
+        for url in self._pages(app):
+            res = auth_client.get(url)
+            if res.status_code != 200 or not res.mimetype == 'text/html':
+                continue
+            body = res.get_data(as_text=True)
+            csp = _directives(res.headers['Content-Security-Policy'])
+            assert "'unsafe-inline'" not in csp['script-src'], url
+            nonces = [s[len("'nonce-"):-1] for s in csp['script-src'] if s.startswith("'nonce-")]
+            for tag in re.findall(r'<script\b[^>]*>', body):
+                if 'src=' in tag:
+                    continue
+                checked += 1
+                assert nonces and 'nonce="%s"' % nonces[0] in tag, (url, tag)
+        assert checked > 20, 'too few pages rendered to mean anything'
+
+    def test_nonce_changes_every_response(self, app, auth_client):
+        a = auth_client.get('/projects').headers['Content-Security-Policy']
+        b = auth_client.get('/projects').headers['Content-Security-Policy']
+        assert "'nonce-" in a and a != b
+
+    def test_no_nonce_on_pages_without_inline_scripts(self, monkeypatch, tmp_path):
+        app = _real_app(monkeypatch, tmp_path, proxies=0)
+        csp = _directives(app.test_client().get('/healthz').headers['Content-Security-Policy'])
+        assert csp['script-src'] == ["'self'"]

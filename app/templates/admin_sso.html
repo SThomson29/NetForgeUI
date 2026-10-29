@@ -69,7 +69,7 @@
   </p>
   <div class="copy-row">
     <code id="redirect-uri">{{ redirect_uri }}</code>
-    <button class="btn btn-sm" type="button" onclick="copyRedirect(this)">Copy</button>
+    <button class="btn btn-sm" type="button" data-click="copyRedirect">Copy</button>
   </div>
   {% if redirect_uri.startswith('http://') and not (request.host.startswith('localhost') or request.host.startswith('127.0.0.1')) %}
   <div class="warn-box">
@@ -93,7 +93,7 @@
     sign-in needs. It doesn't test the client secret or group membership. A real
     sign-in does that, and its result shows up below.
   </p>
-  <button class="btn btn-primary" id="test-btn" type="button" onclick="testConnection()">Test connection</button>
+  <button class="btn btn-primary" id="test-btn" type="button" data-click="testConnection">Test connection</button>
   <div id="test-result"></div>
 </div>
 {% endif %}
@@ -137,8 +137,9 @@
   {% endif %}
 </div>
 
-<script>
-function copyRedirect(btn) {
+<script nonce="{{ csp_nonce() }}">
+function copyRedirect() {
+  const btn = this;
   const text = document.getElementById('redirect-uri').textContent;
   navigator.clipboard.writeText(text).then(() => {
     btn.textContent = 'Copied';

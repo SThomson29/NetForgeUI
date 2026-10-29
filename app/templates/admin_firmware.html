@@ -32,7 +32,7 @@
   {% endif %}
   <div class="fw-up">
     <input type="file" id="fw-file" accept=".swi" {{ 'disabled' if not writable }}>
-    <button class="btn btn-primary" id="fw-up-btn" onclick="upload()" {{ 'disabled' if not writable }}>Upload</button>
+    <button class="btn btn-primary" id="fw-up-btn" data-click="upload" {{ 'disabled' if not writable }}>Upload</button>
   </div>
   <div class="fw-bar" id="fw-bar"><div></div></div>
   <div id="fw-up-status" class="text-secondary"></div>
@@ -66,7 +66,7 @@
       </td>
       <td style="text-align:right">
         <form method="post" action="{{ url_for('admin.firmware_delete') }}"
-              onsubmit='return confirm("Delete " + {{ i.name|tojson }} + "?")'>
+              data-confirm="Delete {{ i.name }}?">
           <input type="hidden" name="name" value="{{ i.name }}">
           <button class="btn btn-sm btn-danger" {{ 'disabled' if not writable }}>Delete</button>
         </form>
@@ -81,7 +81,7 @@
   {% endif %}
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 const UPLOAD_URL = {{ url_for('admin.firmware_upload') | tojson }};
 
 function upload() {

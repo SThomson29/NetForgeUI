@@ -54,7 +54,7 @@
   }
 </style>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
   /* Every project URL starts here: /projects/<owner>/<project>. */
   const PROJECT_BASE = {{ project_base | tojson }};
 

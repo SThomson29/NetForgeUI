@@ -28,7 +28,7 @@ details.v-nb summary { cursor: pointer; font-size: 13px; padding: 6px 0; }
   <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
     <span>Read switches</span>
     {% if project_level in ('owner', 'deploy') %}
-    <button class="btn btn-primary" id="read-btn" onclick="readSwitches()">Read switches</button>
+    <button class="btn btn-primary" id="read-btn" data-click="readSwitches">Read switches</button>
     {% endif %}
   </div>
   <div id="read-status" class="text-sm text-secondary">
@@ -92,15 +92,15 @@ details.v-nb summary { cursor: pointer; font-size: 13px; padding: 6px 0; }
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="document.getElementById('credModal').classList.remove('visible')">Cancel</button>
-      <button class="btn btn-primary" onclick="submitRead()">Read</button>
+      <button class="btn btn-ghost" data-click="hideModal" data-args='["credModal"]'>Cancel</button>
+      <button class="btn btn-primary" data-click="submitRead">Read</button>
     </div>
   </div>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
+<script nonce="{{ csp_nonce() }}">
 const RESULT = {
   ok:            ['badge-green',   'Correct'],
   wrong_port:    ['badge-red',     'Wrong port'],

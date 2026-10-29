@@ -47,8 +47,8 @@
     <div class="flex items-center justify-between" style="margin-bottom:12px">
       <span class="form-label" style="margin-bottom:0">Host → Management IP</span>
       <div class="flex items-center gap-2">
-        <button class="btn btn-ghost btn-sm" onclick="autoPopulate()">Add missing hosts</button>
-        <button class="btn btn-ghost btn-sm" onclick="addRow()">Add row</button>
+        <button class="btn btn-ghost btn-sm" data-click="autoPopulate">Add missing hosts</button>
+        <button class="btn btn-ghost btn-sm" data-click="addRow">Add row</button>
       </div>
     </div>
 
@@ -67,7 +67,7 @@
             <td><input type="text" class="map-hostname" value="{{ m.hostname }}" placeholder="hostname"></td>
             <td><input type="text" class="map-ip" value="{{ m.mgmt_ip }}" placeholder="10.0.0.1"></td>
             <td>
-              <button class="btn btn-ghost btn-icon btn-sm" onclick="this.closest('tr').remove()">
+              <button class="btn btn-ghost btn-icon btn-sm" data-click="removeRow">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px">
                   <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
@@ -85,7 +85,7 @@
     </div>
 
     <div class="flex items-center gap-2" style="margin-top:16px">
-      <button class="btn btn-primary btn-sm" onclick="saveIps()">Save</button>
+      <button class="btn btn-primary btn-sm" data-click="saveIps">Save</button>
       <span id="ip-status" class="text-sm text-secondary"></span>
     </div>
   </div>
@@ -94,7 +94,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
+<script nonce="{{ csp_nonce() }}">
 const PROJECT = {{ project_name | tojson }};
 
 function refreshEmptyState() {
@@ -102,12 +102,17 @@ function refreshEmptyState() {
   document.getElementById('ip-empty').style.display = rows ? 'none' : 'block';
 }
 
+function removeIpRow() {
+  this.closest('tr').remove();
+  refreshEmptyState();
+}
+
 function addRow(hostname, ip) {
   const tr = document.createElement('tr');
   tr.innerHTML =
     '<td><input type="text" class="map-hostname" placeholder="hostname"></td>' +
     '<td><input type="text" class="map-ip" placeholder="10.0.0.1"></td>' +
-    '<td><button class="btn btn-ghost btn-icon btn-sm" onclick="this.closest(\'tr\').remove();refreshEmptyState()">' +
+    '<td><button class="btn btn-ghost btn-icon btn-sm" data-click="removeIpRow">' +
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px">' +
     '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></td>';
   document.getElementById('ip-body').appendChild(tr);

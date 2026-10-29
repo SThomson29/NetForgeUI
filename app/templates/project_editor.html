@@ -43,7 +43,7 @@
 {% block content %}
 <div class="host-select-bar">
   <label class="lbl" style="margin:0;white-space:nowrap">Select switch:</label>
-  <select class="form-select" id="host-select" onchange="selectHost(this.value)">
+  <select class="form-select" id="host-select" data-change="pickHost">
     <option value="">— choose a switch —</option>
     {% for host in hosts %}
     <option value="{{ host.hostname }}" {% if host.hostname == selected %}selected{% endif %}>
@@ -67,8 +67,10 @@
 </div>
 {% endif %}
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 const PROJECT_NAME = {{ project_name | tojson }};
+function pickHost() { selectHost(this.value); }
+
 function selectHost(hostname) {
   window.location = hostname ? PROJECT_BASE + '/editor?host=' + encodeURIComponent(hostname) : PROJECT_BASE + '/editor';
 }

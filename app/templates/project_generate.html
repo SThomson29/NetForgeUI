@@ -26,7 +26,7 @@
   <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
     <span>{{ stale_full|length }} switch{{ 'es have' if stale_full|length != 1 else ' has' }} changed since {{ 'their configs were' if stale_full|length != 1 else 'its config was' }} generated</span>
     {% if project_level in ('owner', 'deploy', 'edit') %}
-    <button class="btn btn-primary btn-sm" id="stale-btn" onclick="regenerateStale()">Regenerate {{ 'these' if stale_full|length != 1 else 'it' }}</button>
+    <button class="btn btn-primary btn-sm" id="stale-btn" data-click="regenerateStale">Regenerate {{ 'these' if stale_full|length != 1 else 'it' }}</button>
     {% endif %}
   </div>
   <p class="text-sm" style="font-family:'JetBrains Mono',monospace;overflow-wrap:anywhere">{{ stale_full|join(', ') }}</p>
@@ -77,7 +77,7 @@
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="sflow" style="width:auto"> sFlow</label>
       </div>
     </div>
-    <button class="btn btn-primary" id="run-btn" onclick="runGenerate()">
+    <button class="btn btn-primary" id="run-btn" data-click="runGenerate">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
       Generate
     </button>
@@ -90,11 +90,11 @@
   <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
     Generated configs ({{ configs|length }})
     <div style="display:flex;gap:6px">
-      <button class="btn btn-sm" onclick="refreshConfigs()" style="font-size:11px">Refresh</button>
+      <button class="btn btn-sm" data-click="refreshConfigs" style="font-size:11px">Refresh</button>
       {% if configs %}
       <a href="{{ url_for('projects.download_all', project_name=project_name) }}" class="btn btn-sm" style="font-size:11px">Download all</a>
       {% endif %}
-      <button class="btn btn-sm btn-danger" onclick="deleteAll()" style="font-size:11px">Delete all</button>
+      <button class="btn btn-sm btn-danger" data-click="deleteAll" style="font-size:11px">Delete all</button>
     </div>
   </div>
   <div id="configs-list">
@@ -104,7 +104,7 @@
       <span class="config-name">{{ cfg }}</span>
       <div class="config-actions">
         <a href="{{ url_for('projects.download_config', project_name=project_name, filename=cfg) }}" class="btn btn-sm">Download</a>
-        <button class="btn btn-sm btn-danger" onclick='deleteConfig({{ cfg|tojson }})'>Delete</button>
+        <button class="btn btn-sm btn-danger" data-click="deleteConfig" data-args='{{ [cfg]|tojson }}'>Delete</button>
       </div>
     </div>
     {% endfor %}
@@ -114,7 +114,7 @@
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 const PROJECT_NAME = {{ project_name | tojson }};
 const STALE_HOSTS = {{ stale_full | tojson }};
 let currentJobId = null;

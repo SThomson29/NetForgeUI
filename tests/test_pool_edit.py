@@ -148,5 +148,5 @@ class TestRoutes:
 
     def test_edit_button_offered_for_pools_not_supernets(self, app, auth_client, proj):
         body = auth_client.get('/projects/admin/%s/resources' % proj).data.decode()
-        assert 'editPool("wm"' in body
-        assert 'editPool("sn"' not in body
+        assert 'data-click="editPool" data-args=\'["wm"' in body
+        assert 'data-click="editPool" data-args=\'["sn"' not in body

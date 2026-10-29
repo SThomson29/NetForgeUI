@@ -6,8 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}NetForgeUI{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/design.css') }}">
+  <script src="{{ static_url('js/actions.js') }}"></script>
   {% block extra_head %}{% endblock %}
-<script>
+<script nonce="{{ csp_nonce() }}">
 /* Escape a value for HTML, in text *and* in quoted attributes.
    Anything built with innerHTML or a template literal bypasses Jinja's
    autoescaping, so user-entered names and playbook output — which can
@@ -30,7 +31,7 @@ function esc(value) {
     <div class="sidebar-brand-logo">N</div>
     <span>NetForgeUI</span>
   </div>
-  <button class="burger" onclick="toggleSidebar()" aria-label="Toggle menu">
+  <button class="burger" data-click="toggleSidebar" aria-label="Toggle menu">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <line x1="3" y1="6" x2="21" y2="6"/>
       <line x1="3" y1="12" x2="21" y2="12"/>
@@ -38,7 +39,7 @@ function esc(value) {
     </svg>
   </button>
 </header>
-<div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
+<div class="overlay" id="overlay" data-click="toggleSidebar"></div>
 
 <div class="shell">
 
@@ -212,7 +213,7 @@ function esc(value) {
 <!-- Toast container -->
 <div class="toast-container" id="toasts"></div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 /* ── Sidebar toggle (mobile) ── */
 function toggleSidebar() {
   const sb = document.getElementById('sidebar');

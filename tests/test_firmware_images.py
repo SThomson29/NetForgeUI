@@ -188,7 +188,7 @@ class TestReadOnlyFolder:
     def test_page_explains_and_disables_upload(self, auth_client, ro):
         body = auth_client.get('/admin/firmware').get_data(as_text=True)
         assert 'read-only inside the container' in body
-        assert 'id="fw-up-btn" onclick="upload()" disabled' in body
+        assert 'id="fw-up-btn" data-click="upload" disabled' in body
 
     def test_upload_refused_with_the_fix(self, auth_client, ro):
         res = upload(auth_client, 'a.swi', b'x')

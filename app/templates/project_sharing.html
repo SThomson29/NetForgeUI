@@ -40,7 +40,7 @@
     <form method="post" action="{{ url_for('projects.share_project', project_name=project_name) }}" style="display:flex;gap:6px">
       <input type="hidden" name="kind" value="{{ s.kind }}">
       <input type="hidden" name="principal" value="{{ s.principal }}">
-      <select class="form-select" name="level" onchange="this.form.submit()" style="height:28px;font-size:12px">
+      <select class="form-select" name="level" data-change="submitForm" style="height:28px;font-size:12px">
         {% for lv in levels %}<option value="{{ lv }}" {{ 'selected' if lv == s.level }}>{{ level_labels[lv] }}</option>{% endfor %}
       </select>
     </form>
@@ -66,7 +66,7 @@
     {% if sso_enabled %}
     <div class="fld">
       <label class="lbl">With</label>
-      <select class="form-select" name="kind" id="share-kind" onchange="pickList()">
+      <select class="form-select" name="kind" id="share-kind" data-change="pickList">
         <option value="user">User</option>
         <option value="group">SSO group</option>
       </select>
@@ -104,8 +104,7 @@
     Moves the project, its shares and its history to another user.
     {% if project_owner == current_user.username %}You keep edit access.{% else %}{{ project_owner }} keeps edit access.{% endif %}
   </p>
-  <form method="post" action="{{ url_for('projects.transfer_project', project_name=project_name) }}" class="share-form"
-        onsubmit='return confirm("Transfer " + {{ project_name|tojson }} + " to " + this.new_owner.value + "?")'>
+  <form method="post" action="{{ url_for('projects.transfer_project', project_name=project_name) }}" class="share-form" id="transfer-form">
     <div class="fld" style="flex:1;min-width:200px">
       <label class="lbl">New owner</label>
       <input class="form-input" name="new_owner" list="user-list" required autocomplete="off">
@@ -118,7 +117,14 @@
 </div>
 {% endif %}
 
-<script>
+<script nonce="{{ csp_nonce() }}">
+const transferForm = document.getElementById('transfer-form');
+if (transferForm) transferForm.addEventListener('submit', e => {
+  if (!confirm('Transfer ' + {{ project_name|tojson }} + ' to ' + transferForm.new_owner.value + '?')) {
+    e.preventDefault();
+  }
+});
+
 function pickList() {
   const group = document.getElementById('share-kind').value === 'group';
   document.getElementById('principal').setAttribute('list', group ? 'group-list' : 'user-list');

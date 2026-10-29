@@ -161,7 +161,7 @@ class TestDeployPushState:
 
     def test_select_changed_button(self, deploy, auth_client):
         _, body = self.states(auth_client)
-        assert 'onclick="selectChanged()"' in body and 'function selectChanged()' in body
+        assert 'data-click="selectChanged"' in body and 'function selectChanged()' in body
 
     def test_other_projects_pushes_dont_count(self, deploy, auth_client):
         create_project(deploy, 'admin', 'other')

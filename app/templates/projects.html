@@ -3,10 +3,10 @@
 {% block page_title %}Projects{% endblock %}
 
 {% block topbar_actions %}
-<button class="btn" onclick="document.getElementById('import-project-modal').style.display='flex'">
+<button class="btn" data-click="setModal" data-args='["import-project-modal", true]'>
   Import
 </button>
-<button class="btn btn-primary" onclick="document.getElementById('new-project-modal').style.display='flex'">
+<button class="btn btn-primary" data-click="setModal" data-args='["new-project-modal", true]'>
   + New project
 </button>
 {% endblock %}
@@ -52,7 +52,7 @@
         </a>
         {% if p.owner == current_user.username %}
         <form method="post" action="{{ url_for('projects.delete', owner=p.owner, project_name=p.name) }}"
-              onsubmit='return confirm("Delete project " + {{ p.display_name|tojson }} + " and all its data? This cannot be undone.")'>
+              data-confirm="Delete project {{ p.display_name }} and all its data? This cannot be undone.">
           <button class="btn btn-sm btn-danger">Delete</button>
         </form>
         {% endif %}
@@ -104,7 +104,7 @@
         <div class="hint">Letters, numbers, hyphens and underscores only.</div>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
-        <button type="button" class="btn" onclick="document.getElementById('new-project-modal').style.display='none'">Cancel</button>
+        <button type="button" class="btn" data-click="setModal" data-args='["new-project-modal", false]'>Cancel</button>
         <button type="submit" class="btn btn-primary">Create</button>
       </div>
     </form>
@@ -118,7 +118,7 @@
 
     <div class="fld">
       <label class="lbl">Archive</label>
-      <input class="form-input" type="file" id="import-file" accept=".zip" onchange="importPreview()">
+      <input class="form-input" type="file" id="import-file" accept=".zip" data-change="importPreview">
       <div class="hint">A <code>.netforge.zip</code> exported from another instance.</div>
     </div>
 
@@ -134,8 +134,8 @@
     <div id="import-error" style="display:none;color:#dc2626;font-size:13px;margin-bottom:10px"></div>
 
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
-      <button type="button" class="btn" onclick="document.getElementById('import-project-modal').style.display='none'">Cancel</button>
-      <button type="button" class="btn btn-primary" id="import-btn" onclick="importRun()" disabled>Import</button>
+      <button type="button" class="btn" data-click="setModal" data-args='["import-project-modal", false]'>Cancel</button>
+      <button type="button" class="btn btn-primary" id="import-btn" data-click="importRun" disabled>Import</button>
     </div>
   </div>
 </div>
@@ -145,7 +145,11 @@
 .project-status a, .project-status span { font-size: 11px; text-decoration: none; }
 .project-status .last { color: var(--text-tertiary); }
 </style>
-<script>
+<script nonce="{{ csp_nonce() }}">
+function setModal(id, open) {
+  document.getElementById(id).style.display = open ? 'flex' : 'none';
+}
+
 /* Status badges: fetched after the list renders, a few at a time, so a
    long list (an admin's view of every project) still appears at once. */
 (function () {

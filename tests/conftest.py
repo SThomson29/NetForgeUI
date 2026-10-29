@@ -63,6 +63,10 @@ def app(tmp_data_dir, tmp_path):
 
     init_db(flask_app)
 
+    # The CSP and the script nonce templates ask for.
+    from app.security import install_headers
+    install_headers(flask_app)
+
     from app.auth import auth_bp
     from app.admin import admin_bp
     from app.projects import projects_bp

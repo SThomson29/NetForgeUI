@@ -74,7 +74,7 @@
   <div class="fw-grid" id="fw-options" style="display:none">
     <div class="form-group" style="margin-bottom:0">
       <label class="form-label" for="fw-image">Image</label>
-      <select id="fw-image" class="form-input" onchange="clearVersions()"></select>
+      <select id="fw-image" class="form-input" data-change="clearVersions"></select>
     </div>
 
     <div class="form-group" style="margin-bottom:0">
@@ -92,7 +92,7 @@
   <div class="card-header">Options</div>
 
   <label class="chk" style="display:flex;align-items:center;gap:8px">
-    <input type="checkbox" id="fw-allow-unsafe" onchange="toggleUnsafe()">
+    <input type="checkbox" id="fw-allow-unsafe" data-change="toggleUnsafe">
     Allow non-failsafe updates
   </label>
   <div class="hint" style="margin-top:4px">
@@ -117,14 +117,12 @@
   <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
     Target switches
     <span class="flex items-center gap-2">
-    <button class="btn btn-sm" id="ver-btn" onclick="checkVersions()"
+    <button class="btn btn-sm" id="ver-btn" data-click="checkVersions"
             title="Read each switch's running version and compare it with the selected image">
       Check versions
     </button>
     <button class="btn btn-sm" id="reach-btn"
-            onclick="checkReachability(
-              Array.from(document.querySelectorAll('.fw-host-cb:checked')).map(cb => cb.value),
-              document.getElementById('reach-results'), this)">
+            data-click="reachSelected">
       Check reachability
     </button>
     </span>
@@ -143,7 +141,7 @@
 <div class="card">
   <div class="flex items-center gap-2" style="justify-content:space-between">
     <div>
-      <button class="btn btn-primary" id="fw-start" onclick="startFirmware()">
+      <button class="btn btn-primary" id="fw-start" data-click="startFirmware">
         Start firmware upgrade
       </button>
       <span id="fw-status" class="text-sm text-secondary" style="margin-left:10px"></span>
@@ -181,7 +179,7 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="hideCredModal()">Cancel</button>
+      <button class="btn btn-ghost" data-click="hideCredModal">Cancel</button>
       <button class="btn btn-primary" id="cred-submit">Continue</button>
     </div>
   </div>
@@ -190,7 +188,12 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
+<script nonce="{{ csp_nonce() }}">
+function reachSelected() {
+  checkReachability(Array.from(document.querySelectorAll('.fw-host-cb:checked')).map(cb => cb.value),
+                    document.getElementById('reach-results'), this);
+}
+
 const PROJECT = {{ project_name | tojson }};
 const HOSTS   = {{ hosts | tojson }};
 let sessionCreds = null;   // memory only, never persisted

@@ -215,4 +215,4 @@ class TestRoute:
 
     def test_page_has_the_button(self, auth_client, proj):
         body = auth_client.get('/projects/admin/p/firmware').get_data(as_text=True)
-        assert 'onclick="checkVersions()"' in body and 'function checkVersions()' in body
+        assert 'data-click="checkVersions"' in body and 'function checkVersions()' in body
