@@ -11,7 +11,7 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    from .security import check_secret_key, install_origin_check
+    from .security import check_secret_key, install_headers, install_origin_check
 
     # Refuse to start with a published or trivial key rather than run with
     # sessions anyone can forge. Tests set TESTING and use their own key.
@@ -29,7 +29,7 @@ def create_app():
                                 x_proto=proxies, x_host=proxies)
 
     install_origin_check(app)
-
+    install_headers(app)
 
     login_manager.init_app(app)
     login_manager.login_view = 'auth.login'

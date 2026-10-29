@@ -3,6 +3,7 @@ Application-wide hardening that does not belong to any one blueprint.
 
     check_secret_key      refuse to start with a known or trivial SECRET_KEY
     install_origin_check  reject cross-site state-changing requests (CSRF)
+    install_headers       Content-Security-Policy and the other browser headers
     LoginThrottle         slow down password guessing
 
 Each piece is separate so it can be tested without building the whole app.
@@ -97,6 +98,61 @@ def install_origin_check(app):
                               own, app.config.get('TRUSTED_ORIGINS', [])):
             abort(403)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Response headers
+# ---------------------------------------------------------------------------
+
+def _origin(url):
+    parts = urlsplit(url or '')
+    if parts.scheme in ('http', 'https') and parts.netloc:
+        return '%s://%s' % (parts.scheme, parts.netloc.lower())
+    return None
+
+
+def content_security_policy(config):
+    """The CSP for every response.
+
+    Fonts come from Google Fonts (design.css imports them). Inline style
+    attributes are allowed: the templates use them throughout and injected
+    CSS can't run code. Forms may only submit here, except that sign-out
+    with OIDC_LOGOUT=provider is a POST that redirects to the provider,
+    and browsers check that redirect against form-action too.
+    """
+    form_action = ["'self'"]
+    if config.get('OIDC_ISSUER') and (config.get('OIDC_LOGOUT') or '').lower() == 'provider':
+        provider = _origin(config['OIDC_ISSUER'])
+        if provider:
+            form_action.append(provider)
+    directives = [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        'form-action ' + ' '.join(form_action),
+        "frame-ancestors 'none'",
+    ]
+    return '; '.join(directives)
+
+
+def install_headers(app):
+    csp = content_security_policy(app.config)
+
+    @app.after_request
+    def _security_headers(response):
+        h = response.headers
+        h['Content-Security-Policy'] = csp
+        h['X-Content-Type-Options'] = 'nosniff'
+        # frame-ancestors covers current browsers; this covers the rest.
+        h['X-Frame-Options'] = 'DENY'
+        # Change summary URLs carry the change reference and notes.
+        h['Referrer-Policy'] = 'same-origin'
+        return response
 
 
 # ---------------------------------------------------------------------------

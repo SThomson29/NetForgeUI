@@ -343,3 +343,54 @@ class TestBehindNginx:
             res = c.post('/login', headers={'X-Forwarded-For': spoof},
                          data={'username': 'a', 'password': 'bad'})
         assert res.status_code == 429, 'rotating X-Forwarded-For escaped the throttle'
+
+
+# ---------------------------------------------------------------------------
+# Response headers
+# ---------------------------------------------------------------------------
+
+def _directives(csp):
+    return {d.split()[0]: d.split()[1:] for d in csp.split('; ')}
+
+
+class TestResponseHeaders:
+
+    def test_every_response_carries_them(self, monkeypatch, tmp_path):
+        app = _real_app(monkeypatch, tmp_path, proxies=0)
+        for url in ('/login', '/healthz', '/static/css/design.css', '/no-such-page'):
+            h = app.test_client().get(url).headers
+            assert 'Content-Security-Policy' in h, url
+            assert h['X-Content-Type-Options'] == 'nosniff', url
+            assert h['X-Frame-Options'] == 'DENY', url
+            assert h['Referrer-Policy'] == 'same-origin', url
+
+    def test_policy_blocks_framing_plugins_and_base_tags(self):
+        from app.security import content_security_policy
+        d = _directives(content_security_policy({}))
+        assert d['frame-ancestors'] == ["'none'"]
+        assert d['object-src'] == ["'none'"]
+        assert d['base-uri'] == ["'self'"]
+        assert d['form-action'] == ["'self'"]
+        assert d['default-src'] == ["'self'"]
+
+    def test_google_fonts_are_allowed(self):
+        """design.css imports them; without these the UI falls back to system fonts."""
+        from app.security import content_security_policy
+        d = _directives(content_security_policy({}))
+        assert 'https://fonts.googleapis.com' in d['style-src']
+        assert 'https://fonts.gstatic.com' in d['font-src']
+
+    def test_provider_logout_may_leave_the_site(self):
+        """Sign-out POSTs here and redirects to the provider; browsers check
+        that redirect against form-action."""
+        from app.security import content_security_policy
+        d = _directives(content_security_policy({
+            'OIDC_ISSUER': 'https://Auth.Example.com/application/o/netforge/',
+            'OIDC_LOGOUT': 'provider'}))
+        assert d['form-action'] == ["'self'", 'https://auth.example.com']
+
+    def test_local_logout_keeps_forms_on_the_site(self):
+        from app.security import content_security_policy
+        d = _directives(content_security_policy({
+            'OIDC_ISSUER': 'https://auth.example.com/', 'OIDC_LOGOUT': 'local'}))
+        assert d['form-action'] == ["'self'"]

@@ -212,6 +212,11 @@ Firmware images are uploaded through the proxy and are typically 300–700 MB, w
 over most proxies' default upload limit (Nginx: 1 MB). Raise it for NetForgeUI, for
 example `client_max_body_size 2048m;` in its Nginx or SWAG site config.
 
+NetForgeUI sets its own `Content-Security-Policy`, `X-Frame-Options`,
+`X-Content-Type-Options` and `Referrer-Policy` headers, so a copy run without a
+proxy gets them too. If the proxy also sets a CSP, the browser enforces both, so
+leave the proxy's CSP unset or make sure it's no stricter than NetForgeUI's.
+
 ---
 
 ## Single sign-on
