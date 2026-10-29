@@ -41,16 +41,26 @@
       <span class="audit-when">{{ e.started_at|replace('T', ' ')|replace('Z', ' UTC') }}</span>
       <span class="audit-action"><span class="badge badge-neutral">{{ e.action_label }}</span></span>
       <span>
-        {{ e.targets|map(attribute='hostname')|join(', ') }}
+        {% if e.event %}{{ e.params.summary }}{% else %}{{ e.targets|map(attribute='hostname')|join(', ') }}{% endif %}
         <span class="audit-who">
-          {% if show_owner %}· {{ e.username }} · {{ e.owner or e.username }} / {{ e.project }}{% else %}· {{ e.username }}{% endif %}
+          · {{ e.username }}{% if show_owner and e.project %} · {{ e.owner or e.username }} / {{ e.project }}{% endif %}
           {% if e.switch_user %}· as {{ e.switch_user }}{% endif %}
         </span>
       </span>
-      <span class="badge badge-{{ e.outcome[1] }}">{{ e.outcome[0] }}</span>
+      {% if e.event %}<span></span>{% else %}<span class="badge badge-{{ e.outcome[1] }}">{{ e.outcome[0] }}</span>{% endif %}
     </summary>
 
     <div class="audit-body">
+      {% if e.event %}
+      <div class="audit-kv">
+        <span class="k">When</span><span>{{ e.started_at }}</span>
+        <span class="k">NetForgeUI user</span><span>{{ e.username }}</span>
+        {% if e.project %}<span class="k">Project</span><span>{{ e.owner }} / {{ e.project }}</span>{% endif %}
+        {% for k, v in e.params.items() if k != 'summary' %}
+        <span class="k">{{ k|replace('_', ' ')|capitalize }}</span><span>{{ v }}</span>
+        {% endfor %}
+      </div>
+      {% else %}
       {% if e.action == 'deploy_dryrun' and e.status != 'running' %}
       <div style="margin:4px 0 8px">
         <a class="btn btn-sm" href="{{ url_for('projects.change_summary', owner=e.owner or e.username, project_name=e.project, entry_id=e.id) }}">Change summary</a>
@@ -60,8 +70,8 @@
         <span class="k">Started</span><span>{{ e.started_at }}</span>
         <span class="k">Finished</span><span>{{ e.finished_at or '—' }}</span>
         <span class="k">NetForgeUI user</span><span>{{ e.username }}</span>
-        <span class="k">Project</span><span>{{ e.project }}</span>
-        {% if e.action != 'generate' %}
+        {% if e.project %}<span class="k">Project</span><span>{{ e.project }}</span>{% endif %}
+        {% if e.action not in ('generate', 'repo_pull') %}
         <span class="k">Switch login</span><span>{{ e.switch_user or '—' }}</span>
         {% endif %}
         <span class="k">Exit code</span><span>{{ e.returncode if e.returncode is not none else '—' }}</span>
@@ -71,6 +81,7 @@
       </div>
 
       {% set deploy = e.action in ('deploy_dryrun', 'deploy_push') %}
+      {% if e.targets %}
       <h4>{{ 'Hosts' if e.action == 'generate' else 'Switches' }}</h4>
       <table class="audit-table">
         <thead><tr><th>{{ 'Host' if e.action == 'generate' else 'Switch' }}</th>
@@ -90,6 +101,7 @@
         {% endfor %}
         </tbody>
       </table>
+      {% endif %}
 
       {% if e.action == 'generate' %}
       {% if e.results %}
@@ -129,6 +141,7 @@
         {{ detail_days }} days; the rest of this entry is kept.
         {% else %}Secret values in commands and output are masked.{% endif %}
       </p>
+      {% endif %}
     </div>
   </details>
   {% endfor %}

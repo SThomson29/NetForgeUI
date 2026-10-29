@@ -39,7 +39,27 @@ ACTIONS = {
     'deploy_dryrun': 'Dry run',
     'deploy_push':   'Push',
     'firmware':      'Firmware',
+    'repo_pull':     'Repo pull',
 }
+
+# One-off changes recorded as they happen, with a one-line summary in
+# params['summary'] instead of switches and results. Project ones carry the
+# project and show in its History; the rest have no project and show only
+# on the admin Audit page.
+EVENTS = {
+    'share':            'Shared',
+    'unshare':          'Unshared',
+    'transfer':         'Transferred',
+    'project_delete':   'Project deleted',
+    'user_create':      'User created',
+    'user_delete':      'User deleted',
+    'sso_link':         'SSO linked',
+    'sso_unlink':       'SSO unlinked',
+    'password_change':  'Password changed',
+    'firmware_upload':  'Image uploaded',
+    'firmware_delete':  'Image deleted',
+}
+ACTIONS.update(EVENTS)
 
 DEPLOY_ACTIONS = ('deploy_dryrun', 'deploy_push')
 
@@ -174,9 +194,23 @@ def record_start(app, *, username, project, action, switch_user, targets, params
         cur = db.execute(
             'INSERT INTO audit_log (started_at, username, owner, project, action, '
             'switch_user, targets, params, status) VALUES (?,?,?,?,?,?,?,?,?)',
-            (_now(), username, owner or username, project, action, switch_user,
+            (_now(), username, username if owner is None else owner, project, action, switch_user,
              json.dumps(targets), json.dumps(params), 'running'))
         return cur.lastrowid
+
+
+def record_event(app, *, username, action, summary, project='', owner=None, **details):
+    """Record a change that happens at once, such as sharing a project or
+    creating a user. details are shown as extra fields."""
+    params = {'summary': summary}
+    params.update({k: v for k, v in details.items() if v is not None})
+    now = _now()
+    with get_db(app) as db:
+        db.execute(
+            'INSERT INTO audit_log (started_at, finished_at, username, owner, project, '
+            'action, targets, params, status, results) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            (now, now, username, (owner or username) if project else '', project,
+             action, '[]', json.dumps(params), 'done', '[]'))
 
 
 def _clean_result(r):
@@ -245,6 +279,7 @@ def _row(r):
     for k in ('targets', 'params', 'results'):
         e[k] = json.loads(e[k]) if e.get(k) else ([] if k != 'params' else {})
     e['action_label'] = ACTIONS.get(e['action'], e['action'])
+    e['event'] = e['action'] in EVENTS
     e['outcome'] = _outcome(e)
     return e
 
@@ -256,6 +291,10 @@ def _outcome(e):
         return ('Running', 'blue')
     if status == 'interrupted':
         return ('Interrupted by restart', 'yellow')
+    if e['action'] in EVENTS:
+        return ('Done', 'neutral')
+    if e['action'] == 'repo_pull':
+        return ('Pulled', 'green') if status == 'done' else ('Failed', 'red')
     n = len(e['targets'])
     if e['action'] == 'generate':
         if status != 'done':

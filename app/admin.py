@@ -6,6 +6,7 @@ import threading
 from flask import (Blueprint, render_template, redirect, url_for,
                    request, flash, current_app, abort, jsonify)
 from flask_login import login_required, current_user
+from . import audit
 from .models import User
 from .utils import ensure_workspace, user_dir
 from .ssh_setup import get_git_env
@@ -20,6 +21,11 @@ _pull_lock = threading.Lock()
 def _require_admin():
     if not current_user.is_admin:
         abort(403)
+
+
+def _record(action, summary, **details):
+    audit.record_event(current_app._get_current_object(), username=current_user.username,
+                       action=action, summary=summary, **details)
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +65,7 @@ def create_user():
 
     User.create(username, password, app, is_admin=is_admin)
     ensure_workspace(app, username)
+    _record('user_create', '%s%s' % (username, ' (admin)' if is_admin else ''))
     flash(f'User {username} created.', 'success')
     return redirect(url_for('admin.admin_page'))
 
@@ -93,6 +100,7 @@ def delete_user(user_id):
 
     sharing.forget_user(app, user.username)
     User.delete(user_id, app)
+    _record('user_delete', user.username)
     flash(f'User {user.username} deleted.', 'success')
     return redirect(url_for('admin.admin_page'))
 
@@ -146,11 +154,14 @@ def link_sso(user_id):
         workspace = user_dir(app, existing.username)
         if os.path.isdir(workspace):
             shutil.rmtree(workspace)
+        _record('sso_link', '%s linked to %s' % (user.username, value),
+                removed_account=existing.username)
         flash(f'{user.username} is now linked to that SSO identity; the empty account '
               f'{existing.username} was removed.', 'success')
         return redirect(url_for('admin.admin_page'))
 
     User.set_link_email(user.id, value, app)
+    _record('sso_link', '%s will link to %s at next SSO sign-in' % (user.username, value))
     flash(f'{user.username} will be linked when {value} next signs in by SSO.', 'success')
     return redirect(url_for('admin.admin_page'))
 
@@ -168,6 +179,7 @@ def unlink_sso(user_id):
         flash('You cannot unlink your own account.', 'error')
         return redirect(url_for('admin.admin_page'))
     User.unlink_sso(user.id, app)
+    _record('sso_unlink', user.username)
     flash(f'{user.username} is no longer linked to SSO.', 'success')
     return redirect(url_for('admin.admin_page'))
 
@@ -294,6 +306,7 @@ def firmware_upload():
                           max_bytes=app.config.get('FIRMWARE_MAX_UPLOAD_MB', 2048) * 1024 * 1024)
     except ImageError as e:
         return jsonify(ok=False, error=str(e)), 400
+    _record('firmware_upload', row['name'], version=row.get('version'), sha256=row.get('sha256'))
     return jsonify(ok=True, image=row)
 
 
@@ -306,6 +319,7 @@ def firmware_delete():
     name = request.form.get('name', '')
     try:
         delete_image(app, name, in_use=_images_in_use())
+        _record('firmware_delete', name)
         flash(f'{name} deleted.', 'success')
     except ImageError as e:
         flash(str(e), 'error')
@@ -354,12 +368,13 @@ def _get_repo_status(app):
         return {'cloned': True, 'branch': '?', 'commit': str(e), 'remote': None}
 
 
-def _run_pull(repo_path, repo_url, git_env):
+def _run_pull(repo_path, repo_url, git_env, app=None, audit_id=None):
     """Clone or pull the config repo. Runs in a background thread."""
     with _pull_lock:
         _pull_job['status'] = 'running'
         _pull_job['output'] = ''
         _pull_job['error']  = ''
+        _pull_job.pop('returncode', None)
 
     try:
         if os.path.isdir(os.path.join(repo_path, '.git')):
@@ -379,6 +394,7 @@ def _run_pull(repo_path, repo_url, git_env):
 
         with _pull_lock:
             _pull_job['output'] = result.stdout
+            _pull_job['returncode'] = result.returncode
             if result.returncode == 0:
                 _pull_job['status'] = 'done'
             else:
@@ -389,6 +405,14 @@ def _run_pull(repo_path, repo_url, git_env):
         with _pull_lock:
             _pull_job['status'] = 'failed'
             _pull_job['error']  = str(e)
+
+    if app is not None:
+        with _pull_lock:
+            job = dict(_pull_job)
+        # A clone or pull prints the remote URL, which can carry a token.
+        job['output'] = re.sub(r'(://)[^/@\s]+@', r'\1********@',
+                               job['output'] or job['error'] or '')
+        audit.record_finish(app, audit_id, job)
 
 
 @admin_bp.route('/admin/pull', methods=['POST'])
@@ -408,10 +432,13 @@ def pull_repo():
         return jsonify({'ok': False, 'error': 'CONFIGGEN_REPO_URL is not set and no repo is cloned.'})
 
     git_env = get_git_env(app)
+    audit_id = audit.record_start(app, username=current_user.username, project='',
+                                  owner='', action='repo_pull', switch_user=None,
+                                  targets=[], params={})
 
     t = threading.Thread(
         target=_run_pull,
-        args=(repo_path, repo_url, git_env),
+        args=(repo_path, repo_url, git_env, app, audit_id),
         daemon=True
     )
     t.start()

@@ -319,6 +319,9 @@ def delete(project_name):
     app = current_app._get_current_object()
     delete_project(app, _owner(), project_name)
     sharing.forget_project(app, _owner(), project_name)
+    audit.record_event(app, username=current_user.username, action='project_delete',
+                       owner=_owner(), project=project_name,
+                       summary='Deleted %s' % project_name)
     flash(f'Project {project_name} deleted.', 'success')
     return redirect(url_for('projects.projects_page'))
 
@@ -781,8 +784,14 @@ def share_project(project_name):
     kind = request.form.get('kind', 'user')
     principal = request.form.get('principal', '')
     try:
+        level = request.form.get('level', '')
         sharing.set_share(app, _owner(), project_name, kind, principal,
-                          request.form.get('level', ''), current_user.username)
+                          level, current_user.username)
+        principal = principal.strip().lower() if kind == 'user' else principal.strip()
+        audit.record_event(app, username=current_user.username, action='share',
+                           owner=_owner(), project=project_name,
+                           summary='%s %s: %s' % (kind.capitalize(), principal,
+                                                  sharing.LEVEL_LABELS.get(level, level)))
         flash('Shared with %s %s.' % (kind, principal.strip()), 'success')
     except sharing.SharingError as e:
         flash(str(e), 'error')
@@ -795,6 +804,9 @@ def unshare_project(project_name):
     app = current_app._get_current_object()
     kind, principal = request.form.get('kind', ''), request.form.get('principal', '')
     sharing.remove_share(app, _owner(), project_name, kind, principal)
+    audit.record_event(app, username=current_user.username, action='unshare',
+                       owner=_owner(), project=project_name,
+                       summary='%s %s removed' % (kind.capitalize(), principal))
     flash('Removed %s %s.' % (kind, principal), 'success')
     return redirect(url_for('projects.sharing_page', project_name=project_name))
 
@@ -810,6 +822,10 @@ def transfer_project(project_name):
     except sharing.SharingError as e:
         flash(str(e), 'error')
         return redirect(url_for('projects.sharing_page', project_name=project_name))
+    # Under the new owner, where the rest of the project's history now is.
+    audit.record_event(app, username=current_user.username, action='transfer',
+                       owner=new_owner, project=project_name,
+                       summary='From %s to %s' % (_owner(), new_owner))
     flash('%s now belongs to %s.' % (project_name, new_owner), 'success')
     return redirect(url_for('projects.sharing_page', owner=new_owner,
                             project_name=project_name))

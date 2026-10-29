@@ -226,7 +226,7 @@ class TestOwnership:
         assert not os.path.exists(project_dir(app, 'alice', 'site'))
         shares = {(s['principal'], s['level']) for s in sharing.shares_for(app, 'bob', 'site')}
         assert shares == {('carol', 'view'), ('alice', 'edit')}
-        assert [e['owner'] for e in audit.entries(app, owner='bob', project='site')] == ['bob']
+        assert {e['owner'] for e in audit.entries(app, owner='bob', project='site')} == {'bob'}
         assert people['alice'].get('/projects/bob/site/hosts').status_code == 200
 
     def test_transfer_to_the_current_member_drops_their_share(self, app, people):
