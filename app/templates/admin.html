@@ -96,7 +96,7 @@
         {% if user.id != current_user.id %}
         <form method="POST" action="{{ url_for('admin.delete_user', user_id=user.id) }}"
               style="display:inline"
-              onsubmit='return confirm("Delete " + {{ user.username|tojson }} + "? Their workspace and all generated configs will be permanently removed.")'>
+              data-confirm="Delete {{ user.username }}? Their workspace and all generated configs will be permanently removed.">
           <button type="submit" class="btn btn-sm btn-danger">Delete</button>
         </form>
         {% else %}

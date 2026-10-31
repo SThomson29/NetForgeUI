@@ -142,13 +142,46 @@ def project_firmware(project_name):
 
 @login_required
 def firmware_images(project_name):
-    """List .swi images available to select."""
+    """The .swi images available to select, with their versions."""
+    from .firmware_images import catalogue
     app = current_app._get_current_object()
     return jsonify({
         'ok': True,
-        'images': list_firmware_images(app),
+        'images': [{'name': i['name'], 'version': i['version'], 'platform': i['platform']}
+                   for i in catalogue(app)],
         'firmware_dir': app.config.get('FIRMWARE_DIR', ''),
     })
+
+
+@login_required
+def firmware_versions(project_name):
+    """What the chosen switches run, against the chosen image.
+
+    POST {hosts: [hostname], switch_username, switch_password, image}. The
+    request names switches; their addresses come from the saved mapping.
+    """
+    from .firmware_images import catalogue
+    from .firmware_versions import check
+    app = current_app._get_current_object()
+    body = json_body()
+    user = str(body.get('switch_username') or '').strip()
+    password = body.get('switch_password') or ''
+    if not user or not password:
+        return jsonify(ok=False, error='Enter the switch username and password.'), 400
+    wanted = body.get('hosts') or []
+    if not isinstance(wanted, list):
+        return jsonify(ok=False, error='hosts must be a list of switch names.'), 400
+    wanted = {str(h) for h in wanted}
+    mapped = [h for h in _load_mapping(app, g.project_owner, project_name).get('hosts', [])
+              if isinstance(h, dict) and h.get('hostname') in wanted and h.get('mgmt_ip')]
+    problems = validate_targets(mapped)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
+    name = str(body.get('image') or '')
+    image = next(({'platform': i['platform'], 'version': i['version']}
+                  for i in catalogue(app) if i['name'] == name), None)
+    return jsonify(ok=True, image=image,
+                   results=check(mapped, user, str(password), image))
 
 
 @login_required

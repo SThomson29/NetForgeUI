@@ -8,7 +8,7 @@
 .reach-table td.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
 .reach-summary { font-size: 12px; color: var(--text-secondary); margin-top: 10px; }
 </style>
-<script>
+<script nonce="{{ csp_nonce() }}">
 function reachCell(r) {
   if (r === null || r === undefined) return '<span class="badge badge-neutral">no address</span>';
   return r.ok

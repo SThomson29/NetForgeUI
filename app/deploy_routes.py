@@ -234,25 +234,48 @@ def switches_in_use(project_key, hostnames):
 
 # ── Routes ─────────────────────────────────────────────────
 
+def push_states(app, username, project_name, mapping=None):
+    """Each mapped switch's config against what it last confirmed from a
+    push: push_state is 'changed', 'never', 'same' or 'none' (no config).
+    The Deploy page ticks 'changed' and 'never'; the projects list counts
+    them."""
+    if mapping is None:
+        mapping = _load_mapping(app, username, project_name)
+    config_dir = project_generated_configs_dir(app, username, project_name)
+    pushed = audit.last_pushed(app, username, project_name)
+    out = []
+    for h in mapping['hosts']:
+        # NetForge names a full generation <hostname>_FULL.ios; tag-filtered
+        # runs produce <hostname>_PARTIAL_<tags>.ios. There is no bare
+        # <hostname>.ios, so match the full-run name.
+        config_file = os.path.join(config_dir, f"{h['hostname']}_FULL.ios")
+        has_config = os.path.exists(config_file)
+        last = pushed.get(h['hostname'])
+        if not has_config:
+            state = 'none'
+        elif not last:
+            state = 'never'
+        elif last['sha256'] == audit.file_fingerprint(config_file):
+            state = 'same'
+        else:
+            state = 'changed'
+        out.append({
+            'hostname': h['hostname'],
+            'mgmt_ip': h.get('mgmt_ip', ''),
+            'has_config': has_config,
+            'push_state': state,
+            'last_push': last,
+        })
+    return out
+
+
 @login_required
 def project_deploy(project_name):
     """Render the deploy tab."""
     app = current_app._get_current_object()
     username = g.project_owner
     mapping = _load_mapping(app, username, project_name)
-    config_dir = project_generated_configs_dir(app, username, project_name)
-
-    enriched = []
-    for h in mapping['hosts']:
-        # NetForge names a full generation <hostname>_FULL.ios; tag-filtered
-        # runs produce <hostname>_PARTIAL_<tags>.ios. There is no bare
-        # <hostname>.ios, so match the full-run name.
-        config_file = os.path.join(config_dir, f"{h['hostname']}_FULL.ios")
-        enriched.append({
-            'hostname': h['hostname'],
-            'mgmt_ip': h.get('mgmt_ip', ''),
-            'has_config': os.path.exists(config_file)
-        })
+    enriched = push_states(app, username, project_name, mapping)
 
     return render_template(
         'project_deploy.html',
@@ -408,7 +431,8 @@ def deploy_dryrun(project_name):
         owner=current_user.username, project_name=_project_key(project_name),
         audit_id=audit_id,
     )
-    return jsonify(ok=True, job_id=job_id)
+    # The audit entry is what a change summary is built from.
+    return jsonify(ok=True, job_id=job_id, audit_id=audit_id)
 
 
 @login_required

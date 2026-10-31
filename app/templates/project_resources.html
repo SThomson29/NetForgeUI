@@ -30,10 +30,10 @@
 {% block content %}
 
 <div class="tab-bar">
-  <button class="tab-btn active" onclick="switchTab('pools')">Pools</button>
-  <button class="tab-btn" onclick="switchTab('conventions')">Conventions</button>
-  <button class="tab-btn" onclick="switchTab('common')">Common Infrastructure</button>
-  <button class="tab-btn" onclick="switchTab('allocations')">Allocations</button>
+  <button class="tab-btn active" data-click="switchTab" data-args='["pools"]'>Pools</button>
+  <button class="tab-btn" data-click="switchTab" data-args='["conventions"]'>Conventions</button>
+  <button class="tab-btn" data-click="switchTab" data-args='["common"]'>Common Infrastructure</button>
+  <button class="tab-btn" data-click="switchTab" data-args='["allocations"]'>Allocations</button>
 </div>
 
 <!-- ============================================================ -->
@@ -51,13 +51,13 @@
       </div>
       {% if pool.type != 'vlan_supernet' %}
       <button class="btn btn-sm"
-              onclick='editPool({{ pool.id|tojson }}, {{ pool.name|tojson }}, {{ pool.subnet|tojson }})'>Edit</button>
+              data-click="editPool" data-args='{{ [pool.id, pool.name, pool.subnet]|tojson }}'>Edit</button>
       {% elif pool.carve_prefix %}
       <button class="btn btn-sm"
-              onclick='convertSupernet({{ pool.id|tojson }}, {{ pool.name|tojson }}, {{ pool.carve_prefix|tojson }})'
+              data-click="convertSupernet" data-args='{{ [pool.id, pool.name, pool.carve_prefix]|tojson }}'
               title="Allow blocks of different sizes in this supernet">Use mixed sizes</button>
       {% endif %}
-      <button class="btn btn-sm btn-danger" onclick='removePool({{ pool.id|tojson }}, {{ pool.name|tojson }})'>Remove</button>
+      <button class="btn btn-sm btn-danger" data-click="removePool" data-args='{{ [pool.id, pool.name]|tojson }}'>Remove</button>
     </div>
     <div style="font-size:12px;color:#666;font-family:'Courier New',monospace">
       {{ pool.subnet }}
@@ -83,7 +83,7 @@
       </div>
       <div class="fld">
         <label class="lbl">Type</label>
-        <select class="form-select" id="pool-type" onchange="updatePoolForm()">
+        <select class="form-select" id="pool-type" data-change="updatePoolForm">
           <option value="unique">Unique</option>
           <option value="point_to_point">Point-to-point (/31)</option>
           <option value="vlan_supernet">Supernet</option>
@@ -98,14 +98,14 @@
     <div class="grid3" id="pool-source-fields" style="display:none">
       <div class="fld">
         <label class="lbl">Address source</label>
-        <select class="form-select" id="pool-source" onchange="updatePoolForm()">
+        <select class="form-select" id="pool-source" data-change="updatePoolForm">
           <option value="own">Its own range</option>
           <option value="delegate">Take a subnet from a supernet</option>
         </select>
       </div>
       <div class="fld" id="field-parent" style="display:none">
         <label class="lbl">Supernet</label>
-        <select class="form-select" id="pool-parent" onchange="loadCarvedSubnets()"></select>
+        <select class="form-select" id="pool-parent" data-change="loadCarvedSubnets"></select>
       </div>
       <div class="fld" id="field-parent-subnet" style="display:none">
         <label class="lbl">Subnet to take</label>
@@ -121,7 +121,7 @@
       </div>
       <div class="fld" id="field-carve" style="display:none">
         <label class="lbl">Block sizes</label>
-        <select class="form-select" id="pool-carve-mode" onchange="updatePoolForm()">
+        <select class="form-select" id="pool-carve-mode" data-change="updatePoolForm">
           <option value="fixed">Fixed size — pre-carve the whole range</option>
           <option value="manual">Mixed sizes — carve blocks as needed</option>
         </select>
@@ -132,7 +132,7 @@
         <div class="form-hint">Every block will be this size.</div>
       </div>
     </div>
-    <button class="btn btn-primary" onclick="addPool()" style="margin-top:4px">Add pool</button>
+    <button class="btn btn-primary" data-click="addPool" style="margin-top:4px">Add pool</button>
   </div>
 </div>
 
@@ -161,7 +161,7 @@
         <div class="hint">Number of addresses reserved at the start of each subnet (for infrastructure).</div>
       </div>
     </div>
-    <button class="btn btn-primary" onclick="saveConventions()" style="margin-top:8px">Save conventions</button>
+    <button class="btn btn-primary" data-click="saveConventions" style="margin-top:8px">Save conventions</button>
     <span id="conv-status" style="font-size:12px;color:#666;margin-left:10px"></span>
   </div>
 </div>
@@ -183,13 +183,13 @@
   <div class="card">
     <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
       {{ label }}
-      <button class="btn btn-sm" onclick='addCommonEntry({{ key|tojson }}, {{ placeholder|tojson }})'>+ Add</button>
+      <button class="btn btn-sm" data-click="addCommonEntry" data-args='{{ [key, placeholder]|tojson }}'>+ Add</button>
     </div>
     <div id="common-{{ key }}">
       {% for ip in config.common.get(key, []) %}
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px" class="common-entry" data-key="{{ key }}">
-        <input class="form-input" type="text" value="{{ ip }}" style="max-width:220px" onchange="saveCommon()">
-        <button class="btn btn-sm btn-danger" onclick="removeCommonEntry(this)">Remove</button>
+        <input class="form-input" type="text" value="{{ ip }}" style="max-width:220px" data-change="saveCommon">
+        <button class="btn btn-sm btn-danger" data-click="removeCommonEntry">Remove</button>
       </div>
       {% endfor %}
     </div>
@@ -232,7 +232,7 @@
           <td class="meta">{{ entry.interface }}</td>
           <td style="text-align:right">
             <button class="btn btn-sm btn-danger"
-              onclick='releaseUnique({{ pool.id|tojson }}, {{ ip|tojson }})'>Release</button>
+              data-click="releaseUnique" data-args='{{ [pool.id, ip]|tojson }}'>Release</button>
           </td>
         </tr>
         {% endfor %}
@@ -272,7 +272,7 @@
           </td>
           <td style="text-align:right">
             <button class="btn btn-sm btn-danger"
-              onclick='releasePtp({{ pool.id|tojson }}, {{ ip|tojson }})'>Release</button>
+              data-click="releasePtp" data-args='{{ [pool.id, ip]|tojson }}'>Release</button>
           </td>
         </tr>
         {% endif %}
@@ -309,12 +309,12 @@
         <input class="form-input" type="number" id="blk-want-{{ pool.id }}"
                min="1" max="32" value="24">
       </div>
-      <button class="btn btn-sm" onclick='suggestBlock({{ pool.id|tojson }})'>Find free</button>
+      <button class="btn btn-sm" data-click="suggestBlock" data-args='{{ [pool.id]|tojson }}'>Find free</button>
       <span id="blk-scope-{{ pool.id }}" style="display:none;font-size:12px;color:#92400e">
       </span>
-      <button class="btn btn-sm btn-ghost" onclick='clearCarveScope({{ pool.id|tojson }})'
+      <button class="btn btn-sm btn-ghost" data-click="clearCarveScope" data-args='{{ [pool.id]|tojson }}'
               title="Add at the top level instead">Top level</button>
-      <button class="btn btn-sm btn-primary" onclick='carveBlock({{ pool.id|tojson }})'>Add block</button>
+      <button class="btn btn-sm btn-primary" data-click="carveBlock" data-args='{{ [pool.id]|tojson }}'>Add block</button>
     </div>
     <div id="blk-error-{{ pool.id }}" style="display:none;color:#dc2626;font-size:13px;margin-bottom:10px"></div>
     <div class="form-hint" style="margin-bottom:12px">
@@ -361,26 +361,26 @@
                switch yet, and releasing to add one would drop its derived
                SVI addresses. #}
             <button class="btn btn-sm"
-              onclick='openVlanAssign({{ pool.id|tojson }}, {{ subnet|tojson }})'>Edit VLAN</button>
+              data-click="openVlanAssign" data-args='{{ [pool.id, subnet]|tojson }}'>Edit VLAN</button>
             <button class="btn btn-sm btn-danger"
-              onclick='releaseVlan({{ pool.id|tojson }}, {{ subnet|tojson }})'>Release</button>
+              data-click="releaseVlan" data-args='{{ [pool.id, subnet]|tojson }}'>Release</button>
             {% elif entry.status == 'container' %}
             <button class="btn btn-sm"
-              onclick='carveInto({{ pool.id|tojson }}, {{ subnet|tojson }})'>Add inside</button>
+              data-click="carveInto" data-args='{{ [pool.id, subnet]|tojson }}'>Add inside</button>
             {% else %}
             <button class="btn btn-sm"
-              onclick='openVlanAssign({{ pool.id|tojson }}, {{ subnet|tojson }})'>
+              data-click="openVlanAssign" data-args='{{ [pool.id, subnet]|tojson }}'>
               {% if entry.vlan_id %}Edit VLAN{% else %}Assign VLAN{% endif %}
             </button>
             {# Only a mixed-size supernet has a block editor to subdivide into. #}
             {% if not pool.carve_prefix %}
             <button class="btn btn-sm"
-              onclick='carveInto({{ pool.id|tojson }}, {{ subnet|tojson }})'>Subdivide</button>
+              data-click="carveInto" data-args='{{ [pool.id, subnet]|tojson }}'>Subdivide</button>
             {% endif %}
             {% endif %}
             {% if not pool.carve_prefix and entry.status not in ['delegated', 'container'] %}
             <button class="btn btn-sm btn-danger"
-              onclick='removeBlock({{ pool.id|tojson }}, {{ subnet|tojson }})'>Remove</button>
+              data-click="removeBlock" data-args='{{ [pool.id, subnet]|tojson }}'>Remove</button>
             {% endif %}
           </td>
         </tr>
@@ -399,7 +399,7 @@
 
 </div>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 const PROJECT = {{ project_name | tojson }};
 
 function switchTab(name) {
@@ -546,13 +546,13 @@ function addCommonEntry(key, placeholder) {
   div.className = 'common-entry';
   div.dataset.key = key;
   div.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
-  div.innerHTML = '<input class="form-input" type="text" placeholder="' + placeholder + '" style="max-width:220px" onchange="saveCommon()">' +
-    '<button class="btn btn-sm btn-danger" onclick="removeCommonEntry(this)">Remove</button>';
+  div.innerHTML = '<input class="form-input" type="text" placeholder="' + placeholder + '" style="max-width:220px" data-change="saveCommon">' +
+    '<button class="btn btn-sm btn-danger" data-click="removeCommonEntry">Remove</button>';
   container.appendChild(div);
 }
 
-function removeCommonEntry(btn) {
-  btn.closest('.common-entry').remove();
+function removeCommonEntry() {
+  this.closest('.common-entry').remove();
   saveCommon();
 }
 
@@ -862,8 +862,8 @@ document.addEventListener('DOMContentLoaded', updatePoolForm);
     </div>
     <div id="pe-error" style="display:none;color:#dc2626;font-size:13px;margin-top:8px"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
-      <button class="btn" onclick="closeEditPool()">Cancel</button>
-      <button class="btn btn-primary" onclick="submitEditPool()">Save</button>
+      <button class="btn" data-click="closeEditPool">Cancel</button>
+      <button class="btn btn-primary" data-click="submitEditPool">Save</button>
     </div>
   </div>
 </div>
@@ -902,8 +902,8 @@ document.addEventListener('DOMContentLoaded', updatePoolForm);
     </div>
     <div id="vlan-error" style="display:none;color:#dc2626;font-size:13px;margin-top:8px"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
-      <button class="btn" onclick="closeVlanAssign()">Cancel</button>
-      <button class="btn btn-primary" onclick="submitVlanAssign()">Assign</button>
+      <button class="btn" data-click="closeVlanAssign">Cancel</button>
+      <button class="btn btn-primary" data-click="submitVlanAssign">Assign</button>
     </div>
   </div>
 </div>

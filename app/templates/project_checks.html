@@ -43,7 +43,7 @@ details.dismissed summary { cursor: pointer; font-size: 13px; color: var(--text-
   </div>
   <button class="btn btn-ghost btn-sm" data-key="{{ f.key }}"
           data-action="{{ 'restore' if dismissed else 'dismiss' }}"
-          onclick="checkAction(this)">{{ 'Restore' if dismissed else 'Dismiss' }}</button>
+          data-click="checkAction">{{ 'Restore' if dismissed else 'Dismiss' }}</button>
 </div>
 {% endmacro %}
 
@@ -82,9 +82,10 @@ details.dismissed summary { cursor: pointer; font-size: 13px; color: var(--text-
 </details>
 {% endif %}
 
-<script>
+<script nonce="{{ csp_nonce() }}">
 const PROJECT = {{ project_name | tojson }};
-async function checkAction(btn) {
+async function checkAction() {
+  const btn = this;
   btn.disabled = true;
   try {
     const res = await fetch(PROJECT_BASE + '/checks/' + btn.dataset.action, {

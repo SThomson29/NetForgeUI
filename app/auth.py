@@ -3,7 +3,7 @@ from flask import (Blueprint, render_template, redirect, url_for, request, flash
 from flask_login import login_user, logout_user, login_required, current_user
 from .models import User
 from .utils import ensure_workspace
-from . import sso
+from . import audit, sso
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -111,6 +111,8 @@ def account():
             flash('Password must be at least 8 characters.', 'error')
         else:
             User.change_password(current_user.id, new_pw, app)
+            audit.record_event(app, username=current_user.username,
+                               action='password_change', summary=current_user.username)
             # The change ends every existing session, this one included;
             # re-issue this one so the user is not logged out mid-page.
             login_user(User.get(current_user.id, app))

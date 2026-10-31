@@ -6,13 +6,14 @@ import uuid
 import threading
 
 from flask import (Blueprint, render_template, redirect, url_for,
-                   request, flash, current_app, jsonify, send_file, abort, g)
+                   request, flash, current_app, jsonify, send_file, abort, g,
+                   Response)
 from flask_login import login_required, current_user
 
 from .project import (
     sync_allocations as _sync_allocations,
     list_projects, create_project, delete_project,
-    get_project_config,
+    get_project_config, get_inventory, record_inventory,
     add_pool, remove_pool, update_pool, convert_supernet_to_mixed,
     PoolOverlapError,
     get_available_ips, allocate_unique, release_unique,
@@ -94,6 +95,8 @@ _REQUIRED = {
     'projects.deploy_dryrun':       sharing.DEPLOY,
     'projects.deploy_push':         sharing.DEPLOY,
     'projects.firmware_run':        sharing.DEPLOY,
+    'projects.firmware_versions':   sharing.DEPLOY,
+    'projects.verify_read':         sharing.DEPLOY,
     'projects.reachability':        sharing.DEPLOY,
     # A GET that writes the mapping.
     'projects.deploy_auto_populate': sharing.EDIT,
@@ -140,6 +143,13 @@ def _check_project_access():
                                                 sharing.LEVEL_LABELS[wanted].lower())}), 403
         abort(403)
     g.project_level = level
+
+
+@projects_bp.app_template_global()
+def static_url(filename):
+    """A static file's URL with a content fingerprint; see assets.py."""
+    from .assets import static_url as _static_url
+    return _static_url(filename)
 
 
 @projects_bp.app_context_processor
@@ -217,6 +227,27 @@ def search():
                            level_labels=sharing.LEVEL_LABELS)
 
 
+@projects_bp.route('/projects/<owner>/<project_name>/status')
+@login_required
+def project_status(project_name):
+    """What needs doing, for the badges on the projects list: switches
+    whose config is out of date, configs changed since their last push or
+    never pushed, and the latest push. Fetched after the list renders, so
+    a long list stays quick."""
+    from .deploy_routes import push_states
+    app = current_app._get_current_object()
+    owner = _owner()
+    stale = checks.stale_configs(app, owner, project_name)
+    states = push_states(app, owner, project_name)
+    pushes = [s['last_push'] for s in states if s['last_push']]
+    last = max(pushes, key=lambda p: p['at'], default=None)
+    return jsonify(ok=True,
+                   out_of_date=len(stale),
+                   changed=sum(1 for s in states if s['push_state'] == 'changed'),
+                   never=sum(1 for s in states if s['push_state'] == 'never'),
+                   last_push={'at': last['at'], 'by': last['by']} if last else None)
+
+
 @projects_bp.route('/projects/<owner>/<project_name>/export')
 @login_required
 def export_project_route(project_name):
@@ -288,6 +319,9 @@ def delete(project_name):
     app = current_app._get_current_object()
     delete_project(app, _owner(), project_name)
     sharing.forget_project(app, _owner(), project_name)
+    audit.record_event(app, username=current_user.username, action='project_delete',
+                       owner=_owner(), project=project_name,
+                       summary='Deleted %s' % project_name)
     flash(f'Project {project_name} deleted.', 'success')
     return redirect(url_for('projects.projects_page'))
 
@@ -320,7 +354,8 @@ def hosts_page(project_name):
     app   = current_app._get_current_object()
     hosts = read_project_hosts(app, _owner(), project_name)
     return render_template('project_hosts.html',
-                           project_name=project_name, hosts=hosts)
+                           project_name=project_name, hosts=hosts,
+                           inventory=get_inventory(app, _owner(), project_name))
 
 
 @projects_bp.route('/projects/<owner>/<project_name>/hosts/add', methods=['POST'])
@@ -543,10 +578,18 @@ def generate_page(project_name):
     app     = current_app._get_current_object()
     hosts   = read_project_hosts(app, _owner(), project_name)
     configs = list_project_generated_configs(app, _owner(), project_name)
+    # Switches changed since their full config was generated, which the
+    # page offers to regenerate in one go. A stale PARTIAL config alone
+    # doesn't count: a full run wouldn't refresh it.
+    stale = checks.stale_configs(app, _owner(), project_name)
+    stale_full = sorted(h for h, files in stale.items() if '%s_FULL.ios' % h in files)
+    stale_partial = sorted(h for h in stale if h not in stale_full)
     return render_template('project_generate.html',
                            project_name=project_name,
                            hosts=hosts,
                            configs=configs,
+                           stale_full=stale_full,
+                           stale_partial=stale_partial,
                            checks_summary=checks.summary(
                                app, _owner(), project_name))
 
@@ -741,8 +784,14 @@ def share_project(project_name):
     kind = request.form.get('kind', 'user')
     principal = request.form.get('principal', '')
     try:
+        level = request.form.get('level', '')
         sharing.set_share(app, _owner(), project_name, kind, principal,
-                          request.form.get('level', ''), current_user.username)
+                          level, current_user.username)
+        principal = principal.strip().lower() if kind == 'user' else principal.strip()
+        audit.record_event(app, username=current_user.username, action='share',
+                           owner=_owner(), project=project_name,
+                           summary='%s %s: %s' % (kind.capitalize(), principal,
+                                                  sharing.LEVEL_LABELS.get(level, level)))
         flash('Shared with %s %s.' % (kind, principal.strip()), 'success')
     except sharing.SharingError as e:
         flash(str(e), 'error')
@@ -755,6 +804,9 @@ def unshare_project(project_name):
     app = current_app._get_current_object()
     kind, principal = request.form.get('kind', ''), request.form.get('principal', '')
     sharing.remove_share(app, _owner(), project_name, kind, principal)
+    audit.record_event(app, username=current_user.username, action='unshare',
+                       owner=_owner(), project=project_name,
+                       summary='%s %s removed' % (kind.capitalize(), principal))
     flash('Removed %s %s.' % (kind, principal), 'success')
     return redirect(url_for('projects.sharing_page', project_name=project_name))
 
@@ -770,9 +822,99 @@ def transfer_project(project_name):
     except sharing.SharingError as e:
         flash(str(e), 'error')
         return redirect(url_for('projects.sharing_page', project_name=project_name))
+    # Under the new owner, where the rest of the project's history now is.
+    audit.record_event(app, username=current_user.username, action='transfer',
+                       owner=new_owner, project=project_name,
+                       summary='From %s to %s' % (_owner(), new_owner))
     flash('%s now belongs to %s.' % (project_name, new_owner), 'success')
     return redirect(url_for('projects.sharing_page', owner=new_owner,
                             project_name=project_name))
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/history/<int:entry_id>/summary')
+@login_required
+def change_summary(project_name, entry_id):
+    """A dry run as a change summary: printable, or ?format=text to paste
+    into a ticket. ?ref= and ?notes= add a change reference and notes."""
+    from . import change_summary as cs
+    app = current_app._get_current_object()
+    summary = cs.build(app, _owner(), project_name, entry_id)
+    if summary is None:
+        abort(404)
+    ref = request.args.get('ref', '').strip()[:200]
+    notes = request.args.get('notes', '').strip()[:4000]
+    if request.args.get('format') == 'text':
+        return Response(cs.as_text(summary, ref, notes), mimetype='text/plain',
+                        headers={'Content-Disposition': 'attachment; filename='
+                                 '"change-summary-%s-%d.txt"' % (project_name, entry_id)})
+    return render_template('change_summary.html', s=summary, ref=ref, notes=notes,
+                           project_name=project_name, entry_id=entry_id)
+
+
+# ---------------------------------------------------------------------------
+# Verify — inventory and cabling, read from the switches
+# ---------------------------------------------------------------------------
+
+@projects_bp.route('/projects/<owner>/<project_name>/verify')
+@login_required
+def verify_page(project_name):
+    from .deploy_routes import _load_mapping
+    app = current_app._get_current_object()
+    hosts = _load_mapping(app, _owner(), project_name).get('hosts', [])
+    return render_template('project_verify.html', project_name=project_name,
+                           hosts=hosts, inventory=get_inventory(app, _owner(), project_name))
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/verify/read', methods=['POST'])
+@login_required
+def verify_read(project_name):
+    """Read every mapped switch's inventory and LLDP neighbours, store the
+    inventory, and compare the neighbours with the links the design implies.
+
+    POST {switch_username, switch_password}. Addresses come from the saved
+    mapping; the request names nothing.
+    """
+    from . import cabling, switch_read
+    from .ansible_safe import validate_targets
+    from .deploy_routes import _load_mapping
+    app = current_app._get_current_object()
+    owner = _owner()
+    body = json_body()
+    user = str(body.get('switch_username') or '').strip()
+    password = body.get('switch_password') or ''
+    if not user or not password:
+        return jsonify(ok=False, error='Enter the switch username and password.'), 400
+    hosts = [h for h in _load_mapping(app, owner, project_name).get('hosts', [])
+             if isinstance(h, dict) and h.get('hostname') and h.get('mgmt_ip')]
+    if not hosts:
+        return jsonify(ok=False, error='No switches have a management IP. '
+                                       'Add them on the Deployment IPs page.'), 400
+    problems = validate_targets(hosts)
+    if problems:
+        return jsonify(ok=False, error='; '.join(problems)), 400
+
+    reads = switch_read.read_all(hosts, user, str(password))
+    swapped = record_inventory(app, owner, project_name,
+                               {h: r['inventory'] for h, r in reads.items() if r.get('ok')},
+                               current_user.username)
+    inventory = get_inventory(app, owner, project_name)
+
+    d = checks._load(app, owner, project_name)
+    pairs, _vsx, _findings = checks._vsx_pairs(d)
+    expected = cabling.expectations(d['states'], pairs)
+    known_macs = {inv['base_mac']: host for host, inv in inventory.items()
+                  if inv.get('base_mac')}
+    rows = cabling.compare(d['states'], expected, reads, known_macs)
+    return jsonify(
+        ok=True,
+        switches=[{'hostname': h['hostname'], 'mgmt_ip': h['mgmt_ip'],
+                   'ok': reads[h['hostname']]['ok'],
+                   'error': reads[h['hostname']].get('error'),
+                   'inventory': inventory.get(h['hostname']) if reads[h['hostname']]['ok'] else None,
+                   'swapped_from': swapped.get(h['hostname']),
+                   'neighbors': reads[h['hostname']].get('neighbors', {})}
+                  for h in hosts],
+        cabling=rows)
 
 
 # ---------------------------------------------------------------------------
@@ -1144,6 +1286,7 @@ projects_bp.add_url_rule(
 from .firmware_routes import (
     project_firmware,
     firmware_images,
+    firmware_versions,
     firmware_run,
     firmware_status,
 )
@@ -1158,6 +1301,12 @@ projects_bp.add_url_rule(
     '/projects/<owner>/<project_name>/firmware/images',
     'firmware_images',
     firmware_images
+)
+projects_bp.add_url_rule(
+    '/projects/<owner>/<project_name>/firmware/versions',
+    'firmware_versions',
+    firmware_versions,
+    methods=['POST']
 )
 projects_bp.add_url_rule(
     '/projects/<owner>/<project_name>/firmware/run',

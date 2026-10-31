@@ -19,6 +19,9 @@
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px; color: var(--text-secondary);
 }
+.fw-host-ver { margin-left: auto; font-size: 12px; text-align: right; }
+.fw-host-ver .detail { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-secondary); }
+.fw-host-ver .warn { color: var(--danger); }
 
 .fw-warning {
   border: 1px solid #f59e0b;
@@ -63,14 +66,15 @@
   <div class="card-header">Firmware image</div>
 
   <div id="fw-no-images" class="text-sm text-secondary" style="display:none">
-    No <code>.swi</code> files found in <code id="fw-dir"></code>.
-    Drop images into that directory on the host and reload.
+    No firmware images yet. An admin can upload them under
+    <strong>Admin → Firmware images</strong>, or copy <code>.swi</code> files into
+    <code id="fw-dir"></code> on the host.
   </div>
 
   <div class="fw-grid" id="fw-options" style="display:none">
     <div class="form-group" style="margin-bottom:0">
       <label class="form-label" for="fw-image">Image</label>
-      <select id="fw-image" class="form-input"></select>
+      <select id="fw-image" class="form-input" data-change="clearVersions"></select>
     </div>
 
     <div class="form-group" style="margin-bottom:0">
@@ -79,7 +83,7 @@
         <option value="secondary" selected>secondary</option>
         <option value="primary">primary</option>
       </select>
-      <div class="hint">Upload to the partition the switch is not currently running.</div>
+      <div class="hint" id="fw-partition-hint">Upload to the partition the switch is not currently running. <strong>Check versions</strong> below works it out.</div>
     </div>
   </div>
 </div>
@@ -88,7 +92,7 @@
   <div class="card-header">Options</div>
 
   <label class="chk" style="display:flex;align-items:center;gap:8px">
-    <input type="checkbox" id="fw-allow-unsafe" onchange="toggleUnsafe()">
+    <input type="checkbox" id="fw-allow-unsafe" data-change="toggleUnsafe">
     Allow non-failsafe updates
   </label>
   <div class="hint" style="margin-top:4px">
@@ -112,13 +116,18 @@
 <div class="card">
   <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
     Target switches
+    <span class="flex items-center gap-2">
+    <button class="btn btn-sm" id="ver-btn" data-click="checkVersions"
+            title="Read each switch's running version and compare it with the selected image">
+      Check versions
+    </button>
     <button class="btn btn-sm" id="reach-btn"
-            onclick="checkReachability(
-              Array.from(document.querySelectorAll('.fw-host-cb:checked')).map(cb => cb.value),
-              document.getElementById('reach-results'), this)">
+            data-click="reachSelected">
       Check reachability
     </button>
+    </span>
   </div>
+  <div id="ver-status" class="text-sm text-secondary" style="margin-bottom:8px"></div>
   <div id="fw-hosts">
     <div class="text-sm text-secondary">Loading…</div>
   </div>
@@ -132,7 +141,7 @@
 <div class="card">
   <div class="flex items-center gap-2" style="justify-content:space-between">
     <div>
-      <button class="btn btn-primary" id="fw-start" onclick="startFirmware()">
+      <button class="btn btn-primary" id="fw-start" data-click="startFirmware">
         Start firmware upgrade
       </button>
       <span id="fw-status" class="text-sm text-secondary" style="margin-left:10px"></span>
@@ -170,7 +179,7 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="hideCredModal()">Cancel</button>
+      <button class="btn btn-ghost" data-click="hideCredModal">Cancel</button>
       <button class="btn btn-primary" id="cred-submit">Continue</button>
     </div>
   </div>
@@ -179,7 +188,12 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
+<script nonce="{{ csp_nonce() }}">
+function reachSelected() {
+  checkReachability(Array.from(document.querySelectorAll('.fw-host-cb:checked')).map(cb => cb.value),
+                    document.getElementById('reach-results'), this);
+}
+
 const PROJECT = {{ project_name | tojson }};
 const HOSTS   = {{ hosts | tojson }};
 let sessionCreds = null;   // memory only, never persisted
@@ -200,11 +214,12 @@ function renderHosts() {
     return;
   }
   box.innerHTML = HOSTS.map(h => `
-    <div class="fw-host-row ${h.mgmt_ip ? '' : 'no-ip'}">
+    <div class="fw-host-row ${h.mgmt_ip ? '' : 'no-ip'}" data-hostname="${esc(h.hostname)}">
       <input type="checkbox" class="fw-host-cb" value="${esc(h.hostname)}"
              ${h.mgmt_ip ? '' : 'disabled'} checked>
       <span class="fw-host-name">${esc(h.hostname)}</span>
       <span class="fw-host-ip">${esc(h.mgmt_ip || 'no management IP')}</span>
+      <span class="fw-host-ver"></span>
     </div>`).join('');
 }
 
@@ -221,7 +236,8 @@ async function loadImages() {
       document.getElementById('fw-start').disabled = true;
       return;
     }
-    sel.innerHTML = data.images.map(i => `<option value="${esc(i)}">${esc(i)}</option>`).join('');
+    sel.innerHTML = data.images.map(i => `<option value="${esc(i.name)}">${esc(i.name)}`
+      + (i.version ? ` (${esc((i.platform ? i.platform + '.' : '') + i.version)})` : '') + '</option>').join('');
     opts.style.display = 'grid';
   } catch (e) {
     none.style.display = 'block';
@@ -254,6 +270,102 @@ function promptCredentials() {
 
 function hideCredModal() {
   document.getElementById('credModal').classList.remove('visible');
+}
+
+/* ── Version check ── */
+
+const VERDICT_LABEL = {
+  current: 'Already running it', staged: 'Staged, not booted', upgrade: 'Needs upgrade',
+  wrong_platform: 'Wrong platform', unknown: 'Version read',
+};
+
+function rowFor(hostname) {
+  return Array.from(document.querySelectorAll('.fw-host-row'))
+    .find(r => r.dataset.hostname === hostname);
+}
+
+function clearVersions() {
+  document.querySelectorAll('.fw-host-ver').forEach(el => el.replaceChildren());
+  document.getElementById('ver-status').textContent = '';
+  document.getElementById('fw-partition-hint').textContent =
+    'Upload to the partition the switch is not currently running.';
+}
+
+function line(cls, text) {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  d.textContent = text;
+  return d;
+}
+
+/* Read each mapped switch's versions, tick the ones that need this image
+   and suggest the partition. */
+async function checkVersions() {
+  const image = document.getElementById('fw-image').value;
+  const hosts = HOSTS.filter(h => h.mgmt_ip).map(h => h.hostname);
+  const status = document.getElementById('ver-status');
+  if (!hosts.length) { status.textContent = 'No switches with a management IP.'; return; }
+  const creds = await promptCredentials();
+  if (!creds) return;
+
+  const btn = document.getElementById('ver-btn');
+  btn.disabled = true;
+  clearVersions();
+  status.textContent = 'Reading versions from ' + hosts.length + ' switch' + (hosts.length === 1 ? '' : 'es') + '…';
+  let data;
+  try {
+    const res = await fetch(`${PROJECT_BASE}/firmware/versions`, {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({hosts, image, switch_username: creds.username,
+                            switch_password: creds.password})});
+    data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || ('server returned ' + res.status));
+  } catch (e) {
+    status.textContent = 'Version check failed: ' + e.message;
+    btn.disabled = false;
+    return;
+  }
+  btn.disabled = false;
+  // Rejected credentials shouldn't be reused silently on the next click.
+  if (data.results.some(r => !r.ok && /username or password/.test(r.error))) sessionCreds = null;
+
+  let failed = 0;
+  for (const r of data.results) {
+    const row = rowFor(r.hostname);
+    if (!row) continue;
+    const box = row.querySelector('.fw-host-ver');
+    const cb = row.querySelector('.fw-host-cb');
+    if (!r.ok) {
+      failed++;
+      box.append(line('warn', "Couldn't read: " + r.error));
+      continue;
+    }
+    const v = r.versions;
+    box.append(line(r.verdict === 'wrong_platform' ? 'warn' : '',
+                    VERDICT_LABEL[r.verdict] + ' · ' + r.note));
+    box.append(line('detail', 'running ' + (v.current || '?') + ' from ' + (v.booted || '?')
+      + ' · primary ' + (v.primary || '–') + ' · secondary ' + (v.secondary || '–')
+      + (v.platform_name ? ' · ' + v.platform_name : '')));
+    if (r.tick !== null && r.tick !== undefined) cb.checked = r.tick;
+  }
+
+  // The target partition: the one the ticked switches aren't running from.
+  const ticked = data.results.filter(r => r.ok && rowFor(r.hostname)
+                                          .querySelector('.fw-host-cb').checked);
+  const others = [...new Set(ticked.map(r => r.other_partition).filter(Boolean))];
+  const hint = document.getElementById('fw-partition-hint');
+  if (others.length === 1) {
+    document.getElementById('fw-partition').value = others[0];
+    hint.textContent = 'Set to ' + others[0] + ': every ticked switch is running from the other partition.';
+  } else if (others.length > 1) {
+    hint.textContent = 'The ticked switches booted from different partitions. Run them in two groups, '
+      + 'one per partition, so none overwrites the image it is running.';
+  }
+
+  const need = ticked.length;
+  status.textContent = need + ' switch' + (need === 1 ? '' : 'es') + ' ticked for this image.'
+    + (failed ? ' ' + failed + " couldn't be read and kept " + (failed === 1 ? 'its tick' : 'their ticks') + ' as before.' : '')
+    + (data.image ? '' : " The selected image's version isn't known, so nothing was compared.");
 }
 
 /* ── Run ── */

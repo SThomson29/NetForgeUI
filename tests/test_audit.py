@@ -86,10 +86,12 @@ class TestDeployIsRecorded:
                             'changed': True, 'diff': {'prepared': 'whole config'},
                             'commands': SECRET_COMMANDS}],
                           output='+radius-server host 1.1.1.1 key plaintext RADSECRET\n'):
-            auth_client.post('/projects/admin/deploy-test/deploy/dryrun', json=dict(
+            res = auth_client.post('/projects/admin/deploy-test/deploy/dryrun', json=dict(
                 PUSH_BODY, rollback_timeout=None))
         (e,) = _wait_entries(app)
         assert e['action'] == 'deploy_dryrun'
+        # The Deploy page links its change summary through this id.
+        assert res.get_json()['audit_id'] == e['id']
         assert (e['username'], e['project'], e['switch_user']) == \
             ('admin', 'deploy-test', 'netops')
         assert e['status'] == 'done'

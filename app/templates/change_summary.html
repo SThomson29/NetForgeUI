@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Change summary — {{ s.owner }} / {{ s.project }}</title>
+<style>
+:root { --text: #171717; --muted: #6b6b6b; --line: #e5e5e5; --warn-bg: #fef3c7; --warn: #92400e; --bg: #fff; --inset: #f7f7f8; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+       font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+.page { max-width: 900px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 28px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.sub { color: var(--muted); font-size: 13px; }
+.kv { display: grid; grid-template-columns: 170px 1fr; gap: 4px 12px; font-size: 13px; margin-top: 14px; }
+.kv .k { color: var(--muted); }
+.warn { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 10px 14px; margin-top: 16px; font-size: 13px; }
+.sw { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 12px; break-inside: avoid; }
+.sw-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
+.sw-head strong { font-size: 14px; }
+.mono { font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 12px; }
+.tag { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--inset); }
+.tag.changes { background: #dbeafe; color: #1e40af; }
+.tag.regen { background: var(--warn-bg); color: var(--warn); }
+.meta { color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+pre { background: var(--inset); border-radius: 6px; padding: 10px 12px; margin: 10px 0 0;
+      white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+.notes { white-space: pre-wrap; }
+.toolbar { background: var(--inset); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 20px; }
+.toolbar form { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.toolbar label { font-size: 12px; color: var(--muted); }
+.toolbar input, .toolbar textarea { width: 100%; font: inherit; font-size: 13px; padding: 6px 8px;
+      border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
+.toolbar .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.btn { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line);
+       background: var(--bg); color: var(--text); cursor: pointer; text-decoration: none; }
+.btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.unchanged { font-size: 13px; margin-top: 8px; }
+@media (prefers-color-scheme: dark) {
+  :root { --text: #ededed; --muted: #a3a3a3; --line: #333; --warn-bg: #3b2f0b; --warn: #fcd34d; --bg: #121212; --inset: #1d1d1d; }
+  .tag.changes { background: #1e3a8a; color: #dbeafe; }
+}
+@media print {
+  :root { --text: #000; --muted: #444; --line: #ccc; --bg: #fff; --inset: #f4f4f4; }
+  .toolbar { display: none; }
+  .page { padding: 0; max-width: none; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="toolbar">
+  <form method="get">
+    <div><label for="ref">Change reference</label>
+      <input id="ref" name="ref" value="{{ ref }}" maxlength="200" placeholder="e.g. CHG0012345"></div>
+    <div><label for="notes">Notes (window, reason, contacts)</label>
+      <textarea id="notes" name="notes" rows="3" maxlength="4000">{{ notes }}</textarea></div>
+    <div class="row">
+      <button class="btn">Update</button>
+      <button class="btn primary" type="button" data-click="printPage">Print or save as PDF</button>
+      <a class="btn" href="{{ url_for('projects.change_summary', owner=s.owner, project_name=project_name, entry_id=entry_id, format='text', ref=ref or None, notes=notes or None) }}">Download as text</a>
+      <a class="btn" href="{{ url_for('projects.project_history', owner=s.owner, project_name=project_name) }}">Back to history</a>
+    </div>
+  </form>
+</div>
+
+<h1>Change summary</h1>
+<div class="sub">{{ s.owner }} / {{ s.project }}</div>
+
+<div class="kv">
+  {% if ref %}<span class="k">Change reference</span><span>{{ ref }}</span>{% endif %}
+  <span class="k">Dry run</span><span>{{ s.entry.started_at|replace('T', ' ')|replace('Z', ' UTC') }} by {{ s.entry.username }}</span>
+  <span class="k">Switch account</span><span>{{ s.entry.switch_user or '—' }}</span>
+  <span class="k">Switches</span><span>{{ s.switches|length }}, {{ s.with_changes|length }} with changes</span>
+</div>
+
+{% if notes %}<h2>Notes</h2><div class="notes">{{ notes }}</div>{% endif %}
+
+{% if s.regenerated %}
+<div class="warn"><strong>Configs regenerated since this dry run:</strong> {{ s.regenerated|join(', ') }}.
+  The commands below are not what a push would now send. Run a new dry run before using this summary.</div>
+{% endif %}
+{% if s.commands_dropped %}
+<div class="warn">Some commands are no longer available: the audit log drops them after {{ s.detail_days }} days.
+  Run a new dry run for a complete summary.</div>
+{% endif %}
+
+<h2>Backout</h2>
+<p style="font-size:13px;margin:0">NetForgeUI checkpoints each switch before pushing. If the change isn't confirmed
+within {{ s.rollback_minutes }} minutes, the switch rolls back to that checkpoint automatically.</p>
+
+<h2>Switches</h2>
+{% for sw in s.switches if sw.state != 'no changes' %}
+<div class="sw">
+  <div class="sw-head">
+    <strong>{{ sw.hostname }}</strong>
+    <span class="mono">{{ sw.mgmt_ip or 'no address' }}</span>
+    <span class="tag {{ 'changes' if sw.state == 'changes' }}">{{ sw.state }}</span>
+    {% if sw.regenerated %}<span class="tag regen">regenerated since</span>{% endif %}
+  </div>
+  {% if sw.serials %}<div class="meta">{{ sw.model or 'Hardware' }} · serial <span class="mono">{{ sw.serials|join(', ') }}</span></div>{% endif %}
+  <div class="meta mono">{{ sw.config_file or '—' }} · sha256 {{ sw.sha256 or '—' }}</div>
+  {% if sw.generated_by %}<div class="meta">Generated {{ sw.generated_by.started_at|replace('T', ' ')|replace('Z', ' UTC') }} by {{ sw.generated_by.username }}</div>{% endif %}
+  {% if sw.state == 'changes' %}
+    {% if sw.commands is none %}<div class="meta">Commands no longer kept.</div>
+    {% else %}<pre>{{ sw.commands|join('\n') if sw.commands else '(no commands listed)' }}</pre>{% endif %}
+  {% elif sw.state == 'no result' %}<div class="meta">The dry run returned no result for this switch.</div>{% endif %}
+</div>
+{% endfor %}
+
+{% set unchanged = s.switches|selectattr('state', 'equalto', 'no changes')|list %}
+{% if unchanged %}
+<div class="unchanged"><strong>No changes:</strong> {{ unchanged|map(attribute='hostname')|join(', ') }}</div>
+{% endif %}
+
+<p class="sub" style="margin-top:28px">Secrets in commands are masked. Generated by NetForgeUI from audit entry {{ entry_id }}.</p>
+</div>
+<script src="{{ static_url('js/actions.js') }}"></script>
+</body>
+</html>

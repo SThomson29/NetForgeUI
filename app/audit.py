@@ -39,7 +39,27 @@ ACTIONS = {
     'deploy_dryrun': 'Dry run',
     'deploy_push':   'Push',
     'firmware':      'Firmware',
+    'repo_pull':     'Repo pull',
 }
+
+# One-off changes recorded as they happen, with a one-line summary in
+# params['summary'] instead of switches and results. Project ones carry the
+# project and show in its History; the rest have no project and show only
+# on the admin Audit page.
+EVENTS = {
+    'share':            'Shared',
+    'unshare':          'Unshared',
+    'transfer':         'Transferred',
+    'project_delete':   'Project deleted',
+    'user_create':      'User created',
+    'user_delete':      'User deleted',
+    'sso_link':         'SSO linked',
+    'sso_unlink':       'SSO unlinked',
+    'password_change':  'Password changed',
+    'firmware_upload':  'Image uploaded',
+    'firmware_delete':  'Image deleted',
+}
+ACTIONS.update(EVENTS)
 
 DEPLOY_ACTIONS = ('deploy_dryrun', 'deploy_push')
 
@@ -174,9 +194,23 @@ def record_start(app, *, username, project, action, switch_user, targets, params
         cur = db.execute(
             'INSERT INTO audit_log (started_at, username, owner, project, action, '
             'switch_user, targets, params, status) VALUES (?,?,?,?,?,?,?,?,?)',
-            (_now(), username, owner or username, project, action, switch_user,
+            (_now(), username, username if owner is None else owner, project, action, switch_user,
              json.dumps(targets), json.dumps(params), 'running'))
         return cur.lastrowid
+
+
+def record_event(app, *, username, action, summary, project='', owner=None, **details):
+    """Record a change that happens at once, such as sharing a project or
+    creating a user. details are shown as extra fields."""
+    params = {'summary': summary}
+    params.update({k: v for k, v in details.items() if v is not None})
+    now = _now()
+    with get_db(app) as db:
+        db.execute(
+            'INSERT INTO audit_log (started_at, finished_at, username, owner, project, '
+            'action, targets, params, status, results) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            (now, now, username, (owner or username) if project else '', project,
+             action, '[]', json.dumps(params), 'done', '[]'))
 
 
 def _clean_result(r):
@@ -245,6 +279,7 @@ def _row(r):
     for k in ('targets', 'params', 'results'):
         e[k] = json.loads(e[k]) if e.get(k) else ([] if k != 'params' else {})
     e['action_label'] = ACTIONS.get(e['action'], e['action'])
+    e['event'] = e['action'] in EVENTS
     e['outcome'] = _outcome(e)
     return e
 
@@ -256,6 +291,10 @@ def _outcome(e):
         return ('Running', 'blue')
     if status == 'interrupted':
         return ('Interrupted by restart', 'yellow')
+    if e['action'] in EVENTS:
+        return ('Done', 'neutral')
+    if e['action'] == 'repo_pull':
+        return ('Pulled', 'green') if status == 'done' else ('Failed', 'red')
     n = len(e['targets'])
     if e['action'] == 'generate':
         if status != 'done':
@@ -311,6 +350,47 @@ def entries(app, *, username=None, project=None, owner=None, limit=200,
         rows = [_row(r) for r in db.execute(sql, args).fetchall()]
         _link_generations(db, rows)
     return rows
+
+
+def entry(app, entry_id):
+    """One entry by id, as entries() returns them, or None."""
+    with get_db(app) as db:
+        r = db.execute('SELECT * FROM audit_log WHERE id = ?', (entry_id,)).fetchone()
+        if r is None:
+            return None
+        rows = [_row(r)]
+        _link_generations(db, rows)
+    return rows[0]
+
+
+def _truthy(v):
+    return v in (True, 'True', 'true')
+
+
+def last_pushed(app, owner, project):
+    """{hostname: {sha256, config_file, at, by}} for the newest push each
+    switch confirmed, so the Deploy page can tell which configs have
+    changed since. A switch that rolled back or failed doesn't count."""
+    with get_db(app) as db:
+        rows = db.execute(
+            "SELECT targets, results, started_at, username FROM audit_log "
+            "WHERE action = 'deploy_push' AND owner = ? AND project = ? "
+            "ORDER BY id DESC", (owner, project)).fetchall()
+    found = {}
+    for r in rows:
+        try:
+            targets = json.loads(r['targets'] or '[]')
+            results = json.loads(r['results'] or '[]')
+        except ValueError:
+            continue
+        confirmed = {str(x.get('hostname')) for x in results
+                     if isinstance(x, dict) and _truthy(x.get('confirmed'))}
+        for t in targets:
+            host = t.get('hostname') if isinstance(t, dict) else None
+            if host in confirmed and host not in found and t.get('sha256'):
+                found[host] = {'sha256': t['sha256'], 'config_file': t.get('config_file'),
+                               'at': r['started_at'], 'by': r['username']}
+    return found
 
 
 def _link_generations(db, rows):

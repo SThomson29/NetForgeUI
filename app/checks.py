@@ -672,20 +672,36 @@ def check_router_ids(d):
 
 # ── Readiness ──────────────────────────────────────────────
 
+def _stale(recorded, gcdir, base, known_hosts):
+    """{host: [config names]} generated from host_vars that have changed
+    since. Configs generated before this was recorded aren't judged."""
+    stale = {}
+    for name, fp in (recorded or {}).items():
+        m = _CONFIG_NAME.match(name)
+        if not m or not os.path.isfile(os.path.join(gcdir, name)):
+            continue
+        host = m.group(1)
+        if host not in known_hosts:
+            continue
+        if hostvars_fingerprint(os.path.join(base, host)) != fp:
+            stale.setdefault(host, []).append(name)
+    return stale
+
+
+def stale_configs(app, username, project_name):
+    """{host: [config names]} out of date with their switch's settings,
+    for the Generate page."""
+    hosts = {h['hostname'] for h in read_project_hosts(app, username, project_name)
+             if _HOSTNAME_RE.match(h['hostname'])}
+    return _stale(_load_config(app, username, project_name).get('generated_from'),
+                  project_generated_configs_dir(app, username, project_name),
+                  project_host_vars_dir(app, username, project_name), hosts)
+
+
 def check_stale_configs(d):
     """Configs whose switch's host_vars have changed since they were
     generated. Configs generated before this was recorded aren't judged."""
-    recorded = d['cfg'].get('generated_from') or {}
-    stale = {}
-    for name, fp in recorded.items():
-        m = _CONFIG_NAME.match(name)
-        if not m or not os.path.isfile(os.path.join(d['gcdir'], name)):
-            continue
-        host = m.group(1)
-        if host not in d['states']:
-            continue
-        if hostvars_fingerprint(os.path.join(d['base'], host)) != fp:
-            stale.setdefault(host, []).append(name)
+    stale = _stale(d['cfg'].get('generated_from'), d['gcdir'], d['base'], d['states'])
     return [_finding('stale_config', host, WARNING,
                      '%s has changed since its config was generated' % host,
                      sorted(files), [host])

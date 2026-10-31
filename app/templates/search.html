@@ -30,10 +30,10 @@
 </form>
 <div class="search-opts">
   {% if scope %}
-  <label><input type="checkbox" checked onchange="widen(this)"> Only {{ scope }}</label>
+  <label><input type="checkbox" checked data-change="widen"> Only {{ scope }}</label>
   {% endif %}
   {% if current_user.is_admin and not scope %}
-  <label><input type="checkbox" {{ 'checked' if include_all }} onchange="toggleAll(this)"> Search all users' projects</label>
+  <label><input type="checkbox" {{ 'checked' if include_all }} data-change="toggleAll"> Search all users' projects</label>
   {% endif %}
   {% if found.query.usable %}<span>Matching {{ found.query.describe }}</span>{% endif %}
 </div>
@@ -83,13 +83,15 @@
 {% endfor %}
 {% endif %}
 
-<script>
-function widen(box) {
+<script nonce="{{ csp_nonce() }}">
+function widen() {
+  const box = this;
   if (box.checked) return;
   document.getElementById('scope-field').remove();
   document.querySelector('.search-form').submit();
 }
-function toggleAll(box) {
+function toggleAll() {
+  const box = this;
   const form = document.querySelector('.search-form');
   let f = form.querySelector('input[name=all]');
   if (box.checked && !f) {

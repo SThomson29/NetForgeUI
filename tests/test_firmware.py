@@ -53,7 +53,7 @@ def test_validation(auth_client, fw_project, label, body, expect_ok, fragment):
 
 def test_images_listed(auth_client, fw_project):
     res = auth_client.get('/projects/admin/proj/firmware/images')
-    assert res.get_json()['images'] == ['good.swi']
+    assert res.get_json()['images'] == [{'name': 'good.swi', 'version': None, 'platform': None}]
 
 def test_requires_login(app, client):
     """Fresh client with no session — must not reach the handler.

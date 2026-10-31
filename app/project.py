@@ -1321,6 +1321,35 @@ def restore_check(app, username, project_name, key):
 
 
 @_locked
+def record_inventory(app, username, project_name, found, by):
+    """Store what a Verify read found for each switch, {hostname:
+    inventory}. Returns {hostname: previous serials} for switches whose
+    hardware differs from the last read: a box swapped on the bench, or a
+    replacement nobody recorded. The record keeps the previous serials
+    until a read finds the same hardware again."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    cfg = _load_config(app, username, project_name)
+    stored = cfg.setdefault('inventory', {})
+    swapped = {}
+    for host, inv in found.items():
+        old = stored.get(host) or {}
+        before, after = set(old.get('serials') or []), set(inv.get('serials') or [])
+        record = dict(inv, read_at=now, read_by=by)
+        if before and after and before != after:
+            swapped[host] = sorted(before)
+            record.update(previous_serials=sorted(before), changed_at=now)
+        stored[host] = record
+    _save_config(app, username, project_name, cfg)
+    return swapped
+
+
+def get_inventory(app, username, project_name):
+    """{hostname: inventory record} from the last Verify read."""
+    return _load_config(app, username, project_name).get('inventory') or {}
+
+
+@_locked
 def record_host_save(app, username, project_name, hostname, by):
     """Who last saved a switch, so an editor whose save is refused for a
     conflict can say who changed it."""

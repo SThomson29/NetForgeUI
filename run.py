@@ -93,6 +93,10 @@ def _run_bootstrap():
     from app.docker_runner import cleanup_orphaned_containers
     cleanup_orphaned_containers()
 
+    # Firmware uploads cut off by the restart.
+    from app.firmware_images import remove_stale_uploads
+    remove_stale_uploads(app.config.get('FIRMWARE_DIR') or '')
+
 
 if __name__ == '__main__':
     if '--bootstrap' in sys.argv:

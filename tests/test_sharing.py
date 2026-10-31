@@ -96,8 +96,10 @@ class TestRouteSweep:
 
     def test_editors_cannot_touch_switches_or_share(self, app, people):
         share(app, 'bob', 'edit')
-        touching = {'deploy_dryrun', 'deploy_push', 'firmware_run', 'reachability',
-                    'delete', 'share_project', 'unshare_project', 'transfer_project'}
+        touching = {'deploy_dryrun', 'deploy_push', 'firmware_run', 'firmware_versions',
+                    'verify_read',
+                    'reachability', 'delete', 'share_project', 'unshare_project',
+                    'transfer_project'}
         for rule in _project_rules(app):
             for method in rule.methods - {'HEAD', 'OPTIONS', 'GET'}:
                 res = _call(people['bob'], method, _url(rule))
@@ -224,7 +226,7 @@ class TestOwnership:
         assert not os.path.exists(project_dir(app, 'alice', 'site'))
         shares = {(s['principal'], s['level']) for s in sharing.shares_for(app, 'bob', 'site')}
         assert shares == {('carol', 'view'), ('alice', 'edit')}
-        assert [e['owner'] for e in audit.entries(app, owner='bob', project='site')] == ['bob']
+        assert {e['owner'] for e in audit.entries(app, owner='bob', project='site')} == {'bob'}
         assert people['alice'].get('/projects/bob/site/hosts').status_code == 200
 
     def test_transfer_to_the_current_member_drops_their_share(self, app, people):

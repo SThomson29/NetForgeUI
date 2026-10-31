@@ -1,0 +1,130 @@
+{% extends 'base.html' %}
+{% block title %}Firmware images — NetForgeUI{% endblock %}
+{% block page_title %}Firmware images{% endblock %}
+
+{% block extra_head %}
+<style>
+.fw-up{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.fw-up input[type=file]{flex:1;min-width:220px;font-size:13px}
+.fw-bar{height:6px;background:var(--bg-inset);border-radius:3px;overflow:hidden;margin-top:12px;display:none}
+.fw-bar > div{height:100%;width:0;background:var(--accent);transition:width .2s}
+#fw-up-status{font-size:13px;margin-top:8px}
+.sha{font-family:'Courier New',monospace;font-size:11px;overflow-wrap:anywhere;color:var(--text-secondary)}
+.img-name{font-family:'Courier New',monospace;font-size:12px;overflow-wrap:anywhere}
+</style>
+{% endblock %}
+
+{% block content %}
+<p class="text-sm text-secondary" style="margin-bottom:14px">
+  AOS-CX images offered on every project's Firmware page. Images copied into
+  <code>{{ firmware_dir }}</code> by hand appear here too.
+</p>
+
+<div class="card">
+  <div class="card-header">Upload an image</div>
+  {% if not writable %}
+  <div class="alert alert-warning" style="margin-bottom:12px"><span>
+    The firmware folder is read-only inside the container, so images can't be
+    uploaded or deleted here. Mount it read-write: drop <code>:ro</code> from the
+    <code>firmware</code> volume (or <code>read_only = true</code> in Terraform)
+    and restart.
+  </span></div>
+  {% endif %}
+  <div class="fw-up">
+    <input type="file" id="fw-file" accept=".swi" {{ 'disabled' if not writable }}>
+    <button class="btn btn-primary" id="fw-up-btn" data-click="upload" {{ 'disabled' if not writable }}>Upload</button>
+  </div>
+  <div class="fw-bar" id="fw-bar"><div></div></div>
+  <div id="fw-up-status" class="text-secondary"></div>
+  <p class="text-sm text-secondary" style="margin-top:10px">
+    Up to {{ max_mb }} MB. Behind a reverse proxy, its upload limit must be at least
+    this too (Nginx and SWAG: <code>client_max_body_size</code>), or large uploads
+    fail part-way.
+  </p>
+</div>
+
+<div class="card">
+  <div class="card-header">Images ({{ images|length }})</div>
+  {% if images %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Image</th><th>Version</th><th>Size</th><th>Uploaded</th><th></th></tr></thead>
+    <tbody>
+    {% for i in images %}
+    <tr>
+      <td>
+        <div class="img-name">{{ i.name }}</div>
+        <div class="sha" title="SHA-256: compare with the checksum HPE publishes for this image">SHA-256 {{ i.sha256 }}</div>
+      </td>
+      <td class="text-sm" style="white-space:nowrap">
+        {% if i.version %}{{ (i.platform ~ '.') if i.platform }}{{ i.version }}{% else %}<span class="text-secondary">unknown</span>{% endif %}
+      </td>
+      <td class="text-sm" style="white-space:nowrap">{{ '%.0f' % (i.size / 1048576) }} MB</td>
+      <td class="text-sm">
+        {% if i.uploaded_by %}{{ i.uploaded_by }}<br><span class="text-secondary">{{ i.uploaded_at|replace('T', ' ')|replace('Z', '') }}</span>
+        {% else %}<span class="text-secondary">copied in</span>{% endif %}
+      </td>
+      <td style="text-align:right">
+        <form method="post" action="{{ url_for('admin.firmware_delete') }}"
+              data-confirm="Delete {{ i.name }}?">
+          <input type="hidden" name="name" value="{{ i.name }}">
+          <button class="btn btn-sm btn-danger" {{ 'disabled' if not writable }}>Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-secondary">No images yet.</p>
+  {% endif %}
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+const UPLOAD_URL = {{ url_for('admin.firmware_upload') | tojson }};
+
+function upload() {
+  const file = document.getElementById('fw-file').files[0];
+  const status = document.getElementById('fw-up-status');
+  const bar = document.getElementById('fw-bar');
+  const btn = document.getElementById('fw-up-btn');
+  if (!file) { status.textContent = 'Choose a .swi file first.'; return; }
+
+  // XMLHttpRequest, not fetch: only it reports upload progress.
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', UPLOAD_URL + '?name=' + encodeURIComponent(file.name));
+  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(e.loaded / e.total * 100);
+    bar.firstElementChild.style.width = pct + '%';
+    status.textContent = 'Uploading… ' + pct + '% of ' + Math.round(e.total / 1048576) + ' MB';
+  };
+  xhr.onload = () => {
+    let data = {};
+    try { data = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status === 200 && data.ok) {
+      status.textContent = 'Uploaded. Checking it…';
+      location.reload();
+      return;
+    }
+    btn.disabled = false;
+    bar.style.display = 'none';
+    status.textContent = data.error || (xhr.status === 413
+      ? 'The upload was refused as too large, most likely by the reverse proxy in front of NetForgeUI. Raise its upload limit (client_max_body_size).'
+      : 'Upload failed (HTTP ' + xhr.status + ').');
+  };
+  xhr.onerror = () => {
+    btn.disabled = false;
+    bar.style.display = 'none';
+    status.textContent = 'Upload failed: the connection dropped. A reverse proxy upload limit or timeout is the usual cause.';
+  };
+  btn.disabled = true;
+  bar.style.display = 'block';
+  bar.firstElementChild.style.width = '0';
+  status.textContent = 'Uploading…';
+  xhr.send(file);
+}
+</script>
+{% endblock %}

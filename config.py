@@ -30,10 +30,13 @@ class Config:
     # Ansible binary — override with ANSIBLE_PLAYBOOK env var if using a venv
     ANSIBLE_BIN        = os.environ.get('ANSIBLE_PLAYBOOK', 'ansible-playbook')
 
-    # AOS-CX .swi images for the firmware feature. Mounted from the host
-    # rather than uploaded — images are large and machine-local.
+    # AOS-CX .swi images for the firmware feature: uploaded by an admin
+    # (Admin → Firmware images) or copied into this directory by hand.
     FIRMWARE_DIR       = os.environ.get(
         'FIRMWARE_DIR', os.path.join(BASE_DIR, 'firmware'))
+    # Largest image upload accepted. A reverse proxy in front needs its own
+    # limit raised too (Nginx/SWAG: client_max_body_size).
+    FIRMWARE_MAX_UPLOAD_MB = int(os.environ.get('FIRMWARE_MAX_UPLOAD_MB', '2048'))
 
     # ── Session cookies ──
     # Lax stops the session cookie riding along on cross-site form posts,

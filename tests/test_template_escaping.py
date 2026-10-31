@@ -1,15 +1,16 @@
 """
-Values interpolated into onclick/onsubmit handlers.
+Values passed to event handlers.
 
-Jinja escapes a quote to &#39;, but the browser decodes the attribute before
+Handlers were once inline (onclick="removePool('{{ name }}')"). Jinja
+escapes a quote to &#39;, but the browser decodes the attribute before
 handing it to JavaScript, so a name like x');alert(1);// broke out of the
 string. Pool names are free text and travel between users via project
 export and import, so this was reachable across accounts.
 
-The handlers now use |tojson inside single-quoted attributes. The check
-here is behavioural: after the browser's HTML decoding, the handler's
-arguments must parse as a plain JSON array — which is only possible if the
-hostile name stayed inside a string literal.
+Inline handlers are now gone (the CSP blocks them): arguments travel as a
+JSON array in data-args, written with |tojson inside a single-quoted
+attribute. The check here is behavioural: after the browser's HTML
+decoding, data-args must parse as the exact values that went in.
 """
 
 import html
@@ -27,13 +28,12 @@ HOSTILE = [
 
 
 def _handler_args(body, fn):
-    """Decode every fn(...) handler the browser would see; return its args."""
+    """Decode the data-args of every element that calls fn, as the browser
+    would see them."""
     found = []
-    for m in re.finditer(r"""on[a-z]+=(['"])(.*?)\1""", body):
-        js = html.unescape(m.group(2))
-        call = re.match(r'^\s*%s\((.*)\)\s*$' % re.escape(fn), js)
-        if call:
-            found.append(json.loads('[' + call.group(1) + ']'))
+    for m in re.finditer(r"""data-(?:click|change|input)="%s"\s+data-args=(['"])(.*?)\1"""
+                         % re.escape(fn), body):
+        found.append(json.loads(html.unescape(m.group(2))))
     return found
 
 
@@ -56,16 +56,29 @@ def test_pool_name_stays_inside_a_string(app, auth_client, name):
     assert edits and edits[0][1] == name
 
 
-def test_no_handler_interpolates_inside_a_quoted_string():
-    """Guard against the old pattern coming back in any template."""
+def test_no_inline_handlers():
+    """The CSP blocks them, so one coming back would silently do nothing."""
     import glob
     offenders = []
     for path in glob.glob('app/templates/*.html'):
         with open(path) as f:
             lines = f.readlines()
         for i, line in enumerate(lines, 1):
-            if re.search(r'''on[a-z]+=["'][^"']*'\{\{''', line):
+            if re.search(r'''\son[a-z]+\s*=\s*["']''', line) or 'javascript:' in line:
                 offenders.append('%s:%d' % (path, i))
+    assert not offenders, offenders
+
+
+def test_data_args_from_jinja_use_tojson_in_single_quotes():
+    """tojson escapes ' but not ", so the attribute must be single-quoted."""
+    import glob
+    offenders = []
+    for path in glob.glob('app/templates/*.html'):
+        with open(path) as f:
+            for i, line in enumerate(f, 1):
+                for m in re.finditer(r'''data-args=(["'])(.*?)\1''', line):
+                    if '{{' in m.group(2) and not (m.group(1) == "'" and '|tojson' in m.group(2)):
+                        offenders.append('%s:%d' % (path, i))
     assert not offenders, offenders
 
 

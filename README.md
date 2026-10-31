@@ -13,12 +13,16 @@ A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — 
 - **Skeleton sync** — existing projects can pick up host_vars files added to NetForge after the project was created
 - **Common infrastructure** — per-project DNS, NTP, DHCP, RADIUS, and syslog server lists that feed into editor field suggestions
 - **Deployment** — push generated configs to live switches over SSH, with a diff-first dry run and automatic on-box rollback if a push breaks connectivity
-- **Firmware** — upload an AOS-CX image to a chosen partition and boot to it, with optional permission for non-failsafe subcomponent updates
+- **Firmware** — upload AOS-CX images from the browser, check what each switch runs, then install an image to a chosen partition and boot to it, with optional permission for non-failsafe subcomponent updates
 - **Multi-user** — per-user data isolation with an admin panel for user management
 - **Shared projects** — share a project with users or SSO groups at view, edit or deploy level, with protection against two people overwriting each other
 - **Single sign-on** — optional OpenID Connect sign-in (Entra ID, Okta, Keycloak, ...), limited to a group, with admins by group
 - **Project checks** — cross-switch mistakes (duplicate addresses, mismatched VSX pairs, undefined VLANs and VRFs, stale configs) flagged as warnings
 - **Search** — find where an IP, subnet, VLAN, VNI or name is used across every project you can see, from the box in the sidebar
+- **Change summaries** — turn any dry run into a printable or plain-text summary of each switch's commands (secrets masked), with backout and a warning if configs were regenerated since, for a change request
+- **Project status at a glance** — the projects list shows configs out of date, changes not yet pushed and the last push for each project
+- **Verify** — read every switch's serial, model, base MAC and firmware, flag hardware that's changed since the last read, and check cabling over LLDP against the links the design implies
+- **Audit log** — generations, dry runs, pushes and firmware runs, plus sharing, transfers, deleted projects, user and SSO changes, password changes, firmware image uploads and repo pulls, each with who did it. A project's History shows its own; admins see everything under Admin → Audit
 
 ---
 
@@ -150,7 +154,7 @@ services:
       - netforgeui_data:/app/service/data
       - netforgeui_repo:/app/service/configgen
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./firmware:/app/service/firmware:ro
+      - ./firmware:/app/service/firmware
     restart: unless-stopped
 
 volumes:
@@ -165,7 +169,7 @@ volumes:
 - `netforgeui_data` — persists all user and project data across restarts
 - `netforgeui_repo` — persists the cloned NetForge repo
 - `/var/run/docker.sock` — required so generation can start the Ansible container
-- `./firmware` — AOS-CX `.swi` images for the Firmware tab, read-only
+- `./firmware` — AOS-CX `.swi` images for the Firmware tab; read-write so admins can upload them
 
 The explicit `name:` on each volume matters. Compose would otherwise prefix them
 with the project directory name, and the ephemeral Ansible container looks them
@@ -188,7 +192,8 @@ up by their bare names.
 | `GENERATE_MEM_LIMIT` | No | `2g` | Memory cap for the generation container (Docker size syntax) |
 | `GENERATE_PIDS_LIMIT` | No | `512` | Process cap for the generation container |
 | `SSH_KEY_PATH` | No | `/root/.ssh/id_rsa` | Deploy key used for git over SSH |
-| `FIRMWARE_DIR` | No | `<app>/firmware` | Where `.swi` images are read from |
+| `FIRMWARE_DIR` | No | `<app>/firmware` | Where `.swi` images are kept |
+| `FIRMWARE_MAX_UPLOAD_MB` | No | `2048` | Largest image an admin can upload |
 | `PORT` | No | `5000` | Port the Flask app listens on inside the container |
 | `FLASK_DEBUG` | No | `false` | Enable Flask debug mode — never use in production |
 | `TRUSTED_PROXIES` | No | `0` | Number of reverse proxies in front (usually `1`), so the app trusts their forwarded scheme, host and client address |
@@ -203,6 +208,15 @@ project prefix.
 ## Reverse Proxy
 
 NetForgeUI is designed to sit behind a reverse proxy for TLS termination. Set `TRUSTED_PROXIES=1` when doing so. Do not expose the published port directly.
+
+Firmware images are uploaded through the proxy and are typically 300–700 MB, well
+over most proxies' default upload limit (Nginx: 1 MB). Raise it for NetForgeUI, for
+example `client_max_body_size 2048m;` in its Nginx or SWAG site config.
+
+NetForgeUI sets its own `Content-Security-Policy`, `X-Frame-Options`,
+`X-Content-Type-Options` and `Referrer-Policy` headers, so a copy run without a
+proxy gets them too. If the proxy also sets a CSP, the browser enforces both, so
+leave the proxy's CSP unset or make sure it's no stricter than NetForgeUI's.
 
 ---
 
@@ -376,14 +390,19 @@ Go to **Generate**. Optionally filter by switch or by section. Section filters m
 
 A bench commissioning step, intended before a switch carries traffic.
 
-Drop AOS-CX `.swi` images into `./firmware` on the host — they are mounted
-read-only into the container, not uploaded through the browser. Then go to the
-project → **Firmware**:
+An admin uploads AOS-CX `.swi` images under **Admin → Firmware images**, which
+shows each image's version and SHA-256 to compare with the checksum HPE
+publishes. Images copied into `./firmware` on the host are listed too. Then go to
+the project → **Firmware**:
 
-1. Pick an image and the target partition (default `secondary` — upload to the partition the switch is *not* running)
-2. Optionally tick **Allow non-failsafe updates** and set a window in minutes
-3. Select the switches — the list and management IPs come from the Deploy tab mapping
-4. Enter switch credentials, which are used for the run only and never stored
+1. Pick an image, then **Check versions**: it reads each switch's running version
+   over REST and unticks switches already on that version or of a different
+   platform (an image's two-letter prefix, e.g. `FL`, must match the switch's),
+   and sets the target partition to the one the switches aren't running from
+2. Check the target partition (default `secondary` — upload to the partition the switch is *not* running)
+3. Optionally tick **Allow non-failsafe updates** and set a window in minutes
+4. Select the switches — the list and management IPs come from the Deploy tab mapping
+5. Enter switch credentials, which are used for the check and the run only and never stored
 
 Output streams live and the page can be left or refreshed; per-host results
 appear when it finishes.
@@ -399,6 +418,28 @@ Firmware needs both REST (`https-server`, for upload and boot) and SSH (for the
 non-failsafe command) reachable on the management IP.
 
 ---
+
+## Verifying switches
+
+Project → **Verify** → **Read switches** (deploy access, switch credentials not
+stored) reads each switch with a management IP over its REST API:
+
+- **Inventory:** serial number (every member of a VSF stack), model, part
+  number, base MAC and firmware. It's kept with the project, shown on the Hosts
+  page and in change summaries. A switch whose serial differs from the last read
+  is flagged: the wrong box on the bench, or a replacement nobody recorded.
+- **Cabling:** the LLDP neighbour on every port with link, checked against the
+  links the design already implies. Nothing extra is entered:
+  - two routed ports on different switches sharing a /31 or /30 (both ends exact)
+  - the VSX ISL between a VSX pair
+  - a project switch named in a port's description, with the far port checked
+    too if it follows the name (`Uplink to CORE-01 1/1/49`)
+  - a project switch named in a LAG's description, for each member port
+
+  Each link is shown as correct, wrong port, wrong switch, missing or not read,
+  and project switches seen on ports the design says nothing about are listed
+  too. A neighbour is recognised by its LLDP system name or, before its config
+  is on, by its MAC matching another switch's inventory.
 
 ## Updating NetForge Templates
 

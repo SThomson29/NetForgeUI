@@ -63,6 +63,10 @@ def app(tmp_data_dir, tmp_path):
 
     init_db(flask_app)
 
+    # The CSP and the script nonce templates ask for.
+    from app.security import install_headers
+    install_headers(flask_app)
+
     from app.auth import auth_bp
     from app.admin import admin_bp
     from app.projects import projects_bp
@@ -259,3 +263,18 @@ def sample_pools():
             'carve_prefix': 24,
         },
     }
+
+
+EDITOR_JS = os.path.join(os.path.dirname(__file__), '..', 'app', 'static', 'js', 'editor.js')
+
+
+def editor_source():
+    """The editor's script, which project_editor.html loads from static/js."""
+    with open(EDITOR_JS) as f:
+        return f.read()
+
+
+def editor_page(client, url):
+    """The editor as the browser runs it: the rendered page plus the
+    script it loads. Tests that check the editor's behaviour read this."""
+    return client.get(url).data.decode() + editor_source()

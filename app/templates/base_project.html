@@ -54,7 +54,7 @@
   }
 </style>
 
-<script>
+<script nonce="{{ csp_nonce() }}">
   /* Every project URL starts here: /projects/<owner>/<project>. */
   const PROJECT_BASE = {{ project_base | tojson }};
 
@@ -160,6 +160,15 @@
           <line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>
         </svg>
         Firmware
+      </a>
+
+      <a href="${PROJECT_BASE}/verify"
+         class="nav-item ${'{{ "active" if request.endpoint == "projects.verify_page" else "" }}'}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 11l3 3L22 4"/>
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+        Verify
       </a>
 
       <a href="${PROJECT_BASE}/history"

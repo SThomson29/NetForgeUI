@@ -343,3 +343,104 @@ class TestBehindNginx:
             res = c.post('/login', headers={'X-Forwarded-For': spoof},
                          data={'username': 'a', 'password': 'bad'})
         assert res.status_code == 429, 'rotating X-Forwarded-For escaped the throttle'
+
+
+# ---------------------------------------------------------------------------
+# Response headers
+# ---------------------------------------------------------------------------
+
+def _directives(csp):
+    return {d.split()[0]: d.split()[1:] for d in csp.split('; ')}
+
+
+class TestResponseHeaders:
+
+    def test_every_response_carries_them(self, monkeypatch, tmp_path):
+        app = _real_app(monkeypatch, tmp_path, proxies=0)
+        for url in ('/login', '/healthz', '/static/css/design.css', '/no-such-page'):
+            h = app.test_client().get(url).headers
+            assert 'Content-Security-Policy' in h, url
+            assert h['X-Content-Type-Options'] == 'nosniff', url
+            assert h['X-Frame-Options'] == 'DENY', url
+            assert h['Referrer-Policy'] == 'same-origin', url
+
+    def test_policy_blocks_framing_plugins_and_base_tags(self):
+        from app.security import content_security_policy
+        d = _directives(content_security_policy({}))
+        assert d['frame-ancestors'] == ["'none'"]
+        assert d['object-src'] == ["'none'"]
+        assert d['base-uri'] == ["'self'"]
+        assert d['form-action'] == ["'self'"]
+        assert d['default-src'] == ["'self'"]
+
+    def test_google_fonts_are_allowed(self):
+        """design.css imports them; without these the UI falls back to system fonts."""
+        from app.security import content_security_policy
+        d = _directives(content_security_policy({}))
+        assert 'https://fonts.googleapis.com' in d['style-src']
+        assert 'https://fonts.gstatic.com' in d['font-src']
+
+    def test_provider_logout_may_leave_the_site(self):
+        """Sign-out POSTs here and redirects to the provider; browsers check
+        that redirect against form-action."""
+        from app.security import content_security_policy
+        d = _directives(content_security_policy({
+            'OIDC_ISSUER': 'https://Auth.Example.com/application/o/netforge/',
+            'OIDC_LOGOUT': 'provider'}))
+        assert d['form-action'] == ["'self'", 'https://auth.example.com']
+
+    def test_local_logout_keeps_forms_on_the_site(self):
+        from app.security import content_security_policy
+        d = _directives(content_security_policy({
+            'OIDC_ISSUER': 'https://auth.example.com/', 'OIDC_LOGOUT': 'local'}))
+        assert d['form-action'] == ["'self'"]
+
+
+class TestScriptNonce:
+    """Inline scripts run only with this response's nonce; anything
+    injected into the page, inline handlers included, doesn't."""
+
+    def _pages(self, app):
+        """Every GET page that needs at most an owner and project name."""
+        urls = []
+        for rule in app.url_map.iter_rules():
+            if 'GET' not in rule.methods or rule.endpoint == 'static':
+                continue
+            if not set(rule.arguments) <= {'owner', 'project_name'}:
+                continue
+            urls.append(rule.build({'owner': 'admin', 'project_name': 'csp'}
+                                   if rule.arguments else {}, append_unknown=False)[1])
+        return urls
+
+    def test_every_inline_script_carries_the_nonce(self, app, auth_client, skeleton_dir):
+        import re
+        from app.project import create_project
+        from app.utils import add_project_hosts
+        with app.app_context():
+            create_project(app, 'admin', 'csp')
+            add_project_hosts(app, 'admin', 'csp', ['SW1'], 'none')
+        checked = 0
+        for url in self._pages(app):
+            res = auth_client.get(url)
+            if res.status_code != 200 or not res.mimetype == 'text/html':
+                continue
+            body = res.get_data(as_text=True)
+            csp = _directives(res.headers['Content-Security-Policy'])
+            assert "'unsafe-inline'" not in csp['script-src'], url
+            nonces = [s[len("'nonce-"):-1] for s in csp['script-src'] if s.startswith("'nonce-")]
+            for tag in re.findall(r'<script\b[^>]*>', body):
+                if 'src=' in tag:
+                    continue
+                checked += 1
+                assert nonces and 'nonce="%s"' % nonces[0] in tag, (url, tag)
+        assert checked > 20, 'too few pages rendered to mean anything'
+
+    def test_nonce_changes_every_response(self, app, auth_client):
+        a = auth_client.get('/projects').headers['Content-Security-Policy']
+        b = auth_client.get('/projects').headers['Content-Security-Policy']
+        assert "'nonce-" in a and a != b
+
+    def test_no_nonce_on_pages_without_inline_scripts(self, monkeypatch, tmp_path):
+        app = _real_app(monkeypatch, tmp_path, proxies=0)
+        csp = _directives(app.test_client().get('/healthz').headers['Content-Security-Policy'])
+        assert csp['script-src'] == ["'self'"]
