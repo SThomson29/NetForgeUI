@@ -185,6 +185,7 @@ up by their bare names.
 | `SECRET_KEY` | Yes | `change-me-in-production` | Flask session secret — use a long random string |
 | `CONFIGGEN_REPO_URL` | Yes | — | Clone URL of your NetForge repo (HTTPS or SSH) |
 | `ADMIN_PASSWORD` | No | `changeme123` | Initial admin password, applied only on first run |
+| `CONFIGGEN_REPO_REF` | No | — | NetForge release tag (e.g. `v1.4.1`) or branch to stay on. Checked out at every start; **Admin** → **Config repo** then shows it read-only. Unset, the repo follows its default branch until an admin pins a release there |
 | `CONFIGGEN_REPO_PATH` | No | `/app/service/configgen` | Where the NetForge repo is cloned inside the container |
 | `ANSIBLE_IMAGE` | No | `cytopia/ansible:latest` | Image used for the ephemeral generation container |
 | `REPO_VOLUME_NAME` | No | `netforgeui_repo` | Name of the repo volume to mount into the Ansible container |
@@ -444,7 +445,13 @@ stored) reads each switch with a management IP over its REST API:
 
 ## Updating NetForge Templates
 
-The NetForge repo is pulled automatically each time the container restarts. For a mid-session refresh without restarting, go to **Admin** → **Pull latest**.
+By default the app follows NetForge's default branch: the repo is pulled each time the container restarts, and **Admin** → **Config repo** → **Pull latest** does the same mid-session.
+
+To stay on a release instead, press **Check for updates** on that page. It fetches without changing anything, then lists the branch and the newest release tags, each with the commits a move would bring in (or drop) and whether the generation templates differ. **Pin to vX** moves to that release and stays there: restarts fetch, so newer releases show up, but no longer move. **Follow main** goes back to tracking the branch. Each move is in the audit log, and is refused while a generation, deploy or firmware run is in progress.
+
+For an instance managed from its deployment config, set `CONFIGGEN_REPO_REF` to a tag or branch. It is checked out at every start and the Admin page becomes read-only, so a rebuilt instance comes back on the same version.
+
+Each generation records the NetForge version it used. After a move, configs generated with different templates show as out of date on the Generate page until regenerated.
 
 Pulling updates the templates and the skeleton, but does not touch existing
 `host_vars` files. New switches added after a pull pick up the new skeleton

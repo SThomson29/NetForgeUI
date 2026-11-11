@@ -18,6 +18,10 @@ class Config:
     # Shared read-only config repo
     CONFIGGEN_REPO     = CONFIGGEN_REPO_PATH
     CONFIGGEN_REPO_URL = os.environ.get('CONFIGGEN_REPO_URL', '')
+    # A NetForge release tag (v1.4.1) or branch to stay on. Checked out at
+    # every start, and shown read-only on Admin → Config repo. Unset, the
+    # repo follows its default branch until an admin pins a release there.
+    CONFIGGEN_REPO_REF = os.environ.get('CONFIGGEN_REPO_REF', '').strip()
     SKELETON_DIR       = os.path.join(CONFIGGEN_REPO_PATH, 'inventory', 'skeleton')
     PLAYBOOK           = os.path.join(CONFIGGEN_REPO_PATH, 'playbooks', 'generate_configs.yml')
     ROLES_PATH         = os.path.join(CONFIGGEN_REPO_PATH, 'roles')

@@ -64,15 +64,23 @@ def _sync_repo():
         else:
             print(f'[repo] Clone failed: {result.stderr.strip()}')
     else:
-        print(f'[repo] Pulling latest from {url} ...')
-        result = subprocess.run(
-            ['git', '-C', repo, 'pull'],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            print(f'[repo] Pull successful: {result.stdout.strip()}')
-        else:
-            print(f'[repo] Pull failed: {result.stderr.strip()}')
+        from app import audit, repo_sync
+        rc, out, before, after = repo_sync.sync_at_startup(app)
+        try:
+            audit.record_startup_pull(app, before, after, rc, out)
+        except Exception as e:                      # noqa: BLE001
+            print(f'[repo] Could not record the pull in the audit log: {e}')
+        return
+
+    # A fresh clone lands on the default branch; move it if a ref is set.
+    from app import repo_sync
+    ref = repo_sync.configured_ref(app)
+    if ref and repo_sync.cloned(app):
+        try:
+            _before, after = repo_sync.switch(app, ref)
+            print(f"[repo] Checked out {ref} (CONFIGGEN_REPO_REF): {after['label']}")
+        except repo_sync.RepoError as e:
+            print(f'[repo] {e}')
 
 
 def _run_bootstrap():
