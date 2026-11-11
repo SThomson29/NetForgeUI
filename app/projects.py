@@ -33,7 +33,7 @@ from .transfer import (
     export_project, import_project, read_manifest, TransferError,
 )
 
-from . import audit, checks, sections, sharing
+from . import audit, checks, project_types, sections, sharing
 from .api import json_body
 from .jobs import prune_finished, mark_finished
 from .security import job_tag, visible_job
@@ -143,6 +143,12 @@ def _check_project_access():
                                                 sharing.LEVEL_LABELS[wanted].lower())}), 403
         abort(403)
     g.project_level = level
+    # A page that belongs to another type of project isn't there for this
+    # one. A project with no recorded type, or none on disk, is a config
+    # project, so the owner's routes for a missing one behave as before.
+    g.project_type = project_types.of(app, owner, project)
+    if not project_types.allowed(request.endpoint, g.project_type):
+        abort(404)
 
 
 @projects_bp.app_template_global()
@@ -157,11 +163,16 @@ def _project_context():
     if 'project_owner' not in g:
         return {}
     project = (request.view_args or {}).get('project_name', '')
+    kind = g.get('project_type') or project_types.CONFIG
     return {
         'project_owner': g.project_owner,
         'project_level': g.get('project_level'),
         'project_base': '/projects/%s/%s' % (g.project_owner, project),
         'is_own_project': g.project_owner == current_user.username,
+        'project_type': kind,
+        'project_type_label': project_types.label(kind),
+        'project_home': url_for(project_types.home_endpoint(kind),
+                                owner=g.project_owner, project_name=project),
     }
 
 
@@ -203,8 +214,15 @@ def projects_page():
                 continue
             others += [dict(p, level=sharing.VIEW) for p in list_projects(app, u.username)
                        if (u.username, p['name']) not in seen]
+    for p in projects + shared + others:
+        p['home'] = url_for(project_types.home_endpoint(p['type']),
+                            owner=p['owner'], project_name=p['name'])
     return render_template('projects.html', projects=projects, shared=shared,
-                           others=others, level_labels=sharing.LEVEL_LABELS)
+                           others=others, level_labels=sharing.LEVEL_LABELS,
+                           project_kinds=[
+                               {'id': k, 'label': project_types.LABELS[k],
+                                'description': project_types.DESCRIPTIONS[k]}
+                               for k in project_types.creatable(app)])
 
 
 @projects_bp.route('/search')
@@ -305,8 +323,13 @@ def new_project():
     if not name:
         flash('Project name is required.', 'error')
         return redirect(url_for('projects.projects_page'))
+    # No type on the form means a config project, as before types existed.
+    kind = (request.form.get('type') or project_types.CONFIG).strip()
+    if kind not in project_types.creatable(app):
+        flash('That type of project can\'t be created here.', 'error')
+        return redirect(url_for('projects.projects_page'))
     try:
-        create_project(app, current_user.username, name)
+        create_project(app, current_user.username, name, kind)
         flash(f'Project {name} created.', 'success')
     except ValueError as e:
         flash(str(e), 'error')
@@ -342,6 +365,21 @@ def download_all(project_name):
     return send_file(buf, as_attachment=True,
                      download_name=f'{project_name}_configs.zip',
                      mimetype='application/zip')
+
+
+# ---------------------------------------------------------------------------
+# Central projects
+# ---------------------------------------------------------------------------
+
+@projects_bp.route('/projects/<owner>/<project_name>/central')
+@login_required
+def central_overview(project_name):
+    """Where a central project opens. The build's sections arrive here as
+    they are added; until then it says what the project is."""
+    app = current_app._get_current_object()
+    return render_template('central_overview.html', project_name=project_name,
+                           created=get_project_config(app, _owner(), project_name).get('created', ''),
+                           central_available=project_types.central_available(app))
 
 
 # ---------------------------------------------------------------------------

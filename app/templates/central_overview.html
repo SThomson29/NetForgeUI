@@ -1,0 +1,24 @@
+{% extends "base_project.html" %}
+{% block title %}Overview — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}Overview{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">Central project</div>
+  <p style="font-size:13px;line-height:1.6;margin:0 0 10px">
+    <strong>{{ project_name }}</strong> is a Central project{% if created %}, created {{ created }}{% endif %}.
+    It describes a New Central tenant build — sites, device groups, configuration profiles and
+    where they are assigned — and applies it through the Central API.
+  </p>
+  <p style="font-size:13px;line-height:1.6;margin:0;color:var(--text-secondary)">
+    The pages for designing and applying the build are not in this version yet.
+    Sharing and History already work as they do for every project.
+  </p>
+  {% if not central_available %}
+  <p style="font-size:13px;line-height:1.6;margin:10px 0 0;color:#b45309">
+    Central is not configured on this instance (<code>CENTRAL_REPO_URL</code> is not set), so new
+    Central projects can't be created.
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

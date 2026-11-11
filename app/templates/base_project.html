@@ -15,7 +15,7 @@
 {% block breadcrumb %}
 <a href="{{ url_for('projects.projects_page') }}">Projects</a>
 <span class="sep">/</span>
-<a href="{{ url_for('projects.hosts_page', project_name=project_name) }}">{{ project_name }}</a>
+<a href="{{ project_home }}">{{ project_name }}</a>
 <span class="sep">/</span>
 <span class="current">{% block project_page_title %}{% endblock %}</span>
 {% endblock %}
@@ -73,7 +73,7 @@
 
     nav.innerHTML = `
       <div class="project-ctx">
-        <div class="project-ctx-label">Active project</div>
+        <div class="project-ctx-label">{{ 'Active project' if project_type == 'config' else project_type_label ~ ' project' }}</div>
         <div class="project-ctx-name">
           <span class="dot"></span>
           ${esc(projectName)}
@@ -85,6 +85,7 @@
         <div class="sidebar-label">Project</div>
       </div>
 
+      {% if project_type == 'config' %}
       <a href="${PROJECT_BASE}/hosts"
          class="nav-item ${'{{ "active" if request.endpoint == "projects.project_hosts" else "" }}'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -181,6 +182,16 @@
         Verify
       </a>
 
+      {% elif project_type == 'central' %}
+      <a href="${PROJECT_BASE}/central"
+         class="nav-item ${'{{ "active" if request.endpoint == "projects.central_overview" else "" }}'}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+        </svg>
+        Overview
+      </a>
+
+      {% endif %}
       <a href="${PROJECT_BASE}/history"
          class="nav-item ${'{{ "active" if request.endpoint == "projects.project_history" else "" }}'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

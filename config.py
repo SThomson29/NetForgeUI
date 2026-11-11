@@ -26,6 +26,11 @@ class Config:
     PLAYBOOK           = os.path.join(CONFIGGEN_REPO_PATH, 'playbooks', 'generate_configs.yml')
     ROLES_PATH         = os.path.join(CONFIGGEN_REPO_PATH, 'roles')
 
+    # The samthomson.new_central Ansible collection, which applies Central
+    # projects. Unset, Central projects can't be created and nothing about
+    # them is shown.
+    CENTRAL_REPO_URL   = os.environ.get('CENTRAL_REPO_URL', '').strip()
+
     # SSH deploy key for private git repo.
     # Mount the private key file into the container and set this path.
     SSH_KEY_PATH       = os.environ.get('SSH_KEY_PATH', '/root/.ssh/id_rsa')

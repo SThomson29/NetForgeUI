@@ -336,6 +336,8 @@ def _projects_missing_skeleton_files(app):
     out = []
     for user in User.all_users(app):
         for p in list_projects(app, user.username):
+            if p['type'] != 'config':       # only config projects have host_vars
+                continue
             try:
                 r = reconcile_host_vars(app, user.username, p['name'], dry_run=True)
             except Exception:                       # noqa: BLE001
