@@ -33,7 +33,7 @@ from .transfer import (
     export_project, import_project, read_manifest, TransferError,
 )
 
-from . import audit, checks, sharing
+from . import audit, checks, sections, sharing
 from .api import json_body
 from .jobs import prune_finished, mark_finished
 from .security import job_tag, visible_job
@@ -637,6 +637,7 @@ def generate_page(project_name):
                            configs=configs,
                            stale_full=stale_full,
                            stale_partial=stale_partial,
+                           sections=sections.sections(app),
                            stale_templates=sorted(h for h in stale_full
                                                   if why[h]['templates']),
                            stale_templates_only=all(

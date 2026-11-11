@@ -485,6 +485,17 @@ Pulling updates the templates and the skeleton, but does not touch existing
 `host_vars` files. New switches added after a pull pick up the new skeleton
 straight away; existing switches do not.
 
+### Adding a template before the UI knows it
+
+A new template in NetForge can be used straight away, without a NetForgeUI release:
+
+1. Add the template, its `Render | <name>` task with a tag, and its skeleton file to NetForge, then pull.
+2. On each project's Hosts page, **Check for missing files** adds the new skeleton file to existing switches.
+3. Edit it per switch on the **Files** page, where it shows as **YAML only**.
+4. The section appears on the Generate page by itself: the tick-boxes are read from the role's task tags.
+
+A form tab for it in the Editor can follow later.
+
 ### Bringing existing projects up to date
 
 When NetForge gains a new host_vars file — as it did with `syslog.yml` and
