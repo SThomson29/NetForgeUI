@@ -1405,6 +1405,87 @@ def get_all_allocations(app, username, project_name):
 
 
 # ---------------------------------------------------------------------------
+# Releasing what a switch holds
+# ---------------------------------------------------------------------------
+
+def _clear_host_addresses(allocs, hostname):
+    """Drop hostname's unique and point-to-point addresses from allocs.
+    Returns how many addresses it held."""
+    released = 0
+    for pid in list(allocs.get('unique', {}).keys()):
+        pool_allocs = allocs['unique'][pid]
+        # A shared anycast VTEP belongs to both members of a pair, so only
+        # this host's half is dropped and the peer keeps it.
+        for ip in [k for k, v in pool_allocs.items()
+                   if hostname in (v.get('hostname'), v.get('shared_with'))]:
+            _release_unique(pool_allocs, ip, hostname)
+            released += 1
+
+    for pid in list(allocs.get('point_to_point', {}).keys()):
+        pool_allocs = allocs['point_to_point'][pid]
+        # Release each end this host holds the same way the editor does, so
+        # a partner switch's end is handed back to it rather than orphaned.
+        for ip in [k for k, v in pool_allocs.items()
+                   if v.get('hostname') == hostname]:
+            _release_ptp_end(pool_allocs, ip)
+            released += 1
+        # And any reservation still held for this host.
+        for ip in [k for k, v in pool_allocs.items()
+                   if v.get('status') == 'reserved_for_peer'
+                   and v.get('peer_hostname') == hostname]:
+            del pool_allocs[ip]
+    return released
+
+
+@_locked
+def release_host(app, username, project_name, hostname):
+    """Free everything Resources records against a switch that is being
+    removed, and forget what the project remembers about it. Returns how
+    many addresses were released.
+
+    - unique and point-to-point addresses go back to their pools; a /31
+      partner keeps its end, and a VSX peer keeps a shared VTEP
+    - SVI addresses are released; an active gateway shared with a VSX peer
+      passes to the peer
+    - a subnet assigned to a VLAN stays assigned, since the VLAN outlives
+      the switch, but no longer names this switch as carrying it
+    - its last-saved record and Verify inventory are dropped
+    """
+    allocs = _load_allocations(app, username, project_name)
+    released = _clear_host_addresses(allocs, hostname)
+
+    for entries in allocs.get('svi', {}).values():
+        for ip, e in list(entries.items()):
+            if e.get('hostname') == hostname:
+                if e.get('shared_with'):
+                    e['hostname'] = e.pop('shared_with')
+                else:
+                    del entries[ip]
+                released += 1
+            elif e.get('shared_with') == hostname:
+                e.pop('shared_with', None)
+                released += 1
+
+    for blocks in allocs.get('vlan_supernet', {}).values():
+        for e in blocks.values():
+            if e.get('hostname') == hostname:
+                e['hostname'], e['peer_hostname'] = e.get('peer_hostname'), None
+            elif e.get('peer_hostname') == hostname:
+                e['peer_hostname'] = None
+    _save_allocations(app, username, project_name, allocs)
+
+    cfg = _load_config(app, username, project_name)
+    touched = False
+    for key in ('host_saves', 'inventory'):
+        if hostname in (cfg.get(key) or {}):
+            del cfg[key][hostname]
+            touched = True
+    if touched:
+        _save_config(app, username, project_name, cfg)
+    return released
+
+
+# ---------------------------------------------------------------------------
 # Allocation sync from host_vars
 # ---------------------------------------------------------------------------
 
@@ -1596,27 +1677,8 @@ def sync_allocations(app, username, project_name, hostname):
  
     # Clear all existing allocations for this hostname before re-scanning
     # This ensures deleted or renamed interfaces don't leave stale reservations
-    for pid in list(allocs['unique'].keys()):
-        pool_allocs = allocs['unique'][pid]
-        # A shared anycast VTEP belongs to both members of a pair, so only
-        # this host's half is dropped and the peer keeps it.
-        for ip in [k for k, v in pool_allocs.items()
-                   if hostname in (v.get('hostname'), v.get('shared_with'))]:
-            _release_unique(pool_allocs, ip, hostname)
- 
-    for pid in list(allocs['point_to_point'].keys()):
-        pool_allocs = allocs['point_to_point'][pid]
-        # Release each end this host holds the same way the editor does, so
-        # a partner switch's end is handed back to it rather than orphaned.
-        for ip in [k for k, v in pool_allocs.items()
-                   if v.get('hostname') == hostname]:
-            _release_ptp_end(pool_allocs, ip)
-        # And any reservation still held for this host.
-        for ip in [k for k, v in pool_allocs.items()
-                   if v.get('status') == 'reserved_for_peer'
-                   and v.get('peer_hostname') == hostname]:
-            del pool_allocs[ip]
- 
+    _clear_host_addresses(allocs, hostname)
+
     # Scan all interface types — only process explicitly set valid IPs
     for lo in (interfaces.get('loopback_interfaces') or []):
         ip = lo.get('ip_address', '')

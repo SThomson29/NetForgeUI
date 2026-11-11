@@ -444,8 +444,10 @@ def bulk_hosts_add(project_name):
 @login_required
 def delete_host(project_name, hostname):
     app = current_app._get_current_object()
-    remove_project_host(app, _owner(), project_name, hostname)
-    flash(f'{hostname} removed.', 'success')
+    released = remove_project_host(app, _owner(), project_name, hostname)
+    flash(f'{hostname} removed.' if not released else
+          '%s removed; %d address%s released in Resources.'
+          % (hostname, released, '' if released == 1 else 'es'), 'success')
     return redirect(url_for('projects.hosts_page', project_name=project_name))
 
 

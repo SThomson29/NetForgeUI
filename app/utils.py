@@ -127,9 +127,17 @@ def add_project_hosts(app, username, project_name, hostnames, stacking):
             _scaffold_host_vars_to(app, hostname, stacking, hvdir)
 
 def remove_project_host(app, username, project_name, hostname):
-    """Remove a host from a project."""
+    """Remove a host from a project: its inventory entry, host_vars and
+    generated configs, the addresses Resources holds for it, and its
+    Deployment IPs row. Returns how many addresses were released."""
+    from .project import project_lock
+    with project_lock(app, username, project_name):
+        return _remove_project_host(app, username, project_name, hostname)
+
+
+def _remove_project_host(app, username, project_name, hostname):
     from .project import (project_hosts_ini_path, project_host_vars_dir,
-                          project_generated_configs_dir)
+                          project_generated_configs_dir, release_host)
     ini = project_hosts_ini_path(app, username, project_name)
     cp = configparser.ConfigParser(allow_no_value=True)
     cp.optionxform = str
@@ -154,6 +162,19 @@ def remove_project_host(app, username, project_name, hostname):
         for fname in os.listdir(gcdir):
             if fname.startswith(hostname + '_') and not fname.startswith(tuple(longer)):
                 os.remove(os.path.join(gcdir, fname))
+
+    # Left behind, its addresses stay taken in every picker, and its row
+    # stays on the Deploy and Firmware pages with nothing to send.
+    released = release_host(app, username, project_name, hostname)
+    from .deploy_routes import _load_mapping, _mapping_path, _save_mapping
+    if os.path.exists(_mapping_path(app, username, project_name)):
+        mapping = _load_mapping(app, username, project_name)
+        kept = [h for h in mapping.get('hosts') or []
+                if not (isinstance(h, dict) and h.get('hostname') == hostname)]
+        if len(kept) != len(mapping.get('hosts') or []):
+            mapping['hosts'] = kept
+            _save_mapping(app, username, project_name, mapping)
+    return released
 
 def reconcile_host_vars(app, username, project_name, dry_run=True):
     """Add skeleton files that an existing project's hosts are missing.
