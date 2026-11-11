@@ -142,10 +142,17 @@ def remove_project_host(app, username, project_name, hostname):
     hvdir = os.path.join(project_host_vars_dir(app, username, project_name), hostname)
     if os.path.isdir(hvdir):
         shutil.rmtree(hvdir)
+    # A config is <hostname>_FULL.ios, <hostname>_PARTIAL_<tags>.ios or a
+    # leftover <hostname>_NN_<section>.ios. Host names can contain
+    # underscores, so 'SW1_' is also how SW1_B's files start: a file that
+    # a longer remaining host name matches belongs to that switch.
+    longer = [h['hostname'] + '_' for h in
+              read_project_hosts(app, username, project_name)
+              if h['hostname'].startswith(hostname + '_')]
     gcdir = project_generated_configs_dir(app, username, project_name)
     if os.path.isdir(gcdir):
         for fname in os.listdir(gcdir):
-            if fname.startswith(hostname + '_'):
+            if fname.startswith(hostname + '_') and not fname.startswith(tuple(longer)):
                 os.remove(os.path.join(gcdir, fname))
 
 def reconcile_host_vars(app, username, project_name, dry_run=True):
