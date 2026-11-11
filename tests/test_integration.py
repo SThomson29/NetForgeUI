@@ -175,6 +175,23 @@ class TestProjectHosts:
         # Host should not appear in the switch table — flash message may contain the name
         assert b'Switches (0)' in res.data
 
+    def test_delete_host_keeps_configs_of_longer_names(self, app, auth_client):
+        """Deleting SW1 must not take SW1_B's configs: both start 'SW1_'."""
+        from app.project import project_generated_configs_dir
+        self.setup_project(auth_client, app)
+        for name in ('SW1', 'SW1_B'):
+            auth_client.post('/projects/admin/test-proj/hosts/add',
+                             data={'hostname': name, 'stacking': 'none'})
+        gcdir = project_generated_configs_dir(app, 'admin', 'test-proj')
+        os.makedirs(gcdir, exist_ok=True)
+        files = ['SW1_FULL.ios', 'SW1_PARTIAL_vlans.ios', 'SW1_08_vlans.ios',
+                 'SW1_B_FULL.ios', 'SW1_B_PARTIAL_vlans.ios']
+        for name in files:
+            with open(os.path.join(gcdir, name), 'w') as f:
+                f.write('!\n')
+        auth_client.post('/projects/admin/test-proj/hosts/delete/SW1')
+        assert sorted(os.listdir(gcdir)) == ['SW1_B_FULL.ios', 'SW1_B_PARTIAL_vlans.ios']
+
     def test_add_vsx_host_creates_vsx_file(self, app, auth_client):
         self.setup_project(auth_client, app)
         # Need vsx.yml in skeleton

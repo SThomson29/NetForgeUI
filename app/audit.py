@@ -213,6 +213,27 @@ def record_event(app, *, username, action, summary, project='', owner=None, **de
              action, '[]', json.dumps(params), 'done', '[]'))
 
 
+def record_startup_pull(app, before, after, returncode, output):
+    """Record the pull a container start does, if it moved NetForge to a
+    different commit or failed. before and after are repo_version.read
+    results. The templates changing under every project is worth a record
+    even though nobody pressed anything; a pull that found nothing new is
+    not. Returns the entry id, or None if nothing was recorded."""
+    moved = bool(before and after and before['commit'] != after['commit'])
+    if returncode == 0 and not moved:
+        return None
+    entry = record_start(
+        app, username='(startup)', project='', owner='', action='repo_pull',
+        switch_user=None, targets=[],
+        params={'from': before['label'] if before else None,
+                'to': after['label'] if moved else None})
+    # git prints the remote URL, which can carry a token.
+    output = re.sub(r'(://)[^/@\s]+@', r'\1********@', output or '')
+    record_finish(app, entry, {'status': 'done' if returncode == 0 else 'failed',
+                               'returncode': returncode, 'output': output})
+    return entry
+
+
 def _clean_result(r):
     """A per-switch result as stored: commands masked, the diff dropped.
 

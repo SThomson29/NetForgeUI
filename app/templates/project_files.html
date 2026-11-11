@@ -1,0 +1,308 @@
+{% extends 'base_project.html' %}
+{% block title %}Files — NetForgeUI{% endblock %}
+{% block page_title %}{{ project_name }} / Files{% endblock %}
+{% block project_page_title %}Files{% endblock %}
+
+{% block project_extra_head %}
+{% set monaco = url_for('static', filename='vendor/monaco-0.57.0/vs') %}
+<link rel="stylesheet" href="{{ monaco }}/editor/editor.main.css">
+<style>
+.files-wrap{display:grid;grid-template-columns:250px minmax(0,1fr);gap:14px;align-items:start}
+@media (max-width:900px){.files-wrap{grid-template-columns:1fr}}
+.files-tree{background:#fff;border:1px solid #e5e4dc;border-radius:10px;padding:10px;max-height:calc(100vh - 150px);overflow-y:auto;font-size:13px}
+.files-tree input{width:100%;font:inherit;font-size:13px;padding:6px 9px;border:1px solid #d1d0c9;border-radius:6px;margin-bottom:8px}
+.files-tree .group{font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.04em;margin:10px 4px 4px}
+.files-tree details{margin:0}
+.files-tree summary{cursor:pointer;padding:4px 6px;border-radius:5px;font-weight:500;list-style-position:inside}
+.files-tree summary:hover{background:#f5f5f4}
+.files-tree summary .count{color:#999;font-weight:400;font-size:12px}
+.file-link{display:flex;align-items:center;gap:6px;width:100%;text-align:left;background:none;border:none;font:inherit;font-family:'JetBrains Mono','Courier New',monospace;font-size:12px;padding:3px 6px 3px 22px;border-radius:5px;cursor:pointer;color:#1a1a1a;overflow-wrap:anywhere}
+.file-link.top{padding-left:6px}
+.file-link:hover{background:#f5f5f4}
+.file-link.active{background:#1a1a1a;color:#fff}
+.file-link .tag{margin-left:auto;font-family:inherit;font-size:10px;color:#2563eb;white-space:nowrap}
+.file-link.active .tag{color:#bfdbfe}
+.files-main{background:#fff;border:1px solid #e5e4dc;border-radius:10px;padding:12px 14px;min-width:0}
+.files-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.files-head .path{font-family:'JetBrains Mono','Courier New',monospace;font-size:13px;font-weight:600;overflow-wrap:anywhere}
+.files-head .grow{flex:1}
+.files-note{font-size:12px;color:#666;margin-bottom:8px}
+.files-msg{font-size:13px;padding:8px 12px;border-radius:6px;margin-bottom:8px;display:none}
+.files-msg.err{display:block;background:#fef2f2;border:1px solid #fecaca;color:#991b1b}
+.files-msg.ok{display:block;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534}
+#editor-host,#diff-host{height:calc(100vh - 290px);min-height:340px;border:1px solid #e5e4dc;border-radius:6px;overflow:hidden}
+#diff-host{display:none}
+.files-empty{color:#888;font-size:13px;padding:40px 0;text-align:center}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="files-wrap">
+  <div class="files-tree" id="tree">
+    <input id="tree-filter" type="search" placeholder="Filter switches and files" autocomplete="off">
+    <div id="tree-body"></div>
+  </div>
+
+  <div class="files-main">
+    <div class="files-head">
+      <span class="path" id="file-path">No file open</span>
+      <span class="badge badge-neutral" id="file-badge" style="display:none"></span>
+      <span class="grow"></span>
+      <span class="text-sm text-secondary" id="file-state"></span>
+      <button class="btn btn-sm" id="btn-discard" style="display:none">Discard changes</button>
+      <button class="btn btn-sm" id="btn-back" style="display:none">Keep editing</button>
+      <button class="btn btn-primary btn-sm" id="btn-review" style="display:none">Review changes</button>
+      <button class="btn btn-primary btn-sm" id="btn-save" style="display:none">Save</button>
+    </div>
+    <div class="files-note" id="file-note"></div>
+    <div class="files-msg" id="file-msg"></div>
+    <div class="files-empty" id="file-empty">
+      Choose a file on the left. Switch settings can be edited as YAML{% if not can_edit %} with edit access{% endif %};
+      the inventory and generated configs are read-only.
+    </div>
+    <div id="editor-host" style="display:none"></div>
+    <div id="diff-host"></div>
+  </div>
+</div>
+
+<script nonce="{{ csp_nonce() }}">
+const TREE = {{ tree | tojson }};
+const CAN_EDIT = {{ can_edit | tojson }};
+const MONACO_BASE = {{ url_for('static', filename='vendor/monaco-0.57.0/vs') | tojson }};
+</script>
+<script src="{{ url_for('static', filename='vendor/monaco-0.57.0/vs/loader.js') }}"></script>
+<script nonce="{{ csp_nonce() }}">
+(function () {
+  const $ = id => document.getElementById(id);
+  let editor = null, diffEditor = null;
+  let open = null;          // {kind, host, name, content (as saved), editable, form, fingerprint}
+  let reviewing = false;
+
+  function make(tag, attrs, ...kids) {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (k === 'class') n.className = v; else n.setAttribute(k, v);
+    }
+    for (const kid of kids) n.append(kid);
+    return n;
+  }
+
+  /* ── Tree ─────────────────────────────────────────────── */
+
+  const keyOf = f => f.kind === 'hostvars' ? 'hostvars/' + f.host + '/' + f.name
+                    : f.kind === 'config' ? 'config/' + f.name : 'inventory';
+
+  function fileButton(file, label, extraClass, tag) {
+    const b = make('button', {class: 'file-link' + (extraClass ? ' ' + extraClass : ''),
+                              type: 'button', 'data-key': keyOf(file)}, label);
+    if (tag) b.append(make('span', {class: 'tag', title: tag.title}, tag.text));
+    b.addEventListener('click', () => choose(file));
+    return b;
+  }
+
+  function renderTree() {
+    const q = $('tree-filter').value.trim().toLowerCase();
+    const body = $('tree-body');
+    body.replaceChildren();
+    const hit = s => !q || s.toLowerCase().includes(q);
+
+    if (TREE.inventory && hit('hosts.ini')) {
+      body.append(make('div', {class: 'group'}, 'Inventory'),
+                  fileButton({kind: 'inventory', name: 'hosts.ini'}, 'hosts.ini', 'top'));
+    }
+
+    const hosts = TREE.hosts.map(h => ({h, files: hit(h.hostname) ? h.files
+                                         : h.files.filter(f => hit(f.name))}))
+                            .filter(x => x.files.length || hit(x.h.hostname));
+    if (hosts.length) body.append(make('div', {class: 'group'}, 'Switches'));
+    for (const {h, files} of hosts) {
+      const d = make('details', null,
+        make('summary', null, h.hostname + ' ', make('span', {class: 'count'}, '(' + files.length + ')')));
+      if (q || (open && open.host === h.hostname)) d.open = true;
+      for (const f of files) {
+        d.append(fileButton({kind: 'hostvars', host: h.hostname, name: f.name}, f.name, '',
+          f.form ? null : {text: 'YAML only', title: 'The switch editor has no form for this file'}));
+      }
+      body.append(d);
+    }
+
+    const configs = TREE.configs.filter(hit);
+    if (configs.length) {
+      const d = make('details', null,
+        make('summary', null, 'Generated configs ', make('span', {class: 'count'}, '(' + configs.length + ')')));
+      if (q || (open && open.kind === 'config')) d.open = true;
+      for (const name of configs) d.append(fileButton({kind: 'config', name}, name));
+      body.append(make('div', {class: 'group'}, 'Output'), d);
+    }
+    if (!body.children.length) body.append(make('div', {class: 'files-empty'}, 'Nothing matches.'));
+    markActive();
+  }
+
+  function markActive() {
+    const key = open ? keyOf(open) : null;
+    document.querySelectorAll('.file-link').forEach(b =>
+      b.classList.toggle('active', b.getAttribute('data-key') === key));
+  }
+
+  /* ── Editor state ─────────────────────────────────────── */
+
+  const isDirty = () => !!(open && editor && open.editable && CAN_EDIT
+                           && editor.getValue() !== open.content);
+
+  function message(kind, text) {
+    const m = $('file-msg');
+    m.className = 'files-msg' + (kind ? ' ' + kind : '');
+    m.textContent = text || '';
+  }
+
+  function refresh() {
+    const canEdit = !!(open && open.editable && CAN_EDIT);
+    const dirty = isDirty();
+    window.__filesDirty = dirty;
+    $('file-empty').style.display = open ? 'none' : '';
+    $('editor-host').style.display = open && !reviewing ? 'block' : 'none';
+    $('diff-host').style.display = open && reviewing ? 'block' : 'none';
+    $('btn-review').style.display = canEdit && dirty && !reviewing ? '' : 'none';
+    $('btn-discard').style.display = canEdit && dirty && !reviewing ? '' : 'none';
+    $('btn-save').style.display = reviewing ? '' : 'none';
+    $('btn-back').style.display = reviewing ? '' : 'none';
+    $('file-state').textContent = reviewing ? 'Left: as saved. Right: your changes.'
+                                : dirty ? 'Unsaved changes' : '';
+    if (!open) return;
+    $('file-path').textContent = open.kind === 'hostvars'
+      ? 'host_vars / ' + open.host + ' / ' + open.name
+      : open.kind === 'config' ? 'generated_configs / ' + open.name : open.name;
+    const badge = $('file-badge');
+    badge.style.display = '';
+    badge.textContent = canEdit ? (open.form ? 'also in the switch editor' : 'YAML only') : 'read-only';
+    $('file-note').textContent =
+      open.kind === 'inventory' ? 'Managed from the Hosts page.'
+      : open.kind === 'config' ? 'Written by Generate; regenerate to change it.'
+      : !CAN_EDIT ? 'You have view access to this project.'
+      : open.form ? 'The switch editor rewrites this file whenever the switch is saved there. '
+                    + 'Values are kept; comments and settings it has no field for are not.'
+      : 'The switch editor has no form for this file and never changes it.';
+  }
+
+  function show(file) {
+    open = file;
+    reviewing = false;
+    const lang = file.name.endsWith('.yml') ? 'yaml' : 'plaintext';
+    const old = editor.getModel();
+    editor.setModel(monaco.editor.createModel(file.content, lang));
+    if (old) old.dispose();
+    editor.updateOptions({readOnly: !(file.editable && CAN_EDIT)});
+    editor.getModel().onDidChangeContent(refresh);
+    history.replaceState(null, '', '#' + keyOf(file));
+    message();
+    renderTree();
+    refresh();
+    editor.layout();
+    editor.focus();
+  }
+
+  async function load(file) {
+    const p = new URLSearchParams({kind: file.kind});
+    if (file.host) p.set('host', file.host);
+    if (file.name) p.set('name', file.name);
+    try {
+      const res = await fetch(PROJECT_BASE + '/api/files/content?' + p);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || ('server returned ' + res.status));
+      show(data);
+    } catch (e) {
+      message('err', e.message);
+    }
+  }
+
+  function choose(file) {
+    if (isDirty() && !confirm('Discard your unsaved changes to ' + open.name + '?')) return;
+    load(file);
+  }
+
+  function review() {
+    if (!diffEditor) {
+      diffEditor = monaco.editor.createDiffEditor($('diff-host'), {
+        readOnly: true, automaticLayout: true, renderSideBySide: true,
+        useInlineViewWhenSpaceIsLimited: false,
+        minimap: {enabled: false}, scrollBeyondLastLine: false, fontSize: 13});
+    }
+    const prev = diffEditor.getModel();
+    diffEditor.setModel({
+      original: monaco.editor.createModel(open.content, 'yaml'),
+      modified: monaco.editor.createModel(editor.getValue(), 'yaml')});
+    if (prev) { prev.original.dispose(); prev.modified.dispose(); }
+    reviewing = true;
+    message();
+    refresh();
+    diffEditor.layout();
+  }
+
+  async function save() {
+    const content = editor.getValue();
+    $('btn-save').disabled = true;
+    try {
+      const res = await fetch(PROJECT_BASE + '/api/files/save', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({host: open.host, name: open.name, content, base: open.fingerprint})});
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || ('server returned ' + res.status));
+      open.content = content.replace(/\r\n/g, '\n');
+      open.fingerprint = data.fingerprint;
+      reviewing = false;
+      message('ok', 'Saved ' + open.name + ' for ' + open.host + '. Regenerate to update its config.');
+    } catch (e) {
+      reviewing = false;
+      message('err', e.message);
+    }
+    $('btn-save').disabled = false;
+    refresh();
+    editor.layout();
+  }
+
+  /* ── Start ────────────────────────────────────────────── */
+
+  function fromHash() {
+    const parts = decodeURIComponent(location.hash.slice(1)).split('/');
+    if (parts[0] === 'hostvars' && parts.length === 3) return {kind: 'hostvars', host: parts[1], name: parts[2]};
+    if (parts[0] === 'config' && parts.length === 2) return {kind: 'config', name: parts[1]};
+    if (parts[0] === 'inventory') return {kind: 'inventory', name: 'hosts.ini'};
+    return null;
+  }
+
+  $('tree-filter').addEventListener('input', renderTree);
+  $('btn-review').addEventListener('click', review);
+  $('btn-save').addEventListener('click', save);
+  $('btn-back').addEventListener('click', () => { reviewing = false; refresh(); editor.layout(); });
+  $('btn-discard').addEventListener('click', () => {
+    if (confirm('Discard your unsaved changes to ' + open.name + '?')) editor.setValue(open.content);
+  });
+  window.addEventListener('beforeunload', e => { if (isDirty()) { e.preventDefault(); e.returnValue = ''; } });
+  document.addEventListener('click', e => {
+    const a = e.target.closest && e.target.closest('a[href]');
+    if (a && isDirty() && !a.getAttribute('href').startsWith('#')
+        && !confirm('You have unsaved changes. Leave without saving?')) e.preventDefault();
+  }, true);
+
+  renderTree();
+
+  require.config({paths: {vs: MONACO_BASE}});
+  require(['vs/editor/editor.main'], function () {
+    /* Monaco's own worker start-up goes through a blob: URL, which the
+       Content-Security-Policy blocks; start it from the file instead. */
+    self.MonacoEnvironment = {getWorker: (_id, label) =>
+      new Worker(new URL(MONACO_BASE + '/assets/editor.worker-_vAIFJDs.js', document.baseURI).href,
+                 {name: label, type: 'module'})};
+    editor = monaco.editor.create($('editor-host'), {
+      value: '', language: 'yaml', automaticLayout: true, readOnly: true,
+      minimap: {enabled: false}, scrollBeyondLastLine: false, fontSize: 13,
+      tabSize: 2, insertSpaces: true, detectIndentation: false, renderWhitespace: 'boundary'});
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { if (isDirty()) review(); });
+    const first = fromHash();
+    if (first) load(first);
+  }, function () {
+    message('err', 'The editor could not be loaded. Reload the page to try again.');
+  });
+})();
+</script>
+{% endblock %}

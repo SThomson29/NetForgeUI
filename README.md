@@ -21,6 +21,8 @@ A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — 
 - **Search** — find where an IP, subnet, VLAN, VNI or name is used across every project you can see, from the box in the sidebar
 - **Change summaries** — turn any dry run into a printable or plain-text summary of each switch's commands (secrets masked), with backout and a warning if configs were regenerated since, for a change request
 - **Project status at a glance** — the projects list shows configs out of date, changes not yet pushed and the last push for each project
+- **Files** — browse every file in a project in a VS Code-style editor: edit any switch's host_vars as YAML (checked before saving, with a diff to review), and read the inventory and generated configs
+- **Template versions** — each generation records the NetForge release (or commit) whose templates it used; configs made with older templates are flagged as out of date and offered for regeneration
 - **Verify** — read every switch's serial, model, base MAC and firmware, flag hardware that's changed since the last read, and check cabling over LLDP against the links the design implies
 - **Audit log** — generations, dry runs, pushes and firmware runs, plus sharing, transfers, deleted projects, user and SSO changes, password changes, firmware image uploads and repo pulls, each with who did it. A project's History shows its own; admins see everything under Admin → Audit
 
@@ -184,6 +186,7 @@ up by their bare names.
 | `SECRET_KEY` | Yes | `change-me-in-production` | Flask session secret — use a long random string |
 | `CONFIGGEN_REPO_URL` | Yes | — | Clone URL of your NetForge repo (HTTPS or SSH) |
 | `ADMIN_PASSWORD` | No | `changeme123` | Initial admin password, applied only on first run |
+| `CONFIGGEN_REPO_REF` | No | — | NetForge release tag (e.g. `v1.4.1`) or branch to stay on. Checked out at every start; **Admin** → **Config repo** then shows it read-only. Unset, the repo follows its default branch until an admin pins a release there |
 | `CONFIGGEN_REPO_PATH` | No | `/app/service/configgen` | Where the NetForge repo is cloned inside the container |
 | `ANSIBLE_IMAGE` | No | `cytopia/ansible:latest` | Image used for the ephemeral generation container |
 | `REPO_VOLUME_NAME` | No | `netforgeui_repo` | Name of the repo volume to mount into the Ansible container |
@@ -380,6 +383,33 @@ an agent IP.
 MTU is not offered on LAGs or authenticated ports, as it is not applicable to
 either on AOS-CX.
 
+#### Editing the YAML directly
+
+**Files** lists everything in the project: `hosts.ini`, each switch's
+`host_vars` files and the generated configs. Anyone who can see the project
+can read them. With edit access, a switch's `host_vars` files can be edited as
+YAML: **Review changes** shows the edit beside the saved file, and **Save**
+writes it. The inventory and generated configs are read-only there.
+
+A save is refused, with the reason, if:
+
+- it isn't valid YAML, or the top level isn't `name: value` settings
+- a setting is a different kind of thing from the NetForge skeleton's — a
+  single value where the templates loop over a list, for example
+- the switch was saved by anyone since the file was opened
+- the switch editor could no longer read the switch
+
+Saving here tracks IP allocations and marks the switch's config out of date,
+exactly as saving in the Editor does. Wrong values are still possible, as
+they are in the form.
+
+Two things to know. The Editor rewrites each file it has a tab for whenever
+that switch is saved there: values are kept, but comments and settings it has
+no field for are lost. And a file the Editor has no tab for, which a newer
+NetForge skeleton can add (shown as **YAML only**), is never touched by it, so
+Files is where to edit it. Only files that already exist can be edited; use
+**Check for missing files** on the Hosts page to add new skeleton files.
+
 ### 6. Generate configs
 
 Go to **Generate**. Optionally filter by switch or by section. Section filters map to Ansible tags, so selecting **Syslog** generates only that part of the config. Click **Generate** — download the resulting `.ios` files individually or as a zip.
@@ -443,11 +473,28 @@ stored) reads each switch with a management IP over its REST API:
 
 ## Updating NetForge Templates
 
-The NetForge repo is pulled automatically each time the container restarts. For a mid-session refresh without restarting, go to **Admin** → **Pull latest**.
+By default the app follows NetForge's default branch: the repo is pulled each time the container restarts, and **Admin** → **Config repo** → **Pull latest** does the same mid-session.
+
+To stay on a release instead, press **Check for updates** on that page. It fetches without changing anything, then lists the branch and the newest release tags, each with the commits a move would bring in (or drop) and whether the generation templates differ. **Pin to vX** moves to that release and stays there: restarts fetch, so newer releases show up, but no longer move. **Follow main** goes back to tracking the branch. Each move is in the audit log, and is refused while a generation, deploy or firmware run is in progress.
+
+For an instance managed from its deployment config, set `CONFIGGEN_REPO_REF` to a tag or branch. It is checked out at every start and the Admin page becomes read-only, so a rebuilt instance comes back on the same version.
+
+Each generation records the NetForge version it used. After a move, configs generated with different templates show as out of date on the Generate page until regenerated.
 
 Pulling updates the templates and the skeleton, but does not touch existing
 `host_vars` files. New switches added after a pull pick up the new skeleton
 straight away; existing switches do not.
+
+### Adding a template before the UI knows it
+
+A new template in NetForge can be used straight away, without a NetForgeUI release:
+
+1. Add the template, its `Render | <name>` task with a tag, and its skeleton file to NetForge, then pull.
+2. On each project's Hosts page, **Check for missing files** adds the new skeleton file to existing switches.
+3. Edit it per switch on the **Files** page, where it shows as **YAML only**.
+4. The section appears on the Generate page by itself: the tick-boxes are read from the role's task tags.
+
+A form tab for it in the Editor can follow later.
 
 ### Bringing existing projects up to date
 

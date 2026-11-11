@@ -21,6 +21,8 @@ import re
 
 import yaml
 
+from .hostvars import BASE_LOADER
+
 MAX_HITS = 300
 MAX_QUERY = 200
 
@@ -191,7 +193,7 @@ def _host_vars(hvdir):
     for name in names:
         try:
             with open(os.path.join(hvdir, name)) as f:
-                out[name.rsplit('.', 1)[0]] = yaml.load(f, Loader=yaml.BaseLoader) or {}
+                out[name.rsplit('.', 1)[0]] = yaml.load(f, Loader=BASE_LOADER) or {}
         except (OSError, yaml.YAMLError):
             continue
     return out

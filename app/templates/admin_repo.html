@@ -20,6 +20,14 @@
 .check-list li{display:flex;align-items:center;gap:8px;padding:5px 0}
 .check-list code{font-size:12px}
 .mono{font-family:'Courier New',monospace;font-size:12px}
+.choice{border:1px solid #e5e4dc;border-radius:8px;padding:10px 12px;margin-bottom:8px}
+.choice-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.choice-head .name{font-family:'Courier New',monospace;font-size:13px;font-weight:600}
+.choice-head .grow{flex:1}
+.choice details{margin-top:8px;font-size:12px}
+.choice summary{cursor:pointer;color:#666}
+.choice .commit-list{margin:6px 0 0;padding:0;list-style:none;font-family:'Courier New',monospace;font-size:12px;line-height:1.6}
+.choice .commit-list .dim{color:#888}
 </style>
 {% endblock %}
 
@@ -41,14 +49,31 @@
   <div class="repo-meta">
     <span class="key">Remote</span>
     <span class="val">{{ repo_status.remote or '—' }}</span>
-    <span class="key">Branch</span>
-    <span class="val">{{ repo_status.branch }}</span>
+    {% if repo_status.version %}
+    <span class="key">Version</span>
+    <span class="val">{{ repo_status.version }}</span>
+    {% endif %}
+    <span class="key">Updates</span>
+    <span class="val" id="repo-mode">
+      {%- if repo_state.mode == 'pinned' %}Pinned to this release; stays here until moved
+      {%- else %}Following {{ repo_state.branch }}; moves to its newest commit on Pull and at every start{% endif -%}
+    </span>
     <span class="key">Last commit</span>
     <span class="val">{{ repo_status.commit }}</span>
   </div>
+  {% if repo_state.locked %}
+  <p class="text-sm text-secondary" style="margin-bottom:12px">
+    The version is set by <code>CONFIGGEN_REPO_REF={{ repo_state.locked }}</code> and is
+    checked out at every start. To move, change it there and restart.
+  </p>
+  {% endif %}
   {% endif %}
 
   <div class="pull-bar">
+    {% if repo_status.cloned %}
+    <button class="btn{{ ' btn-primary' if repo_state.mode == 'pinned' else '' }}" id="check-btn" data-click="checkUpdates">Check for updates</button>
+    {% endif %}
+    {% if not repo_status.cloned or repo_state.mode != 'pinned' %}
     <button class="btn btn-primary" id="pull-btn" data-click="pullRepo">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
@@ -56,9 +81,11 @@
       </svg>
       {% if repo_status.cloned %}Pull latest{% else %}Clone repo{% endif %}
     </button>
+    {% endif %}
     <span id="pull-status"></span>
   </div>
   <div id="pull-output"></div>
+  <div id="repo-choices" style="margin-top:14px"></div>
 </div>
 
 
@@ -116,6 +143,97 @@
 
 <script nonce="{{ csp_nonce() }}">
 let pullPollInterval = null;
+const REPO_LOCKED = {{ (repo_state.locked or '') | tojson }};
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') n.className = v; else n.setAttribute(k, v);
+  }
+  for (const kid of kids) n.append(kid);
+  return n;
+}
+
+function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+
+/* One row per place NetForge can be moved to, as the last fetch saw it. */
+function renderChoice(c) {
+  const isBranch = c.kind === 'branch';
+  const head = el('div', {class: 'choice-head'},
+    el('span', {class: 'name'}, c.ref),
+    el('span', {class: 'badge badge-' + (isBranch ? 'blue' : 'neutral')},
+       isBranch ? 'follow branch' : 'release'));
+  let note;
+  if (c.current && !c.ahead) note = isBranch ? 'Current; nothing new' : 'Current';
+  else if (c.current) note = 'Current; ' + plural(c.ahead, 'new commit') + ' to pull';
+  else if (!c.ahead && !c.behind) note = 'Same commit as now';
+  else if (c.ahead && c.behind) note = plural(c.ahead, 'commit') + ' added, ' + c.behind + ' dropped';
+  else if (c.ahead) note = plural(c.ahead, 'commit') + ' newer than now';
+  else note = plural(c.behind, 'commit') + ' older than now';
+  head.append(el('span', {class: 'text-sm text-secondary'}, note));
+  if ((c.ahead || c.behind) && c.templates_changed) {
+    head.append(el('span', {class: 'badge badge-yellow'}, 'templates differ'));
+  }
+  head.append(el('span', {class: 'grow'}));
+  if (!REPO_LOCKED && !(c.current && !c.ahead)) {
+    const label = c.current ? 'Pull these' : isBranch ? 'Follow ' + c.ref : 'Pin to ' + c.ref;
+    head.append(el('button', {class: 'btn btn-sm', 'data-click': 'switchRepo',
+                              'data-args': JSON.stringify([c.ref, label])}, label));
+  }
+  const box = el('div', {class: 'choice'}, head);
+  if (c.commits.length) {
+    const total = c.ahead || c.behind;
+    const list = el('ul', {class: 'commit-list'});
+    for (const k of c.commits) {
+      list.append(el('li', null, el('span', {class: 'dim'}, k.commit + '  ' + k.date + '  '), k.subject));
+    }
+    if (total > c.commits.length) {
+      list.append(el('li', {class: 'dim'}, '… and ' + (total - c.commits.length) + ' more'));
+    }
+    box.append(el('details', null,
+      el('summary', null, c.ahead ? 'Commits this would bring in' : 'Commits this would drop'), list));
+  }
+  return box;
+}
+
+async function checkUpdates() {
+  const btn = document.getElementById('check-btn');
+  const status = document.getElementById('pull-status');
+  const box = document.getElementById('repo-choices');
+  btn.disabled = true;
+  status.innerHTML = '<span class="status-badge status-running">Checking</span>';
+  try {
+    const res = await fetch('/admin/repo/check', {method: 'POST'});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || ('server returned ' + res.status));
+    status.textContent = '';
+    box.replaceChildren(...data.choices.map(renderChoice));
+    if (!data.choices.length) box.textContent = 'Nothing to move to.';
+  } catch (e) {
+    status.innerHTML = '<span class="status-badge status-failed">Error</span>';
+    box.textContent = e.message;
+  }
+  btn.disabled = false;
+}
+
+async function switchRepo(ref, label) {
+  if (!confirm(label + '?\n\nEvery project generates from the new templates afterwards, '
+               + 'and existing configs made with different ones show as out of date.')) return;
+  const status = document.getElementById('pull-status');
+  status.innerHTML = '<span class="status-badge status-running">Moving</span>';
+  try {
+    const res = await fetch('/admin/repo/switch', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ref})});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || ('server returned ' + res.status));
+    status.innerHTML = '<span class="status-badge status-done">Now at ' + '</span>';
+    status.firstChild.append(data.version || ref);
+    setTimeout(() => window.location.reload(), 1200);
+  } catch (e) {
+    status.innerHTML = '<span class="status-badge status-failed">Error</span>';
+    document.getElementById('repo-choices').prepend(el('p', {class: 'text-sm', style: 'color:#991b1b'}, e.message));
+  }
+}
 
 async function pullRepo() {
   const btn    = document.getElementById('pull-btn');

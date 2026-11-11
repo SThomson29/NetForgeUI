@@ -24,13 +24,18 @@
 {% if stale_full %}
 <div class="card" id="stale-card">
   <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    {% if stale_templates and stale_templates_only %}
+    <span>{{ stale_full|length }} config{{ 's were' if stale_full|length != 1 else ' was' }} generated with older NetForge templates</span>
+    {% else %}
     <span>{{ stale_full|length }} switch{{ 'es have' if stale_full|length != 1 else ' has' }} changed since {{ 'their configs were' if stale_full|length != 1 else 'its config was' }} generated</span>
+    {% endif %}
     {% if project_level in ('owner', 'deploy', 'edit') %}
     <button class="btn btn-primary btn-sm" id="stale-btn" data-click="regenerateStale">Regenerate {{ 'these' if stale_full|length != 1 else 'it' }}</button>
     {% endif %}
   </div>
   <p class="text-sm" style="font-family:'JetBrains Mono',monospace;overflow-wrap:anywhere">{{ stale_full|join(', ') }}</p>
   <p class="text-sm text-secondary" style="margin-top:6px">Generates full configs for just these switches.
+    {% if stale_templates and not stale_templates_only %}NetForge's templates have also been updated since {{ stale_templates|join(', ') }} {{ 'were' if stale_templates|length != 1 else 'was' }} generated.{% endif %}
     {% if stale_partial %}Partial configs are also out of date for {{ stale_partial|join(', ') }}; regenerate those sections from the form below.{% endif %}
   </p>
 </div>
@@ -40,7 +45,10 @@
 </p>
 {% endif %}
 <div class="card">
-  <div class="card-header">Run config generation</div>
+  <div class="card-header" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <span>Run config generation</span>
+    {% if netforge %}<span class="text-sm text-secondary" style="font-weight:400">Templates: NetForge {{ netforge.label }}</span>{% endif %}
+  </div>
   <div class="run-controls">
     <div class="fld" style="width:220px">
       <label class="lbl">Switch (leave empty for all)</label>
@@ -54,27 +62,9 @@
     <div class="fld" style="width:100%">
       <label class="lbl">Sections (leave all unchecked for full config)</label>
       <div id="tags-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px 16px;margin-top:6px;padding:10px 12px;background:#faf9f7;border:1px solid #e5e4dc;border-radius:6px">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="staticroutes" style="width:auto"> Static routes</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="management" style="width:auto"> Management</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="general" style="width:auto"> General</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="snmp" style="width:auto"> SNMP</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="aaa" style="width:auto"> AAA</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="banner" style="width:auto"> Banner</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="vrfs" style="width:auto"> VRFs</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="vlans" style="width:auto"> VLANs</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="interfaces" style="width:auto"> All interfaces</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="interfaces_physical" style="width:auto"> Physical interfaces</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="interfaces_lag" style="width:auto"> LAG interfaces</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="interfaces_loopback" style="width:auto"> Loopback interfaces</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="interfaces_vlan" style="width:auto"> VLAN interfaces</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="ospf" style="width:auto"> OSPF</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="ibgp" style="width:auto"> iBGP</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="routing" style="width:auto"> Routing (VRFs+OSPF+iBGP)</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="vxlan" style="width:auto"> VXLAN</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="vsx" style="width:auto"> VSX</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="vsf" style="width:auto"> VSF</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="syslog" style="width:auto"> Syslog</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="sflow" style="width:auto"> sFlow</label>
+        {% for sec in sections %}
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"{% if sec.covers %} title="{{ sec.covers|join(', ') }}"{% endif %}><input type="checkbox" value="{{ sec.tag }}" style="width:auto"> {{ sec.label }}{% if sec.covers %} <span class="text-secondary" style="font-size:12px">({% if sec.covers|length <= 3 %}{{ sec.covers|join(' + ') }}{% else %}{{ sec.covers|length }} sections{% endif %})</span>{% endif %}</label>
+        {% endfor %}
       </div>
     </div>
     <button class="btn btn-primary" id="run-btn" data-click="runGenerate">

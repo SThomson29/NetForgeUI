@@ -232,7 +232,9 @@ def repo_page():
     skeleton = os.path.join(app.config['SKELETON_DIR'], 'aoscx')
     skeleton_files = sorted(f for f in os.listdir(skeleton) if f.endswith('.yml')) \
         if os.path.isdir(skeleton) else []
+    from . import repo_sync
     return render_template('admin_repo.html', repo_status=_get_repo_status(app),
+                           repo_state=repo_sync.state(app),
                            playbooks=playbooks, skeleton_files=skeleton_files,
                            behind=_projects_missing_skeleton_files(app))
 
@@ -363,7 +365,10 @@ def _get_repo_status(app):
             ['git', 'remote', 'get-url', 'origin'],
             cwd=repo, text=True, stderr=subprocess.DEVNULL, env=env
         ).strip()
-        return {'cloned': True, 'branch': branch, 'commit': commit, 'remote': remote}
+        from . import repo_version
+        version = repo_version.read(repo)
+        return {'cloned': True, 'branch': branch, 'commit': commit, 'remote': remote,
+                'version': version['label'] if version else None}
     except Exception as e:
         return {'cloned': True, 'branch': '?', 'commit': str(e), 'remote': None}
 
@@ -406,6 +411,9 @@ def _run_pull(repo_path, repo_url, git_env, app=None, audit_id=None):
             _pull_job['status'] = 'failed'
             _pull_job['error']  = str(e)
 
+    from . import repo_version
+    repo_version.forget()
+
     if app is not None:
         with _pull_lock:
             job = dict(_pull_job)
@@ -431,6 +439,18 @@ def pull_repo():
     if not repo_url and not os.path.isdir(os.path.join(repo_path, '.git')):
         return jsonify({'ok': False, 'error': 'CONFIGGEN_REPO_URL is not set and no repo is cloned.'})
 
+    # Pinned to a release there is no branch to pull; moving is a choice
+    # of release, made with Check for updates.
+    from . import repo_sync
+    state = repo_sync.state(app)
+    if state['cloned'] and state['mode'] == 'pinned':
+        return jsonify({'ok': False, 'error':
+                        'NetForge is pinned to %s. Use Check for updates to move to '
+                        'another release.' % (state['version'] or 'a release')})
+    busy = _jobs_running()
+    if busy:
+        return jsonify({'ok': False, 'error': busy})
+
     git_env = get_git_env(app)
     audit_id = audit.record_start(app, username=current_user.username, project='',
                                   owner='', action='repo_pull', switch_user=None,
@@ -443,6 +463,79 @@ def pull_repo():
     )
     t.start()
     return jsonify({'ok': True})
+
+
+def _jobs_running():
+    """A message if a generation, deploy or firmware run is in progress,
+    else None. They read templates and playbooks from the repo as they go,
+    so changing it under them could mix two versions in one run."""
+    from .projects import _jobs, _jobs_lock
+    from .deploy_routes import _deploy_jobs, _deploy_jobs_lock
+    from .firmware_routes import _fw_jobs, _fw_jobs_lock
+    for what, store, lock in (('generation', _jobs, _jobs_lock),
+                              ('deploy', _deploy_jobs, _deploy_jobs_lock),
+                              ('firmware upgrade', _fw_jobs, _fw_jobs_lock)):
+        with lock:
+            if any(j.get('_finished_at') is None for j in store.values()):
+                return 'A %s is running. Try again when it finishes.' % what
+    return None
+
+
+@admin_bp.route('/admin/repo/check', methods=['POST'])
+@login_required
+def repo_check():
+    """Fetch from NetForge without moving, and say what it could move to:
+    the branch to follow and the newest releases, each with the commits
+    the move would bring in."""
+    _require_admin()
+    from . import repo_sync
+    app = current_app._get_current_object()
+    if not repo_sync.cloned(app):
+        return jsonify(ok=False, error='The repo is not cloned yet.'), 400
+    try:
+        repo_sync.fetch(app)
+    except repo_sync.RepoError as e:
+        return jsonify(ok=False, error=str(e)), 502
+    return jsonify(ok=True, state=repo_sync.state(app), choices=repo_sync.choices(app))
+
+
+@admin_bp.route('/admin/repo/switch', methods=['POST'])
+@login_required
+def repo_switch():
+    """Move NetForge to a release (pinning it there) or back to following
+    a branch. POST {ref}. Uses what the last check fetched."""
+    _require_admin()
+    from . import repo_sync
+    from .api import json_body
+    app = current_app._get_current_object()
+    ref = str(json_body('ref')['ref']).strip()
+    if not repo_sync.cloned(app):
+        return jsonify(ok=False, error='The repo is not cloned yet.'), 400
+    locked = repo_sync.configured_ref(app)
+    if locked:
+        return jsonify(ok=False, error='The version is set by CONFIGGEN_REPO_REF (%s). '
+                                       'Change it there and restart.' % locked), 409
+    busy = _jobs_running()
+    if busy:
+        return jsonify(ok=False, error=busy), 409
+
+    before = repo_sync.state(app)
+    audit_id = audit.record_start(app, username=current_user.username, project='',
+                                  owner='', action='repo_pull', switch_user=None,
+                                  targets=[], params={'from': before['version'], 'to': ref})
+    try:
+        _old, new = repo_sync.switch(app, ref)
+    except repo_sync.RepoError as e:
+        audit.record_finish(app, audit_id, {'status': 'failed', 'returncode': 1,
+                                            'output': str(e)})
+        return jsonify(ok=False, error=str(e)), 400
+    after = repo_sync.state(app)
+    audit.record_finish(app, audit_id, {
+        'status': 'done', 'returncode': 0,
+        'output': 'NetForge moved from %s to %s (%s).' % (
+            before['version'], after['version'],
+            'pinned' if after['mode'] == 'pinned' else 'following %s' % after['branch'])})
+    return jsonify(ok=True, state=after, version=new['label'] if new else None)
 
 
 @admin_bp.route('/admin/pull/status')
