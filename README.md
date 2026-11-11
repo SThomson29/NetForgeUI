@@ -21,6 +21,7 @@ A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — 
 - **Search** — find where an IP, subnet, VLAN, VNI or name is used across every project you can see, from the box in the sidebar
 - **Change summaries** — turn any dry run into a printable or plain-text summary of each switch's commands (secrets masked), with backout and a warning if configs were regenerated since, for a change request
 - **Project status at a glance** — the projects list shows configs out of date, changes not yet pushed and the last push for each project
+- **Files** — browse every file in a project in a VS Code-style editor: edit any switch's host_vars as YAML (checked before saving, with a diff to review), and read the inventory and generated configs
 - **Template versions** — each generation records the NetForge release (or commit) whose templates it used; configs made with older templates are flagged as out of date and offered for regeneration
 - **Verify** — read every switch's serial, model, base MAC and firmware, flag hardware that's changed since the last read, and check cabling over LLDP against the links the design implies
 - **Audit log** — generations, dry runs, pushes and firmware runs, plus sharing, transfers, deleted projects, user and SSO changes, password changes, firmware image uploads and repo pulls, each with who did it. A project's History shows its own; admins see everything under Admin → Audit
@@ -381,6 +382,33 @@ an agent IP.
 
 MTU is not offered on LAGs or authenticated ports, as it is not applicable to
 either on AOS-CX.
+
+#### Editing the YAML directly
+
+**Files** lists everything in the project: `hosts.ini`, each switch's
+`host_vars` files and the generated configs. Anyone who can see the project
+can read them. With edit access, a switch's `host_vars` files can be edited as
+YAML: **Review changes** shows the edit beside the saved file, and **Save**
+writes it. The inventory and generated configs are read-only there.
+
+A save is refused, with the reason, if:
+
+- it isn't valid YAML, or the top level isn't `name: value` settings
+- a setting is a different kind of thing from the NetForge skeleton's — a
+  single value where the templates loop over a list, for example
+- the switch was saved by anyone since the file was opened
+- the switch editor could no longer read the switch
+
+Saving here tracks IP allocations and marks the switch's config out of date,
+exactly as saving in the Editor does. Wrong values are still possible, as
+they are in the form.
+
+Two things to know. The Editor rewrites each file it has a tab for whenever
+that switch is saved there: values are kept, but comments and settings it has
+no field for are lost. And a file the Editor has no tab for, which a newer
+NetForge skeleton can add (shown as **YAML only**), is never touched by it, so
+Files is where to edit it. Only files that already exist can be edited; use
+**Check for missing files** on the Hosts page to add new skeleton files.
 
 ### 6. Generate configs
 

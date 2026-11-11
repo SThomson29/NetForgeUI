@@ -569,6 +569,51 @@ def save_all_hostvars(project_name, hostname):
 
 
 # ---------------------------------------------------------------------------
+# Files — every file in the project as text; host_vars editable as YAML
+# ---------------------------------------------------------------------------
+
+@projects_bp.route('/projects/<owner>/<project_name>/files')
+@login_required
+def files_page(project_name):
+    from . import files
+    app = current_app._get_current_object()
+    return render_template('project_files.html', project_name=project_name,
+                           tree=files.tree(app, _owner(), project_name),
+                           can_edit=sharing.at_least(g.get('project_level'), sharing.EDIT))
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/api/files/content')
+@login_required
+def files_content(project_name):
+    """One file's text: ?kind=hostvars&host=&name=, ?kind=config&name= or
+    ?kind=inventory."""
+    from . import files
+    app = current_app._get_current_object()
+    try:
+        return jsonify(ok=True, **files.read(
+            app, _owner(), project_name, request.args.get('kind', ''),
+            request.args.get('host'), request.args.get('name')))
+    except files.FileError as e:
+        return jsonify(ok=False, error=str(e)), e.status
+
+
+@projects_bp.route('/projects/<owner>/<project_name>/api/files/save', methods=['POST'])
+@login_required
+def files_save(project_name):
+    """Save a host_vars file: POST {host, name, content, base}, base being
+    the fingerprint it was read with. Needs edit access, like any write."""
+    from . import files
+    app = current_app._get_current_object()
+    body = json_body('host', 'name', 'content')
+    try:
+        fingerprint = files.save(app, _owner(), project_name, body['host'], body['name'],
+                                 body['content'], body.get('base'), current_user.username)
+    except files.FileError as e:
+        return jsonify(ok=False, error=str(e), conflict=isinstance(e, files.Conflict)), e.status
+    return jsonify(ok=True, fingerprint=fingerprint)
+
+
+# ---------------------------------------------------------------------------
 # Generate
 # ---------------------------------------------------------------------------
 

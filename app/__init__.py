@@ -44,6 +44,12 @@ def create_app():
 
     @app.after_request
     def no_cache(response):
+        # The vendored Monaco editor is 5 MB that never changes: its folder
+        # name carries its version. Everything else is always fetched fresh.
+        from flask import request
+        if request.path.startswith('/static/vendor/monaco-') and response.status_code == 200:
+            response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+            return response
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'
