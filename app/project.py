@@ -1403,6 +1403,7 @@ def get_all_allocations(app, username, project_name):
 def sync_allocations(app, username, project_name, hostname):
     """Scan host_vars for a hostname and update allocations.json to match."""
     import yaml as _yaml
+    from .hostvars import BASE_LOADER
  
     cfg    = _load_config(app, username, project_name)
     allocs = _load_allocations(app, username, project_name)
@@ -1452,7 +1453,7 @@ def sync_allocations(app, username, project_name, hostname):
         if not os.path.exists(fpath):
             return {}
         with open(fpath) as f:
-            return _yaml.load(f, Loader=_yaml.BaseLoader) or {}
+            return _yaml.load(f, Loader=BASE_LOADER) or {}
  
     interfaces = load_hv('interfaces.yml')
     vxlan      = load_hv('vxlan.yml')

@@ -1,11 +1,16 @@
 import os
 import yaml
 
+# host_vars are read with every value as plain text (the Base loader). The
+# C version of that loader reads the same YAML several times faster; the
+# Python one is the fallback where PyYAML was built without libyaml.
+BASE_LOADER = getattr(yaml, 'CBaseLoader', yaml.BaseLoader)
+
 
 def _as_bool(value):
     """Interpret a YAML value as a boolean.
 
-    _load_yaml uses yaml.BaseLoader, which returns every scalar as a string,
+    _load_yaml uses the Base loader, which returns every scalar as a string,
     so bool('false') is True. Anything written explicitly as false would
     otherwise read as enabled.
     """
@@ -30,7 +35,7 @@ def _load_yaml(hvdir, filename):
     if not os.path.exists(fpath):
         return {}
     with open(fpath) as f:
-        return yaml.load(f, Loader=yaml.BaseLoader) or {}
+        return yaml.load(f, Loader=BASE_LOADER) or {}
 
 
 def _parse_state(hvdir):
