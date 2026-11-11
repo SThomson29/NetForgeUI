@@ -1288,3 +1288,33 @@ class TestSubnetDerivation:
         # both the container and the specific block, so longest-prefix wins
         assert '10.50.0.0/18' in blocks
         assert '10.50.5.0/24' in blocks
+
+
+class TestHelperAddressesAsTheEditorWritesThem:
+    """The editor writes each helper address on its own line under the
+    SVI. Indented level with the SVI's '- name:' they read as new entries
+    in vlan_interfaces, which made the whole file invalid YAML: the switch
+    then failed to generate and the editor could no longer open it."""
+
+    def test_editor_indents_helpers_under_their_svi(self):
+        from tests.conftest import editor_source
+        src = editor_source()
+        assert "map(h=>`      - ${h}`)" in src
+        assert "map(h=>`  - ${h}`).join('\\n') : '[]'}\\n    ospf_area" not in src
+
+    def test_that_layout_reads_back(self, tmp_path):
+        from app.hostvars import _parse_state
+        (tmp_path / 'interfaces.yml').write_text(
+            'vlan_interfaces:\n'
+            '  - name: vlan10\n'
+            '    ip_address: "10.10.0.2"\n'
+            '    ip_prefix: 24\n'
+            '    helper_addresses: \n'
+            '      - 10.0.0.9\n'
+            '      - 10.0.0.10\n'
+            '    ospf_area: ""\n'
+            '  - name: vlan20\n'
+            '    helper_addresses: []\n')
+        svis = _parse_state(str(tmp_path))['vlanIfs']
+        assert [s['name'] for s in svis] == ['vlan10', 'vlan20']
+        assert svis[0]['helper_addresses'] == ['10.0.0.9', '10.0.0.10']
