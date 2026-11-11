@@ -363,7 +363,10 @@ def _get_repo_status(app):
             ['git', 'remote', 'get-url', 'origin'],
             cwd=repo, text=True, stderr=subprocess.DEVNULL, env=env
         ).strip()
-        return {'cloned': True, 'branch': branch, 'commit': commit, 'remote': remote}
+        from . import repo_version
+        version = repo_version.read(repo)
+        return {'cloned': True, 'branch': branch, 'commit': commit, 'remote': remote,
+                'version': version['label'] if version else None}
     except Exception as e:
         return {'cloned': True, 'branch': '?', 'commit': str(e), 'remote': None}
 
@@ -405,6 +408,9 @@ def _run_pull(repo_path, repo_url, git_env, app=None, audit_id=None):
         with _pull_lock:
             _pull_job['status'] = 'failed'
             _pull_job['error']  = str(e)
+
+    from . import repo_version
+    repo_version.forget()
 
     if app is not None:
         with _pull_lock:

@@ -233,7 +233,9 @@ def _load(app, username, project_name):
             pass
 
     from .deploy_routes import _load_mapping
+    from . import repo_version
     return {
+        'netforge': repo_version.current(app),
         'hosts': [h['hostname'] for h in hosts],
         'states': states,
         'unreadable': unreadable,
@@ -672,9 +674,16 @@ def check_router_ids(d):
 
 # ── Readiness ──────────────────────────────────────────────
 
-def _stale(recorded, gcdir, base, known_hosts):
-    """{host: [config names]} generated from host_vars that have changed
-    since. Configs generated before this was recorded aren't judged."""
+def _stale(recorded, gcdir, base, known_hosts, made_with=None, netforge=None,
+           why=None):
+    """{host: [config names]} that are out of date: generated from
+    host_vars that have changed since, or with NetForge templates older
+    than the ones checked out now (netforge, from repo_version). Configs
+    generated before either was recorded aren't judged on it.
+
+    why, if given, is filled per stale host with {'settings': whether its
+    host_vars changed, 'templates': [version labels its configs were
+    generated with, where older]}."""
     stale = {}
     for name, fp in (recorded or {}).items():
         m = _CONFIG_NAME.match(name)
@@ -683,29 +692,54 @@ def _stale(recorded, gcdir, base, known_hosts):
         host = m.group(1)
         if host not in known_hosts:
             continue
-        if hostvars_fingerprint(os.path.join(base, host)) != fp:
-            stale.setdefault(host, []).append(name)
+        with_ = (made_with or {}).get(name) or {}
+        older = bool(netforge and with_.get('commit')
+                     and with_['commit'] != netforge['commit'])
+        changed = hostvars_fingerprint(os.path.join(base, host)) != fp
+        if not (older or changed):
+            continue
+        stale.setdefault(host, []).append(name)
+        if why is not None:
+            w = why.setdefault(host, {'settings': False, 'templates': []})
+            w['settings'] = w['settings'] or changed
+            if older and (with_.get('label') or '?') not in w['templates']:
+                w['templates'].append(with_.get('label') or '?')
     return stale
 
 
-def stale_configs(app, username, project_name):
-    """{host: [config names]} out of date with their switch's settings,
-    for the Generate page."""
+def stale_configs(app, username, project_name, why=None):
+    """{host: [config names]} out of date with their switch's settings or
+    with the NetForge templates, for the Generate page."""
+    from . import repo_version
     hosts = {h['hostname'] for h in read_project_hosts(app, username, project_name)
              if _HOSTNAME_RE.match(h['hostname'])}
-    return _stale(_load_config(app, username, project_name).get('generated_from'),
+    cfg = _load_config(app, username, project_name)
+    return _stale(cfg.get('generated_from'),
                   project_generated_configs_dir(app, username, project_name),
-                  project_host_vars_dir(app, username, project_name), hosts)
+                  project_host_vars_dir(app, username, project_name), hosts,
+                  cfg.get('generated_with'), repo_version.current(app), why)
 
 
 def check_stale_configs(d):
     """Configs whose switch's host_vars have changed since they were
-    generated. Configs generated before this was recorded aren't judged."""
-    stale = _stale(d['cfg'].get('generated_from'), d['gcdir'], d['base'], d['states'])
-    return [_finding('stale_config', host, WARNING,
-                     '%s has changed since its config was generated' % host,
-                     sorted(files), [host])
-            for host, files in sorted(stale.items())]
+    generated, or that were generated with older NetForge templates.
+    Configs generated before this was recorded aren't judged."""
+    why = {}
+    stale = _stale(d['cfg'].get('generated_from'), d['gcdir'], d['base'], d['states'],
+                   d['cfg'].get('generated_with'), d['netforge'], why)
+    out = []
+    for host, files in sorted(stale.items()):
+        if why[host]['settings']:
+            title = '%s has changed since its config was generated' % host
+        else:
+            title = '%s\'s config was generated with older NetForge templates' % host
+        details = sorted(files)
+        if why[host]['templates']:
+            details.append('Generated with NetForge %s; now %s'
+                           % (', '.join(sorted(why[host]['templates'])),
+                              d['netforge']['label']))
+        out.append(_finding('stale_config', host, WARNING, title, details, [host]))
+    return out
 
 
 def check_deployment_ips(d):

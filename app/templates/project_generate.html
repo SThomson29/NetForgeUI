@@ -24,13 +24,18 @@
 {% if stale_full %}
 <div class="card" id="stale-card">
   <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    {% if stale_templates and stale_templates_only %}
+    <span>{{ stale_full|length }} config{{ 's were' if stale_full|length != 1 else ' was' }} generated with older NetForge templates</span>
+    {% else %}
     <span>{{ stale_full|length }} switch{{ 'es have' if stale_full|length != 1 else ' has' }} changed since {{ 'their configs were' if stale_full|length != 1 else 'its config was' }} generated</span>
+    {% endif %}
     {% if project_level in ('owner', 'deploy', 'edit') %}
     <button class="btn btn-primary btn-sm" id="stale-btn" data-click="regenerateStale">Regenerate {{ 'these' if stale_full|length != 1 else 'it' }}</button>
     {% endif %}
   </div>
   <p class="text-sm" style="font-family:'JetBrains Mono',monospace;overflow-wrap:anywhere">{{ stale_full|join(', ') }}</p>
   <p class="text-sm text-secondary" style="margin-top:6px">Generates full configs for just these switches.
+    {% if stale_templates and not stale_templates_only %}NetForge's templates have also been updated since {{ stale_templates|join(', ') }} {{ 'were' if stale_templates|length != 1 else 'was' }} generated.{% endif %}
     {% if stale_partial %}Partial configs are also out of date for {{ stale_partial|join(', ') }}; regenerate those sections from the form below.{% endif %}
   </p>
 </div>
@@ -40,7 +45,10 @@
 </p>
 {% endif %}
 <div class="card">
-  <div class="card-header">Run config generation</div>
+  <div class="card-header" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <span>Run config generation</span>
+    {% if netforge %}<span class="text-sm text-secondary" style="font-weight:400">Templates: NetForge {{ netforge.label }}</span>{% endif %}
+  </div>
   <div class="run-controls">
     <div class="fld" style="width:220px">
       <label class="lbl">Switch (leave empty for all)</label>

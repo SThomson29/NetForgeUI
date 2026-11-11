@@ -1361,16 +1361,25 @@ def record_host_save(app, username, project_name, hostname, by):
 
 
 @_locked
-def record_generated_from(app, username, project_name, fingerprints):
+def record_generated_from(app, username, project_name, fingerprints, netforge=None):
     """Remember the host_vars fingerprint each config was generated from,
-    {config file name: fingerprint}. Entries for configs that no longer
-    exist are dropped."""
+    {config file name: fingerprint}, and the NetForge version whose
+    templates made it (repo_version.current, or None if unknown). Entries
+    for configs that no longer exist are dropped."""
     cfg = _load_config(app, username, project_name)
     recorded = cfg.get('generated_from') or {}
     recorded.update(fingerprints)
+    made_with = cfg.get('generated_with') or {}
+    for name in fingerprints:
+        if netforge:
+            made_with[name] = {'commit': netforge['commit'], 'label': netforge['label']}
+        else:
+            made_with.pop(name, None)
     gcdir = project_generated_configs_dir(app, username, project_name)
     cfg['generated_from'] = {name: fp for name, fp in recorded.items()
                              if os.path.isfile(os.path.join(gcdir, name))}
+    cfg['generated_with'] = {name: v for name, v in made_with.items()
+                             if name in cfg['generated_from']}
     _save_config(app, username, project_name, cfg)
 
 

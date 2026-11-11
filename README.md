@@ -21,6 +21,7 @@ A web-based frontend for [NetForge](https://github.com/SThomson29/NetForge) — 
 - **Search** — find where an IP, subnet, VLAN, VNI or name is used across every project you can see, from the box in the sidebar
 - **Change summaries** — turn any dry run into a printable or plain-text summary of each switch's commands (secrets masked), with backout and a warning if configs were regenerated since, for a change request
 - **Project status at a glance** — the projects list shows configs out of date, changes not yet pushed and the last push for each project
+- **Template versions** — each generation records the NetForge release (or commit) whose templates it used; configs made with older templates are flagged as out of date and offered for regeneration
 - **Verify** — read every switch's serial, model, base MAC and firmware, flag hardware that's changed since the last read, and check cabling over LLDP against the links the design implies
 - **Audit log** — generations, dry runs, pushes and firmware runs, plus sharing, transfers, deleted projects, user and SSO changes, password changes, firmware image uploads and repo pulls, each with who did it. A project's History shows its own; admins see everything under Admin → Audit
 

@@ -581,7 +581,9 @@ def generate_page(project_name):
     # Switches changed since their full config was generated, which the
     # page offers to regenerate in one go. A stale PARTIAL config alone
     # doesn't count: a full run wouldn't refresh it.
-    stale = checks.stale_configs(app, _owner(), project_name)
+    from . import repo_version
+    why = {}
+    stale = checks.stale_configs(app, _owner(), project_name, why)
     stale_full = sorted(h for h, files in stale.items() if '%s_FULL.ios' % h in files)
     stale_partial = sorted(h for h in stale if h not in stale_full)
     return render_template('project_generate.html',
@@ -590,6 +592,11 @@ def generate_page(project_name):
                            configs=configs,
                            stale_full=stale_full,
                            stale_partial=stale_partial,
+                           stale_templates=sorted(h for h in stale_full
+                                                  if why[h]['templates']),
+                           stale_templates_only=all(
+                               not why[h]['settings'] for h in stale_full),
+                           netforge=repo_version.current(app),
                            checks_summary=checks.summary(
                                app, _owner(), project_name))
 
@@ -646,10 +653,16 @@ def run_generate(project_name):
     starting = {h: checks.hostvars_fingerprint(os.path.join(hv_base, h))
                 for h in scope if _SAFE_URL_VALUES['hostname'].match(h)}
 
+    # Which NetForge the run uses, read before it starts: a pull while it
+    # runs must not be credited with configs the old templates made.
+    from . import repo_version
+    netforge = repo_version.current(app)
+
     audit_id = audit.record_start(
         app, username=actor, owner=username, project=project_name, action='generate',
         switch_user=None, targets=[{'hostname': h} for h in in_scope],
-        params={'limit': limit or None, 'tags': tags or None})
+        params=dict({'limit': limit or None, 'tags': tags or None},
+                    **({'templates': 'NetForge %s' % netforge['label']} if netforge else {})))
 
     def _run(jid):
         try:
@@ -699,7 +712,7 @@ def run_generate(project_name):
                     if fp and name in after and (
                             final.get('returncode') == 0 or before.get(name) != after[name]):
                         made[name] = fp
-                record_generated_from(app, username, project_name, made)
+                record_generated_from(app, username, project_name, made, netforge)
             except Exception:                       # noqa: BLE001
                 pass
 
