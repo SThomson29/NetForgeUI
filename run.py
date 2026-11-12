@@ -26,61 +26,29 @@ def _bootstrap_admin():
             print('[bootstrap] Change this password immediately via /account')
 
 
-def _sync_repo():
-    """Clone the config repo on first boot, pull on subsequent restarts."""
-    import subprocess
-    import shutil
-    repo = app.config['CONFIGGEN_REPO']
-    url  = app.config.get('CONFIGGEN_REPO_URL', '')
+def _sync_repo(source=None):
+    """Clone a repo on first boot, pull on subsequent restarts. source is
+    the repo_sync.Source to sync: NetForge unless told otherwise."""
+    from app import audit, repo_sync
+    source = source or repo_sync.NETFORGE
+    netforge = source is repo_sync.NETFORGE
 
-    if not url:
-        print('[repo] CONFIGGEN_REPO_URL not set — skipping repo sync')
+    if not source.url(app):
+        # The Central collection is optional; say nothing when it isn't used.
+        if netforge:
+            print('[repo] CONFIGGEN_REPO_URL not set — skipping repo sync')
         return
 
-    if not os.path.isdir(os.path.join(repo, '.git')):
-        # A non-empty directory with no .git means a previous clone was
-        # interrupted, or image content seeded the volume. git clone refuses
-        # to write into it, so clear it out rather than wedging every restart.
-        if os.path.isdir(repo) and os.listdir(repo):
-            print(f'[repo] {repo} is non-empty but not a git repo — clearing it')
-            for entry in os.listdir(repo):
-                path = os.path.join(repo, entry)
-                if os.path.isdir(path) and not os.path.islink(path):
-                    shutil.rmtree(path, ignore_errors=True)
-                else:
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-
-        print(f'[repo] Cloning {url} into {repo} ...')
-        os.makedirs(repo, exist_ok=True)
-        result = subprocess.run(
-            ['git', 'clone', url, repo],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            print('[repo] Clone successful')
-        else:
-            print(f'[repo] Clone failed: {result.stderr.strip()}')
-    else:
-        from app import audit, repo_sync
-        rc, out, before, after = repo_sync.sync_at_startup(app)
-        try:
-            audit.record_startup_pull(app, before, after, rc, out)
-        except Exception as e:                      # noqa: BLE001
-            print(f'[repo] Could not record the pull in the audit log: {e}')
+    if not repo_sync.cloned(app, source):
+        repo_sync.clone(app, source)
         return
 
-    # A fresh clone lands on the default branch; move it if a ref is set.
-    from app import repo_sync
-    ref = repo_sync.configured_ref(app)
-    if ref and repo_sync.cloned(app):
-        try:
-            _before, after = repo_sync.switch(app, ref)
-            print(f"[repo] Checked out {ref} (CONFIGGEN_REPO_REF): {after['label']}")
-        except repo_sync.RepoError as e:
-            print(f'[repo] {e}')
+    rc, out, before, after = repo_sync.sync_at_startup(app, source=source)
+    try:
+        audit.record_startup_pull(app, before, after, rc, out,
+                                  repo=None if netforge else source.name)
+    except Exception as e:                      # noqa: BLE001
+        print(f'[repo] Could not record the pull in the audit log: {e}')
 
 
 def _run_bootstrap():
@@ -91,6 +59,8 @@ def _run_bootstrap():
 
     _bootstrap_admin()
     _sync_repo()
+    from app import repo_sync
+    _sync_repo(repo_sync.CENTRAL)
 
     # Runs that were in progress when the container stopped never finished.
     with app.app_context():

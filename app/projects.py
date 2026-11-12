@@ -379,7 +379,7 @@ def central_overview(project_name):
     app = current_app._get_current_object()
     return render_template('central_overview.html', project_name=project_name,
                            created=get_project_config(app, _owner(), project_name).get('created', ''),
-                           central_available=project_types.central_available(app))
+                           collection=project_types.collection_state(app))
 
 
 # ---------------------------------------------------------------------------

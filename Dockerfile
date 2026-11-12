@@ -28,7 +28,9 @@ COPY . .
 # Create directories that will be used at runtime.
 # firmware/ holds .swi images for the firmware feature; it is a mount point,
 # empty in the image.
-RUN mkdir -p data/users data configgen firmware
+# central/ is where the Central collection is cloned when CENTRAL_REPO_URL
+# is set; empty otherwise.
+RUN mkdir -p data/users data configgen firmware central
 
 # SSH directory setup — key is mounted at runtime, not baked in
 RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
@@ -37,7 +39,9 @@ EXPOSE 5000
 
 ENV FLASK_DEBUG=false
 ENV PORT=5000
-ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
+# The second entry is where the Central collection is cloned at start
+# (config.CENTRAL_COLLECTIONS_PATH). Ansible skips it while it is empty.
+ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections:/app/service/central
 
 # Docker marks the container unhealthy if the app stops answering — a hung
 # gunicorn otherwise looks "up" while serving nothing. python:slim has no

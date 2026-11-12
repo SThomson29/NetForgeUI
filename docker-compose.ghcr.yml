@@ -20,9 +20,16 @@ services:
       # REPO_VOLUME_NAME: "netforgeui_repo"
       # DATA_VOLUME_NAME: "netforgeui_data"
 
+      # --- Central projects (off unless CENTRAL_REPO_URL is set) ---
+      # The samthomson.new_central Ansible collection, cloned at start. A
+      # private repo needs the deploy key mounted at SSH_KEY_PATH.
+      # CENTRAL_REPO_URL: "git@github.com:SThomson29/NewCentral-Ansible.git"
+      # CENTRAL_REPO_REF: "v1.1.0"     # stay on a release tag (or a branch)
+
     volumes:
       - netforgeui_data:/app/service/data
       - netforgeui_repo:/app/service/configgen
+      - netforgeui_central:/app/service/central
       - /var/run/docker.sock:/var/run/docker.sock
       # AOS-CX .swi images for the Firmware tab. Bind mount so images
       # can be dropped in from the host without an upload.
@@ -35,3 +42,5 @@ volumes:
     name: netforgeui_data
   netforgeui_repo:
     name: netforgeui_repo
+  netforgeui_central:
+    name: netforgeui_central

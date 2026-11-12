@@ -14,10 +14,26 @@
     The pages for designing and applying the build are not in this version yet.
     Sharing and History already work as they do for every project.
   </p>
-  {% if not central_available %}
-  <p style="font-size:13px;line-height:1.6;margin:10px 0 0;color:#b45309">
+</div>
+
+<div class="card">
+  <div class="card-header">Central collection</div>
+  {% if not collection.configured %}
+  <p style="font-size:13px;line-height:1.6;margin:0;color:#b45309">
     Central is not configured on this instance (<code>CENTRAL_REPO_URL</code> is not set), so new
-    Central projects can't be created.
+    Central projects can't be created and this one can't be applied.
+  </p>
+  {% elif not collection.cloned %}
+  <p style="font-size:13px;line-height:1.6;margin:0;color:#b45309">
+    The collection has not been cloned yet. It is cloned when the container starts; an admin can
+    see why it failed in the container log.
+  </p>
+  {% else %}
+  <p style="font-size:13px;line-height:1.6;margin:0">
+    This instance applies Central projects with <code>samthomson.new_central</code>
+    {% if collection.version %}<strong>{{ collection.version }}</strong>{% endif %}
+    {%- if collection.mode == 'pinned' %}, pinned to that release.
+    {%- else %}, following <code>{{ collection.branch }}</code>.{% endif %}
   </p>
   {% endif %}
 </div>

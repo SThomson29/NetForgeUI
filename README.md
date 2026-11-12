@@ -195,6 +195,8 @@ up by their bare names.
 | `GENERATE_MEM_LIMIT` | No | `2g` | Memory cap for the generation container (Docker size syntax) |
 | `GENERATE_PIDS_LIMIT` | No | `512` | Process cap for the generation container |
 | `SSH_KEY_PATH` | No | `/root/.ssh/id_rsa` | Deploy key used for git over SSH |
+| `CENTRAL_REPO_URL` | No | — | Turns on Central projects — see [Central projects](#central-projects-preview). Clone URL of the `samthomson.new_central` Ansible collection |
+| `CENTRAL_REPO_REF` | No | — | Collection release tag or branch to stay on, checked out at every start. Unset, it follows the default branch |
 | `FIRMWARE_DIR` | No | `<app>/firmware` | Where `.swi` images are kept |
 | `FIRMWARE_MAX_UPLOAD_MB` | No | `2048` | Largest image an admin can upload |
 | `PORT` | No | `5000` | Port the Flask app listens on inside the container |
@@ -331,6 +333,21 @@ with you** on the Projects page.
   deleted until those are transferred.
 - **Shares don't travel:** an exported project imported elsewhere belongs to whoever
   imports it.
+
+---
+
+## Central projects (preview)
+
+A project is one of two types, chosen when it is created and fixed after that:
+
+- **Config** — AOS-CX switch configs generated with NetForge and pushed to the switches. Everything else in this README describes these, and every project created before types existed is one.
+- **Central** — a New Central tenant build, applied through the Central API with the `samthomson.new_central` Ansible collection.
+
+Central projects are off unless `CENTRAL_REPO_URL` is set. Without it there is no type to choose, and nothing about Central appears anywhere.
+
+With it set, the collection is cloned into the `netforgeui_central` volume when the container starts, and updated at every start after that: it follows the default branch, or stays on the tag or branch named in `CENTRAL_REPO_REF`. **Admin** → **Config repo** shows the version in use. A private repo is cloned with the deploy key at `SSH_KEY_PATH`.
+
+So far a Central project can be created, shared, transferred and deleted, and opens on an Overview page. The pages for designing and applying a build are not in this version.
 
 ---
 

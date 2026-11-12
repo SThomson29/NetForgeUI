@@ -233,8 +233,10 @@ def repo_page():
     skeleton_files = sorted(f for f in os.listdir(skeleton) if f.endswith('.yml')) \
         if os.path.isdir(skeleton) else []
     from . import repo_sync
+    from . import project_types
     return render_template('admin_repo.html', repo_status=_get_repo_status(app),
                            repo_state=repo_sync.state(app),
+                           collection=project_types.collection_state(app),
                            playbooks=playbooks, skeleton_files=skeleton_files,
                            behind=_projects_missing_skeleton_files(app))
 

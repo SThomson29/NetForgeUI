@@ -18,6 +18,13 @@ authlib>=1.3.0
 # The one collection we need is installed via ansible-galaxy in the Dockerfile.
 ansible-core==2.21.3
 
+# What the samthomson.new_central collection's modules import. The
+# collection itself is cloned at start (CENTRAL_REPO_URL), not installed
+# here. requests already arrives with docker; it is named because the
+# collection needs it in its own right.
+requests>=2.31.0
+python-dotenv>=1.0.0
+
 # REST API client used by the AOS-CX collection's non-CLI modules.
 pyaoscx==2.6.0
 

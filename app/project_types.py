@@ -96,6 +96,13 @@ def central_available(app):
     return bool((app.config.get('CENTRAL_REPO_URL') or '').strip())
 
 
+def collection_state(app):
+    """What the Central collection is checked out at, for pages that show
+    it: repo_sync.state plus 'configured' (CENTRAL_REPO_URL is set)."""
+    from . import repo_sync
+    return dict(repo_sync.state(app, repo_sync.CENTRAL), configured=central_available(app))
+
+
 def creatable(app):
     """The types a new project can be here, config first."""
     return [CONFIG] + ([CENTRAL] if central_available(app) else [])

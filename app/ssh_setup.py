@@ -14,15 +14,13 @@ def setup_ssh(app):
     """
     key_path = app.config['SSH_KEY_PATH']
     known_hosts_path = app.config['SSH_KNOWN_HOSTS']
-    repo_url = app.config['CONFIGGEN_REPO_URL']
-
-    if not repo_url:
-        return  # No repo URL configured, nothing to do
-
-    # Determine if this is an SSH URL (git@ or ssh://)
-    is_ssh = repo_url.startswith('git@') or repo_url.startswith('ssh://')
-    if not is_ssh:
-        return  # HTTPS URL, no SSH setup needed
+    # Either repo can be the one that needs the key: NetForge, or the
+    # Central collection. HTTPS URLs need no SSH setup.
+    ssh_urls = [u for u in (app.config.get('CONFIGGEN_REPO_URL') or '',
+                            app.config.get('CENTRAL_REPO_URL') or '')
+                if u.startswith('git@') or u.startswith('ssh://')]
+    if not ssh_urls:
+        return
 
     if not os.path.isfile(key_path):
         print(f'[ssh] Warning: SSH key not found at {key_path}')
@@ -46,19 +44,24 @@ def setup_ssh(app):
     # Parse hostname from repo URL
     # git@github.com:org/repo.git  -> github.com
     # ssh://git@github.com/org/repo.git -> github.com
-    hostname = _parse_hostname(repo_url)
-    if not hostname:
-        print(f'[ssh] Could not parse hostname from repo URL: {repo_url}')
-        return
-
-    # Write SSH config to force the deploy key for this host
     ssh_config_path = os.path.join(ssh_dir, 'config')
-    _write_ssh_config(ssh_config_path, hostname, working_key)
+    done = set()
+    for repo_url in ssh_urls:
+        hostname = _parse_hostname(repo_url)
+        if not hostname:
+            print(f'[ssh] Could not parse hostname from repo URL: {repo_url}')
+            continue
+        if hostname in done:
+            continue
+        done.add(hostname)
 
-    # Add host to known_hosts if not already there
-    _ensure_known_hosts(known_hosts_path, hostname)
+        # Write SSH config to force the deploy key for this host
+        _write_ssh_config(ssh_config_path, hostname, working_key)
 
-    print(f'[ssh] SSH configured for {hostname} using key {working_key}')
+        # Add host to known_hosts if not already there
+        _ensure_known_hosts(known_hosts_path, hostname)
+
+        print(f'[ssh] SSH configured for {hostname} using key {working_key}')
 
 
 def _parse_hostname(repo_url):

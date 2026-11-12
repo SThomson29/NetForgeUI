@@ -213,7 +213,7 @@ def record_event(app, *, username, action, summary, project='', owner=None, **de
              action, '[]', json.dumps(params), 'done', '[]'))
 
 
-def record_startup_pull(app, before, after, returncode, output):
+def record_startup_pull(app, before, after, returncode, output, repo=None):
     """Record the pull a container start does, if it moved NetForge to a
     different commit or failed. before and after are repo_version.read
     results. The templates changing under every project is worth a record
@@ -225,8 +225,9 @@ def record_startup_pull(app, before, after, returncode, output):
     entry = record_start(
         app, username='(startup)', project='', owner='', action='repo_pull',
         switch_user=None, targets=[],
-        params={'from': before['label'] if before else None,
-                'to': after['label'] if moved else None})
+        params=dict({'from': before['label'] if before else None,
+                     'to': after['label'] if moved else None},
+                    **({'repo': repo} if repo else {})))
     # git prints the remote URL, which can carry a token.
     output = re.sub(r'(://)[^/@\s]+@', r'\1********@', output or '')
     record_finish(app, entry, {'status': 'done' if returncode == 0 else 'failed',
