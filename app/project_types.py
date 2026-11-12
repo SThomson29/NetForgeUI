@@ -48,6 +48,16 @@ COMMON_ENDPOINTS = frozenset({
 # Pages only a central project has.
 CENTRAL_ENDPOINTS = frozenset({
     'projects.central_overview',
+    'projects.central_design_page',
+    'projects.central_apply_page',
+    'projects.central_api_schema',
+    'projects.central_api_profile_type',
+    'projects.central_api_design_get',
+    'projects.central_api_design_save',
+    'projects.central_unlock',
+    'projects.central_lock',
+    'projects.central_run',
+    'projects.central_run_status',
 })
 
 # Where opening a project lands.

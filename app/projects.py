@@ -62,6 +62,9 @@ _SAFE_URL_VALUES = {
     # Generated config names; the first character can't be a dot, so '..'
     # and hidden files are both excluded.
     'filename':     re.compile(r'^[A-Za-z0-9_\-][A-Za-z0-9_.\-]{0,127}$'),
+    # A design section, and a profile type from the collection's catalogue.
+    'section':      re.compile(r'^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$'),
+    'ptype':        re.compile(r'^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$'),
 }
 
 
@@ -98,6 +101,11 @@ _REQUIRED = {
     'projects.firmware_versions':   sharing.DEPLOY,
     'projects.verify_read':         sharing.DEPLOY,
     'projects.reachability':        sharing.DEPLOY,
+    # Anything that uses a Central tenant's API client.
+    'projects.central_unlock':      sharing.DEPLOY,
+    'projects.central_lock':        sharing.DEPLOY,
+    'projects.central_run':         sharing.DEPLOY,
+    'projects.central_run_status':  sharing.DEPLOY,
     # A GET that writes the mapping.
     'projects.deploy_auto_populate': sharing.EDIT,
 }
@@ -371,15 +379,7 @@ def download_all(project_name):
 # Central projects
 # ---------------------------------------------------------------------------
 
-@projects_bp.route('/projects/<owner>/<project_name>/central')
-@login_required
-def central_overview(project_name):
-    """Where a central project opens. The build's sections arrive here as
-    they are added; until then it says what the project is."""
-    app = current_app._get_current_object()
-    return render_template('central_overview.html', project_name=project_name,
-                           created=get_project_config(app, _owner(), project_name).get('created', ''),
-                           collection=project_types.collection_state(app))
+# The routes are in central_routes.py and registered at the foot of this file.
 
 
 # ---------------------------------------------------------------------------
@@ -1452,3 +1452,25 @@ projects_bp.add_url_rule(
     'deploy_status',
     deploy_status
 )
+
+
+# ---------------------------------------------------------------------------
+# Central project routes
+# ---------------------------------------------------------------------------
+from . import central_routes as _central
+
+_CENTRAL_BASE = '/projects/<owner>/<project_name>/central'
+for _rule, _view, _methods in (
+        ('',                              _central.central_overview,        ['GET']),
+        ('/design',                       _central.central_design_page,     ['GET']),
+        ('/apply',                        _central.central_apply_page,      ['GET']),
+        ('/api/schema',                   _central.central_api_schema,      ['GET']),
+        ('/api/profile-type/<ptype>',     _central.central_api_profile_type, ['GET']),
+        ('/api/design/<section>',         _central.central_api_design_get,  ['GET']),
+        ('/api/design/<section>/save',    _central.central_api_design_save, ['POST']),
+        ('/unlock',                       _central.central_unlock,          ['POST']),
+        ('/lock',                         _central.central_lock,            ['POST']),
+        ('/run',                          _central.central_run,             ['POST']),
+        ('/run/<job_id>',                 _central.central_run_status,      ['GET']),
+):
+    projects_bp.add_url_rule(_CENTRAL_BASE + _rule, _view.__name__, _view, methods=_methods)

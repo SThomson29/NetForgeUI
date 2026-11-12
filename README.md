@@ -197,6 +197,8 @@ up by their bare names.
 | `SSH_KEY_PATH` | No | `/root/.ssh/id_rsa` | Deploy key used for git over SSH |
 | `CENTRAL_REPO_URL` | No | — | Turns on Central projects — see [Central projects](#central-projects-preview). Clone URL of the `samthomson.new_central` Ansible collection |
 | `CENTRAL_REPO_REF` | No | — | Collection release tag or branch to stay on, checked out at every start. Unset, it follows the default branch |
+| `CENTRAL_UNLOCK_MINUTES` | No | `60` | How long a Central tenant's API client is kept in memory without being used |
+| `CENTRAL_API_SUFFIXES` | No | `.api.central.arubanetworks.com,.api.central.hpe.com` | Host name endings accepted as a Central region API address |
 | `FIRMWARE_DIR` | No | `<app>/firmware` | Where `.swi` images are kept |
 | `FIRMWARE_MAX_UPLOAD_MB` | No | `2048` | Largest image an admin can upload |
 | `PORT` | No | `5000` | Port the Flask app listens on inside the container |
@@ -347,7 +349,29 @@ Central projects are off unless `CENTRAL_REPO_URL` is set. Without it there is n
 
 With it set, the collection is cloned into the `netforgeui_central` volume when the container starts, and updated at every start after that: it follows the default branch, or stays on the tag or branch named in `CENTRAL_REPO_REF`. **Admin** → **Config repo** shows the version in use. A private repo is cloned with the deploy key at `SSH_KEY_PATH`.
 
-So far a Central project can be created, shared, transferred and deleted, and opens on an Overview page. The pages for designing and applying a build are not in this version.
+A Central project has three pages of its own, beside History and Sharing:
+
+- **Overview** — what the project is, the collection version in use, and how much of the design is filled in.
+- **Design** — the build, a section at a time: sites, site collections and device groups first, then configuration, then devices. The forms are drawn from the collection, so a section added there appears here once the collection is updated. Besides the common sections there is **Any other configuration**, which takes any configuration profile the API has. **Show as YAML** shows a section the way the playbook reads it.
+- **Apply** — unlock the tenant, **Plan** to see what would change, then **Apply**. A plan changes nothing. Nothing is ever removed from the tenant: taking something out of the design leaves it there.
+
+Saving the design needs edit access. Unlocking, planning and applying need deploy access.
+
+### The tenant's API client
+
+Applying needs an API client for the tenant: a client ID and secret created in HPE GreenLake for the Central service, and the API address of the tenant's region. It is entered on the Apply page, checked with HPE sign-in, and then kept **in memory only** for that person and project. It is never written to disk, the database or the audit log, and is forgotten after an hour without use (`CENTRAL_UNLOCK_MINUTES`), on sign-out, on **Lock**, and whenever the container restarts.
+
+The region address must be one of Central's own (`*.api.central.arubanetworks.com` or `*.api.central.hpe.com`; `CENTRAL_API_SUFFIXES` changes the list), because the server connects to it.
+
+### Secrets in a design
+
+Passphrases and shared secrets typed into the design are saved with the project, as RADIUS keys are in a config project. Once saved they are never sent back to the browser: the form shows that a value is saved and leaves it alone unless a new one is typed. They are kept out of plan and apply results and out of History.
+
+### What isn't there yet
+
+- A Central project can't be exported or imported.
+- Devices are entered by serial number; there is no picker from the tenant's inventory.
+- The Files page (editing a section as YAML) is for config projects only.
 
 ---
 

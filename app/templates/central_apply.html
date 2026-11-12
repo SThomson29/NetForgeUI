@@ -1,0 +1,120 @@
+{% extends "base_project.html" %}
+{% block title %}Apply — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}Apply{% endblock %}
+
+{% block project_extra_head %}
+<style>
+.ca-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px}
+.ca-stage{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-tertiary);margin:12px 0 4px}
+.ca-sections label{display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;cursor:pointer}
+.ca-sections .n{color:var(--text-tertiary);font-size:11px}
+.ca-report{border:1px solid #e5e4dc;border-radius:8px;margin-bottom:8px;background:#fff}
+.ca-report>summary{padding:9px 12px;cursor:pointer;font-size:13px;font-weight:600;display:flex;gap:10px;align-items:center}
+.ca-report table{width:100%;border-collapse:collapse;font-size:12px}
+.ca-report td,.ca-report th{padding:6px 12px;border-top:1px solid #f0efe8;text-align:left;vertical-align:top}
+.ca-diff{font-family:'JetBrains Mono','Courier New',monospace;font-size:11px;white-space:pre-wrap;margin:4px 0 0}
+.ca-diff .a{color:#166534}.ca-diff .b{color:#991b1b}
+#ca-output{background:#1a1a1a;color:#e5e4dc;font-family:'JetBrains Mono','Courier New',monospace;font-size:12px;line-height:1.5;padding:12px 14px;border-radius:8px;white-space:pre-wrap;max-height:360px;overflow:auto;margin:8px 0 0}
+.ca-note{font-size:12px;color:var(--text-secondary);line-height:1.5}
+</style>
+{% endblock %}
+
+{% block content %}
+{% if problem %}
+<div class="card"><p style="font-size:13px;line-height:1.6;margin:0;color:#b45309">{{ problem }}</p></div>
+{% else %}
+
+<div class="card">
+  <div class="card-header">Tenant</div>
+  {% if not can_run %}
+  <p class="ca-note" style="margin:0">You have {{ project_level }} access to this project. Planning and applying need deploy access.</p>
+  {% else %}
+  <div id="tenant-unlocked" style="display:none">
+    <p style="font-size:13px;margin:0 0 10px">
+      Unlocked for <code id="tenant-url"></code> with API client <code id="tenant-client"></code>.
+    </p>
+    <p class="ca-note" style="margin:0 0 10px">
+      The API client is kept in memory for this session only, and forgotten after
+      <span id="tenant-idle"></span> minutes without use or when the service restarts.
+    </p>
+    <button class="btn btn-sm" data-click="lockTenant">Lock</button>
+  </div>
+  <div id="tenant-locked" style="display:none">
+    <p class="ca-note" style="margin:0 0 12px">
+      Enter an API client for the tenant this project builds. It is used for this session and never stored.
+      Create one in HPE GreenLake under <em>Manage workspace → Personal API clients</em>, for the Central service.
+    </p>
+    <div class="ca-grid">
+      <div class="fld">
+        <label class="lbl" for="t-url">Region API address</label>
+        <input class="form-input mono" id="t-url" list="t-regions" placeholder="https://de1.api.central.arubanetworks.com" autocomplete="off">
+        <datalist id="t-regions">
+          <option value="https://de1.api.central.arubanetworks.com">
+          <option value="https://de2.api.central.arubanetworks.com">
+          <option value="https://de3.api.central.arubanetworks.com">
+        </datalist>
+        <div class="hint">Shown in Central under <em>Global → API gateway</em>.</div>
+      </div>
+      <div class="fld">
+        <label class="lbl" for="t-id">Client ID</label>
+        <input class="form-input mono" id="t-id" autocomplete="off">
+      </div>
+      <div class="fld">
+        <label class="lbl" for="t-secret">Client secret</label>
+        <input class="form-input mono" id="t-secret" type="password" autocomplete="new-password">
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button class="btn btn-primary" id="unlock-btn" data-click="unlockTenant">Unlock</button>
+      <span id="unlock-error" style="color:#dc2626;font-size:13px"></span>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-header">What to apply</div>
+  <p class="ca-note" style="margin:0 0 4px">
+    A plan asks the tenant what would change and changes nothing. Apply makes the tenant match the design.
+    Nothing is ever removed from the tenant: taking something out of the design leaves it there.
+  </p>
+  <div class="ca-sections">
+    {% for stage in stages %}
+    <div class="ca-stage">{{ stage.label }}</div>
+    {% for s in stage.sections %}
+    <label><input type="checkbox" class="ca-section" value="{{ s.id }}" {{ 'checked' if s.rows else 'disabled' }}>
+      {{ s.label }} <span class="n">{{ s.rows }} row{{ '' if s.rows == 1 else 's' }}</span></label>
+    {% endfor %}
+    {% endfor %}
+  </div>
+  {% if can_run %}
+  <div style="display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap">
+    <button class="btn btn-primary" id="plan-btn" data-click="runPlan">Plan</button>
+    <button class="btn btn-danger" id="apply-btn" data-click="runApply" disabled
+            title="Run a plan of the same sections first">Apply to the tenant</button>
+    <span id="run-status" style="font-size:13px"></span>
+  </div>
+  <div id="run-error" class="cd-problems" style="display:none;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:10px 14px;font-size:13px;margin-top:12px"></div>
+  {% endif %}
+</div>
+
+<div id="run-card" class="card" style="display:none">
+  <div class="card-header" id="run-title">Plan</div>
+  <div id="run-reports"></div>
+  <details style="margin-top:8px">
+    <summary class="text-sm text-secondary" style="cursor:pointer">Playbook output</summary>
+    <pre id="ca-output"></pre>
+  </details>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+{% if not problem and can_run %}
+<script nonce="{{ csp_nonce() }}">
+const CENTRAL_BASE = PROJECT_BASE + '/central';
+const TENANT = {{ tenant | tojson }};
+</script>
+<script src="{{ static_url('js/central_apply.js') }}"></script>
+{% endif %}
+{% endblock %}
