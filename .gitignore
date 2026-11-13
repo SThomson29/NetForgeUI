@@ -1,6 +1,7 @@
 # Runtime data
 data/
 configgen/
+central/
 
 # Python
 __pycache__/

@@ -1,0 +1,61 @@
+{% extends "base_project.html" %}
+{% block title %}Overview — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}Overview{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">Central project</div>
+  <p style="font-size:13px;line-height:1.6;margin:0 0 10px">
+    <strong>{{ project_name }}</strong> is a Central project{% if created %}, created {{ created }}{% endif %}.
+    It describes a New Central tenant build — sites, device groups, configuration profiles and
+    where they are assigned — and applies it through the Central API.
+  </p>
+  <p style="font-size:13px;line-height:1.6;margin:0;color:var(--text-secondary)">
+    Fill in the build on <a href="{{ project_base }}/central/design">Design</a>. On
+    <a href="{{ project_base }}/central/apply">Apply</a>, preview what would change in the tenant, then apply it.
+    Nothing reaches the tenant until you apply.
+  </p>
+</div>
+
+{% if problem %}
+<div class="card">
+  <div class="card-header">Design</div>
+  <p style="font-size:13px;line-height:1.6;margin:0;color:#b45309">{{ problem }}</p>
+</div>
+{% elif stages %}
+<div class="card">
+  <div class="card-header">Design so far</div>
+  {% for stage in stages %}
+  <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-tertiary);margin:{{ '0' if loop.first else '14px' }} 0 6px">{{ stage.label }}</div>
+  <div style="display:flex;flex-wrap:wrap;gap:8px">
+    {% for s in stage.sections %}
+    <a href="{{ project_base }}/central/design?section={{ s.id }}" class="badge badge-{{ 'blue' if s.rows else 'neutral' }}"
+       style="text-decoration:none;font-size:12px;padding:4px 10px">{{ s.label }}{% if s.rows %} · {{ s.rows }}{% endif %}</a>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header">Central collection</div>
+  {% if not collection.configured %}
+  <p style="font-size:13px;line-height:1.6;margin:0;color:#b45309">
+    Central is not configured on this instance (<code>CENTRAL_REPO_URL</code> is not set), so new
+    Central projects can't be created and this one can't be applied.
+  </p>
+  {% elif not collection.cloned %}
+  <p style="font-size:13px;line-height:1.6;margin:0;color:#b45309">
+    The collection has not been cloned yet. It is cloned when the container starts; an admin can
+    see why it failed in the container log.
+  </p>
+  {% else %}
+  <p style="font-size:13px;line-height:1.6;margin:0">
+    This instance applies Central projects with <code>samthomson.new_central</code>
+    {% if collection.version %}<strong>{{ collection.version }}</strong>{% endif %}
+    {%- if collection.mode == 'pinned' %}, pinned to that release.
+    {%- else %}, following <code>{{ collection.branch }}</code>.{% endif %}
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

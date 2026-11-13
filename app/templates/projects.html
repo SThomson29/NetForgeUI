@@ -14,19 +14,24 @@
 {% block content %}
 
 {% macro project_card(p) %}
+  {# Status badges, switch counts, config downloads and export are a config project's. #}
+  {% set is_config = p.type == 'config' %}
   <div class="card project-card" style="padding:0;overflow:hidden"
+       {% if is_config %}
        data-status-url="{{ url_for('projects.project_status', owner=p.owner, project_name=p.name) }}"
        data-generate-url="{{ url_for('projects.generate_page', owner=p.owner, project_name=p.name) }}"
-       data-deploy-url="{{ url_for('projects.project_deploy', owner=p.owner, project_name=p.name) }}">
+       data-deploy-url="{{ url_for('projects.project_deploy', owner=p.owner, project_name=p.name) }}"
+       {% endif %}>
     <div style="padding:16px 18px 14px">
       <div style="display:flex;align-items:start;justify-content:space-between;margin-bottom:8px">
         <div>
-          <div style="font-size:15px;font-weight:600">{{ p.display_name }}</div>
+          <div style="font-size:15px;font-weight:600">{{ p.display_name }}{% if not is_config %} <span class="badge badge-blue" style="font-size:10px;vertical-align:middle">{{ p.type_label }}</span>{% endif %}</div>
           <div style="font-size:11px;color:#888;margin-top:2px">
             {% if p.owner != current_user.username %}{{ p.owner }} · {{ level_labels[p.level] }} access · {% endif %}Created {{ p.created }}
           </div>
         </div>
       </div>
+      {% if is_config %}
       <div style="display:flex;gap:16px;margin-top:10px">
         <div style="font-size:12px;color:#666">
           <span style="font-weight:600;color:#1a1a1a">{{ p.host_count }}</span> host{{ 's' if p.host_count != 1 }}
@@ -35,21 +40,24 @@
           <span style="font-weight:600;color:#1a1a1a">{{ p.config_count }}</span> config{{ 's' if p.config_count != 1 }}
         </div>
       </div>
+      {% endif %}
       <div class="project-status"></div>
     </div>
     <div style="padding:10px 18px;border-top:1px solid #f0efe8;display:flex;align-items:center;justify-content:space-between;background:#faf9f7">
-      <a href="{{ url_for('projects.hosts_page', owner=p.owner, project_name=p.name) }}" class="btn btn-primary btn-sm">Open</a>
+      <a href="{{ p.home }}" class="btn btn-primary btn-sm">Open</a>
       <div style="display:flex;gap:6px">
-        {% if p.config_count > 0 %}
+        {% if is_config and p.config_count > 0 %}
         <a href="{{ url_for('projects.download_all', owner=p.owner, project_name=p.name) }}" class="btn btn-sm">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Download all
         </a>
         {% endif %}
+        {% if is_config %}
         <a href="{{ url_for('projects.export_project_route', owner=p.owner, project_name=p.name) }}" class="btn btn-sm"
            title="Download this project as a portable archive (credentials are removed)">
           Export
         </a>
+        {% endif %}
         {% if p.owner == current_user.username %}
         <form method="post" action="{{ url_for('projects.delete', owner=p.owner, project_name=p.name) }}"
               data-confirm="Delete project {{ p.display_name }} and all its data? This cannot be undone.">
@@ -103,6 +111,19 @@
                pattern="[A-Za-z0-9_\-]+" title="Letters, numbers, hyphens and underscores only">
         <div class="hint">Letters, numbers, hyphens and underscores only.</div>
       </div>
+      {# Only where there is a choice: without Central configured every project is a config project. #}
+      {% if project_kinds|length > 1 %}
+      <div class="fld">
+        <label class="lbl">Type</label>
+        {% for k in project_kinds %}
+        <label style="display:flex;gap:8px;align-items:flex-start;margin-top:6px;font-size:13px;cursor:pointer">
+          <input type="radio" name="type" value="{{ k.id }}" {{ 'checked' if loop.first }} style="margin-top:3px">
+          <span><strong>{{ k.label }}</strong><br><span style="color:#666;font-size:12px">{{ k.description }}</span></span>
+        </label>
+        {% endfor %}
+        <div class="hint">A project's type can't be changed once it is created.</div>
+      </div>
+      {% endif %}
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button type="button" class="btn" data-click="setModal" data-args='["new-project-modal", false]'>Cancel</button>
         <button type="submit" class="btn btn-primary">Create</button>

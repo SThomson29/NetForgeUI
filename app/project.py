@@ -118,19 +118,27 @@ def _write_json_atomic(path, data):
 # ---------------------------------------------------------------------------
 
 def project_summary(app, username, name):
-    """What the projects list shows for one project."""
+    """What the projects list shows for one project. The switch and config
+    counts are a config project's; other types have neither."""
+    from . import project_types
     cfg = _load_config(app, username, name)
-    gcdir = project_generated_configs_dir(app, username, name)
-    config_count = len([
-        f for f in os.listdir(gcdir)
-        if f.endswith('.ios')
-    ]) if os.path.isdir(gcdir) else 0
+    kind = project_types.of(app, username, name)
+    host_count = config_count = 0
+    if kind == project_types.CONFIG:
+        gcdir = project_generated_configs_dir(app, username, name)
+        config_count = len([
+            f for f in os.listdir(gcdir)
+            if f.endswith('.ios')
+        ]) if os.path.isdir(gcdir) else 0
+        host_count = _count_hosts(app, username, name)
     return {
         'name':         name,
         'owner':        username,
         'display_name': cfg.get('name', name),
         'created':      cfg.get('created', ''),
-        'host_count':   _count_hosts(app, username, name),
+        'type':         kind,
+        'type_label':   project_types.label(kind),
+        'host_count':   host_count,
         'config_count': config_count,
     }
 
@@ -143,14 +151,28 @@ def list_projects(app, username):
             if os.path.isdir(os.path.join(pdir, name))]
 
 
-def create_project(app, username, project_name):
-    """Create a new project directory with default config and blank hosts.ini."""
+def create_project(app, username, project_name, project_type='config'):
+    """Create a new project directory. A config project gets its default
+    config and a blank hosts.ini; a central project gets only its
+    config.json, which records its type. See project_types."""
     import re
+    from . import project_types
     if not re.match(r'^[A-Za-z0-9_\-]+$', project_name):
         raise ValueError('Project name may only contain letters, numbers, hyphens and underscores.')
+    if project_type not in project_types.LABELS:
+        raise ValueError('Unknown project type.')
     pdir = project_dir(app, username, project_name)
     if os.path.isdir(pdir):
         raise ValueError(f'Project {project_name} already exists.')
+
+    if project_type != project_types.CONFIG:
+        os.makedirs(pdir)
+        _save_config(app, username, project_name, {
+            'name':    project_name,
+            'created': str(date.today()),
+            'type':    project_type,
+        })
+        return
 
     os.makedirs(project_host_vars_dir(app, username, project_name), exist_ok=True)
     os.makedirs(project_generated_configs_dir(app, username, project_name), exist_ok=True)

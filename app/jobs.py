@@ -98,7 +98,7 @@ class OutputBuffer:
 
 def run_ansible_job(store, lock, job_id, *, playbook_path, repo_dir,
                     ansible_bin, inventory, extra_vars, limit_hosts=None,
-                    extra_args=(), timeout_secs, result_glob='*.json'):
+                    extra_args=(), timeout_secs, result_glob='*.json', extra_env=None):
     """Run ansible-playbook, streaming its output into store[job_id].
 
     Runs in a worker thread, so everything it needs is passed in — there is
@@ -107,6 +107,9 @@ def run_ansible_job(store, lock, job_id, *, playbook_path, repo_dir,
 
     Per-host results are the JSON files the playbook writes into the
     directory passed to it as results_file.
+
+    extra_env is added to the playbook's environment. It is how a secret
+    reaches a run without appearing in the command line or a file.
     """
     def _set(**kw):
         with lock:
@@ -142,6 +145,7 @@ def run_ansible_job(store, lock, job_id, *, playbook_path, repo_dir,
         env['ANSIBLE_HOST_KEY_CHECKING'] = 'False'
         env['ANSIBLE_NOCOLOR'] = '1'
         env['PYTHONUNBUFFERED'] = '1'
+        env.update(extra_env or {})
         # Deliberately the default stdout callback. 'json' lives in
         # ansible.posix, not ansible-core, so requesting it fails to load;
         # it would also buffer everything until the run ends. Per-host

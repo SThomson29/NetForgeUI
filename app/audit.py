@@ -40,6 +40,8 @@ ACTIONS = {
     'deploy_push':   'Push',
     'firmware':      'Firmware',
     'repo_pull':     'Repo pull',
+    'central_plan':  'Central plan',
+    'central_apply': 'Central apply',
 }
 
 # One-off changes recorded as they happen, with a one-line summary in
@@ -62,6 +64,7 @@ EVENTS = {
 ACTIONS.update(EVENTS)
 
 DEPLOY_ACTIONS = ('deploy_dryrun', 'deploy_push')
+CENTRAL_ACTIONS = ('central_plan', 'central_apply')
 
 # 0 keeps details forever.
 AUDIT_DETAIL_DAYS = int(os.environ.get('AUDIT_DETAIL_DAYS', '90'))
@@ -213,7 +216,7 @@ def record_event(app, *, username, action, summary, project='', owner=None, **de
              action, '[]', json.dumps(params), 'done', '[]'))
 
 
-def record_startup_pull(app, before, after, returncode, output):
+def record_startup_pull(app, before, after, returncode, output, repo=None):
     """Record the pull a container start does, if it moved NetForge to a
     different commit or failed. before and after are repo_version.read
     results. The templates changing under every project is worth a record
@@ -225,8 +228,9 @@ def record_startup_pull(app, before, after, returncode, output):
     entry = record_start(
         app, username='(startup)', project='', owner='', action='repo_pull',
         switch_user=None, targets=[],
-        params={'from': before['label'] if before else None,
-                'to': after['label'] if moved else None})
+        params=dict({'from': before['label'] if before else None,
+                     'to': after['label'] if moved else None},
+                    **({'repo': repo} if repo else {})))
     # git prints the remote URL, which can carry a token.
     output = re.sub(r'(://)[^/@\s]+@', r'\1********@', output or '')
     record_finish(app, entry, {'status': 'done' if returncode == 0 else 'failed',
@@ -317,6 +321,14 @@ def _outcome(e):
     if e['action'] == 'repo_pull':
         return ('Pulled', 'green') if status == 'done' else ('Failed', 'red')
     n = len(e['targets'])
+    if e['action'] in CENTRAL_ACTIONS and results:
+        if status != 'done' or any(r.get('failed') for r in results):
+            return ('Failed', 'red')
+        changed = sum(1 for r in results if r.get('changed'))
+        if e['action'] == 'central_plan':
+            return ('%d of %d section%s would change' % (changed, len(results), '' if len(results) == 1 else 's'),
+                    'neutral')
+        return ('%d of %d section%s changed' % (changed, len(results), '' if len(results) == 1 else 's'), 'green')
     if e['action'] == 'generate':
         if status != 'done':
             return ('Failed (exit %s)' % e['returncode'], 'red')

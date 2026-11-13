@@ -1,0 +1,54 @@
+{% extends "base_project.html" %}
+{% block title %}Design — {{ project_name }} — NetForgeUI{% endblock %}
+{% block project_page_title %}Design{% endblock %}
+
+{% block project_extra_head %}
+<style>
+.cd-wrap{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px;align-items:start}
+.cd-nav{background:#fff;border:1px solid #e5e4dc;border-radius:10px;padding:10px 8px;position:sticky;top:12px}
+.cd-stage{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-tertiary);margin:10px 8px 4px}
+.cd-stage:first-child{margin-top:2px}
+.cd-item{display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border-radius:6px;font-size:13px;cursor:pointer;color:var(--text-primary);border:0;background:none;width:100%;text-align:left}
+.cd-item:hover{background:var(--bg-inset)}
+.cd-item.on{background:var(--accent-subtle);color:var(--accent-text);font-weight:600}
+.cd-item .n{font-size:11px;color:var(--text-tertiary);font-weight:400}
+.cd-row{border:1px solid #e5e4dc;border-radius:8px;margin-bottom:8px;background:#fff}
+.cd-row-head{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:600}
+.cd-row-head .grow{flex:1}
+.cd-row-body{padding:4px 12px 12px;border-top:1px solid #f0efe8}
+.cd-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:0 16px}
+.cd-wide{grid-column:1/-1}
+.cd-group{border:1px solid #e5e4dc;border-radius:8px;padding:8px 12px;margin:6px 0 10px;background:#faf9f7}
+.cd-group>.t{font-size:12px;font-weight:600;color:var(--text-secondary);display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.cd-checks{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px}
+.cd-checks label{display:inline-flex;gap:5px;align-items:center;cursor:pointer}
+.cd-yaml{background:#1a1a1a;color:#e5e4dc;font-family:'JetBrains Mono','Courier New',monospace;font-size:12px;line-height:1.5;padding:12px 14px;border-radius:8px;white-space:pre;overflow:auto;max-height:420px;margin:0}
+.cd-problems{background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px}
+.cd-problems ul{margin:6px 0 0 18px;padding:0}
+.cd-bar{display:flex;align-items:center;gap:10px;margin:14px 0 0}
+.cd-x{border:0;background:none;color:var(--text-tertiary);cursor:pointer;font-size:14px;padding:0 4px}
+.cd-x:hover{color:var(--danger)}
+@media (max-width: 900px){.cd-wrap{grid-template-columns:1fr}.cd-nav{position:static}}
+</style>
+{% endblock %}
+
+{% block content %}
+{% if problem %}
+<div class="card"><p style="font-size:13px;line-height:1.6;margin:0;color:#b45309">{{ problem }}</p></div>
+{% else %}
+<div id="design-root"><div class="card"><div class="empty"><p>Loading the design…</p></div></div></div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+{% if not problem %}
+<script nonce="{{ csp_nonce() }}">
+const CENTRAL_BASE = PROJECT_BASE + '/central';
+const CAN_EDIT = {{ can_edit | tojson }};
+const START_SECTION = {{ (request.args.get('section') or '') | tojson }};
+</script>
+<script src="{{ static_url('vendor/react-18.2.0.production.min.js') }}"></script>
+<script src="{{ static_url('vendor/react-dom-18.2.0.production.min.js') }}"></script>
+<script src="{{ static_url('js/central_design.js') }}"></script>
+{% endif %}
+{% endblock %}

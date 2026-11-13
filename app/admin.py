@@ -233,8 +233,10 @@ def repo_page():
     skeleton_files = sorted(f for f in os.listdir(skeleton) if f.endswith('.yml')) \
         if os.path.isdir(skeleton) else []
     from . import repo_sync
+    from . import project_types
     return render_template('admin_repo.html', repo_status=_get_repo_status(app),
                            repo_state=repo_sync.state(app),
+                           collection=project_types.collection_state(app),
                            playbooks=playbooks, skeleton_files=skeleton_files,
                            behind=_projects_missing_skeleton_files(app))
 
@@ -336,6 +338,8 @@ def _projects_missing_skeleton_files(app):
     out = []
     for user in User.all_users(app):
         for p in list_projects(app, user.username):
+            if p['type'] != 'config':       # only config projects have host_vars
+                continue
             try:
                 r = reconcile_host_vars(app, user.username, p['name'], dry_run=True)
             except Exception:                       # noqa: BLE001
@@ -472,9 +476,11 @@ def _jobs_running():
     from .projects import _jobs, _jobs_lock
     from .deploy_routes import _deploy_jobs, _deploy_jobs_lock
     from .firmware_routes import _fw_jobs, _fw_jobs_lock
+    from .central_routes import _central_jobs, _central_jobs_lock
     for what, store, lock in (('generation', _jobs, _jobs_lock),
                               ('deploy', _deploy_jobs, _deploy_jobs_lock),
-                              ('firmware upgrade', _fw_jobs, _fw_jobs_lock)):
+                              ('firmware upgrade', _fw_jobs, _fw_jobs_lock),
+                              ('Central run', _central_jobs, _central_jobs_lock)):
         with lock:
             if any(j.get('_finished_at') is None for j in store.values()):
                 return 'A %s is running. Try again when it finishes.' % what

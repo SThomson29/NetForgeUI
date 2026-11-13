@@ -62,7 +62,8 @@ def _project_rules(app):
 def _url(rule):
     url = rule.rule
     for arg, value in (('owner', 'alice'), ('project_name', 'site'), ('hostname', 'SW1'),
-                       ('pool_id', 'x'), ('job_id', 'j1'), ('filename', 'SW1_FULL.ios')):
+                       ('pool_id', 'x'), ('job_id', 'j1'), ('filename', 'SW1_FULL.ios'),
+                       ('section', 'sites'), ('ptype', 'snmp')):
         url = url.replace('<%s>' % arg, value)
     return url
 
@@ -99,7 +100,9 @@ class TestRouteSweep:
         touching = {'deploy_dryrun', 'deploy_push', 'firmware_run', 'firmware_versions',
                     'verify_read',
                     'reachability', 'delete', 'share_project', 'unshare_project',
-                    'transfer_project'}
+                    'transfer_project',
+                    # A Central tenant's API client is guarded like a switch.
+                    'central_unlock', 'central_lock', 'central_run'}
         for rule in _project_rules(app):
             for method in rule.methods - {'HEAD', 'OPTIONS', 'GET'}:
                 res = _call(people['bob'], method, _url(rule))

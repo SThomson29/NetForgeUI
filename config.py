@@ -10,6 +10,14 @@ CONFIGGEN_REPO_PATH = os.environ.get(
 )
 
 
+# Where the Central collection is cloned. Ansible finds it through
+# ANSIBLE_COLLECTIONS_PATH, which the image sets to include this directory.
+CENTRAL_COLLECTIONS_PATH = os.environ.get(
+    'CENTRAL_COLLECTIONS_PATH',
+    os.path.join(BASE_DIR, 'central')
+)
+
+
 class Config:
     SECRET_KEY         = os.environ.get('SECRET_KEY', 'change-me-in-production')
     DATABASE           = os.path.join(BASE_DIR, 'data', 'users.db')
@@ -25,6 +33,19 @@ class Config:
     SKELETON_DIR       = os.path.join(CONFIGGEN_REPO_PATH, 'inventory', 'skeleton')
     PLAYBOOK           = os.path.join(CONFIGGEN_REPO_PATH, 'playbooks', 'generate_configs.yml')
     ROLES_PATH         = os.path.join(CONFIGGEN_REPO_PATH, 'roles')
+
+    # The samthomson.new_central Ansible collection, which applies Central
+    # projects. Unset, Central projects can't be created and nothing about
+    # them is shown. Cloned at container start like the config repo, into a
+    # path Ansible reads as an installed collection:
+    #     CENTRAL_COLLECTIONS_PATH/ansible_collections/samthomson/new_central
+    CENTRAL_REPO_URL   = os.environ.get('CENTRAL_REPO_URL', '').strip()
+    # A release tag or branch to stay on, checked out at every start. Unset,
+    # the collection follows its default branch.
+    CENTRAL_REPO_REF   = os.environ.get('CENTRAL_REPO_REF', '').strip()
+    CENTRAL_COLLECTIONS_PATH = CENTRAL_COLLECTIONS_PATH
+    CENTRAL_REPO       = os.path.join(CENTRAL_COLLECTIONS_PATH, 'ansible_collections',
+                                      'samthomson', 'new_central')
 
     # SSH deploy key for private git repo.
     # Mount the private key file into the container and set this path.

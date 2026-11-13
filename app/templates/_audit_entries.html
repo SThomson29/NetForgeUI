@@ -72,7 +72,7 @@
         <span class="k">NetForgeUI user</span><span>{{ e.username }}</span>
         {% if e.project %}<span class="k">Project</span><span>{{ e.project }}</span>{% endif %}
         {% if e.action not in ('generate', 'repo_pull') %}
-        <span class="k">Switch login</span><span>{{ e.switch_user or '—' }}</span>
+        <span class="k">{{ 'API client' if e.action in ('central_plan', 'central_apply') else 'Switch login' }}</span><span>{{ e.switch_user or '—' }}</span>
         {% endif %}
         <span class="k">Exit code</span><span>{{ e.returncode if e.returncode is not none else '—' }}</span>
         {% for k, v in e.params.items() if v is not none %}
@@ -81,7 +81,25 @@
       </div>
 
       {% set deploy = e.action in ('deploy_dryrun', 'deploy_push') %}
-      {% if e.targets %}
+      {% set central = e.action in ('central_plan', 'central_apply') %}
+      {% if central %}
+      {# A Central run: one result per design section, each a list of what was done. #}
+      {% for r in e.results %}
+      <h4>{{ r.section|replace('_', ' ')|capitalize }}</h4>
+      <table class="audit-table">
+        <thead><tr><th>Step</th><th>Item</th><th>Outcome</th><th>Note</th></tr></thead>
+        <tbody>
+        {% for x in r.entries or [] %}
+          <tr><td>{{ x.step }}</td><td>{{ x.item or '' }}</td>
+              <td>{{ 'failed' if x.failed else ('waiting' if x.waiting else ('skipped' if x.skipped else ('changed' if x.changed else 'no change'))) }}</td>
+              <td>{{ x.message or '' }}</td></tr>
+        {% else %}
+          <tr><td colspan="4" class="text-tertiary">Nothing to do.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endfor %}
+      {% elif e.targets %}
       <h4>{{ 'Hosts' if e.action == 'generate' else 'Switches' }}</h4>
       <table class="audit-table">
         <thead><tr><th>{{ 'Host' if e.action == 'generate' else 'Switch' }}</th>
@@ -103,7 +121,8 @@
       </table>
       {% endif %}
 
-      {% if e.action == 'generate' %}
+      {% if central %}
+      {% elif e.action == 'generate' %}
       {% if e.results %}
       <h4>Configs after this run</h4>
       <table class="audit-table">

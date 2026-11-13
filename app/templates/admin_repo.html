@@ -89,6 +89,37 @@
 </div>
 
 
+{# Shown only where Central is configured; elsewhere nothing about it appears. #}
+{% if collection.configured %}
+<div class="card">
+  <div class="card-header">Central collection</div>
+  <p class="text-sm text-secondary" style="margin-bottom:12px">
+    The <code>samthomson.new_central</code> Ansible collection applies Central projects. It is
+    cloned and updated when the container starts.
+  </p>
+  {% if not collection.cloned %}
+  <div class="not-cloned">
+    Not cloned yet. Check <code>CENTRAL_REPO_URL</code> and the deploy key, then restart; the
+    container log says why a clone failed.
+  </div>
+  {% else %}
+  <div class="repo-meta">
+    <span class="key">Version</span>
+    <span class="val">{{ collection.version or '—' }}</span>
+    <span class="key">Updates</span>
+    <span class="val">
+      {%- if collection.locked %}Set by CENTRAL_REPO_REF={{ collection.locked }}; checked out at every start
+      {%- elif collection.mode == 'pinned' %}Pinned to this release
+      {%- else %}Following {{ collection.branch }}; moves to its newest commit at every start{% endif -%}
+    </span>
+  </div>
+  <p class="text-sm text-secondary">
+    To stay on a release, set <code>CENTRAL_REPO_REF</code> to its tag and restart.
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="card">
   <div class="card-header">What this app uses from it</div>
   <ul class="check-list">

@@ -85,6 +85,9 @@ def _login_throttle():
 @auth_bp.route('/logout', methods=['POST'])
 @login_required
 def logout():
+    # A Central tenant's API client is kept for the session; it ends here.
+    from . import central_session
+    central_session.forget_user(current_user.username)
     logout_user()
     # With OIDC_LOGOUT=provider, an SSO session ends at the provider too.
     provider = sso.end_session()

@@ -272,25 +272,33 @@ def projects_to_search(app, user, include_all=False, only=None):
     from . import sharing
     from .models import User
     from .project import list_projects, project_dir
+    from . import project_types
+
+    def searchable(owner, project):
+        # Search reads switches, pools and deployment addresses, which
+        # only a config project has.
+        return project_types.of(app, owner, project) == project_types.CONFIG
+
     if only:
         owner, project = only
         level = sharing.level_for(app, user, owner, project)
-        if level and os.path.isdir(project_dir(app, owner, project)):
+        if (level and os.path.isdir(project_dir(app, owner, project))
+                and searchable(owner, project)):
             return [(owner, project, level)]
         return []
     out = [(user.username, p['name'], sharing.OWNER)
-           for p in list_projects(app, user.username)]
+           for p in list_projects(app, user.username) if p['type'] == project_types.CONFIG]
     seen = {(o, p) for o, p, _ in out}
     for s in sharing.shared_with(app, user):
         key = (s['owner'], s['project'])
-        if key not in seen and os.path.isdir(project_dir(app, *key)):
+        if key not in seen and os.path.isdir(project_dir(app, *key)) and searchable(*key):
             out.append((s['owner'], s['project'], s['level']))
             seen.add(key)
     if include_all and user.is_admin:
         for u in User.all_users(app):
             for p in list_projects(app, u.username):
                 key = (u.username, p['name'])
-                if key not in seen:
+                if key not in seen and p['type'] == project_types.CONFIG:
                     out.append((u.username, p['name'], sharing.VIEW))
                     seen.add(key)
     return out
