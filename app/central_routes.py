@@ -24,7 +24,7 @@ import uuid
 from flask import abort, current_app, g, jsonify, render_template
 from flask_login import current_user, login_required
 
-from . import audit, central_design, central_schema, central_session, project_types, repo_sync, repo_version
+from . import audit, central_design, central_schema, central_session, project_types, repo_version
 from .api import bad_request, json_body
 from .central_schema import CentralError
 from .jobs import mark_finished, prune_finished, run_ansible_job
