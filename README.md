@@ -353,9 +353,10 @@ A Central project has three pages of its own, beside History and Sharing:
 
 - **Overview** — what the project is, the collection version in use, and how much of the design is filled in.
 - **Design** — the build, a section at a time: sites, site collections and device groups first, then configuration, then devices. The forms are drawn from the collection, so a section added there appears here once the collection is updated. Besides the common sections there is **Any other configuration**, which takes any configuration profile the API has. **Show as YAML** shows a section the way the playbook reads it.
+  **Import from tenant**, on the sections the collection can read (sites, site collections, device groups and devices so far), lists what the tenant already has beside the design: what the design lacks, what it holds differently and what already matches. Ticked rows go into the form, and nothing is saved until the section is. It changes nothing in the tenant, and needs the tenant unlocked on the Apply page first.
 - **Apply** — unlock the tenant, **Plan** to see what would change, then **Apply**. A plan changes nothing. Nothing is ever removed from the tenant: taking something out of the design leaves it there.
 
-Saving the design needs edit access. Unlocking, planning and applying need deploy access.
+Saving the design needs edit access. Unlocking, importing from the tenant, planning and applying need deploy access.
 
 ### The tenant's API client
 
@@ -370,7 +371,7 @@ Passphrases and shared secrets typed into the design are saved with the project,
 ### What isn't there yet
 
 - A Central project can't be exported or imported.
-- Devices are entered by serial number; there is no picker from the tenant's inventory.
+- Only sites, site collections, device groups and devices can be imported from a tenant. Configuration (roles, VLANs, wireless and the rest) can't be yet.
 - The Files page (editing a section as YAML) is for config projects only.
 
 ---

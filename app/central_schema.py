@@ -127,6 +127,8 @@ def load(app):
             'playbook': section.get('playbook'),
             'needs': list(section.get('needs') or []),
             'kind': section.get('kind') or 'rows',
+            # The collection can fill this section from what a tenant has.
+            'read': bool(section.get('read')),
             'lists': lists(section),
         })
     return {'schema_version': version, 'label': raw.get('label') or 'Tenant build', 'sections': sections}
