@@ -215,9 +215,10 @@
     if (!props.type) return h('div', { className: 'hint cd-wide' }, 'Choose a type to see its settings.');
     if (error) return h('div', { className: 'hint cd-wide', style: { color: '#dc2626' } }, error);
     if (!profile) return h('div', { className: 'hint cd-wide' }, 'Loading settings…');
+    const help = props.title ? props.help : profile.help;
     return h('div', { className: 'cd-group cd-wide' },
-      h('div', { className: 't' }, (profile.label || props.type) + ' settings'),
-      profile.help ? h('div', { className: 'hint', style: { marginBottom: 6 } }, profile.help) : null,
+      h('div', { className: 't' }, props.title || ((profile.label || props.type) + ' settings')),
+      help ? h('div', { className: 'hint', style: { marginBottom: 6 } }, help) : null,
       h(Settings, { fields: profile.fields, value: props.value, ctx: props.ctx, onChange: props.onChange }));
   }
 
@@ -256,7 +257,12 @@
       props.open ? h('div', { className: 'cd-row-body' },
         h('div', { className: 'cd-grid' }, part.fields.filter(f => !hiddenBy(f, row, byName)).map(function (f) {
           if (f.type === 'profile') {
-            return h(ProfileSettings, { key: f.name, type: row.profile_type, value: row.config, ctx: props.ctx, onChange: v => change('config', v) });
+            // A section of its own names the type; the profiles section takes it from the row.
+            const fixed = part.kind !== 'profiles' && f.profile_type;
+            return h(ProfileSettings, {
+              key: f.name, type: fixed ? f.profile_type : row.profile_type, value: row[f.name], ctx: props.ctx,
+              title: fixed ? (f.label || f.name) : null, help: fixed ? f.help : null, onChange: v => change(f.name, v)
+            });
           }
           return h(Field, {
             key: f.name, field: f, value: row[f.name], ctx: props.ctx,
