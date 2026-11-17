@@ -227,8 +227,53 @@
   function hiddenBy(field, row, byName) {
     return Object.keys(field.show_if || {}).some(function (other) {
       const current = row[other] !== undefined ? row[other] : (byName[other] || {}).default;
-      return current !== field.show_if[other];
+      const wanted = field.show_if[other];
+      return Array.isArray(wanted) ? !wanted.includes(current) : current !== wanted;
     });
+  }
+
+  /* Rows inside a row, such as a policy's rules. Their order matters, so
+     each can be moved up or down as well as removed. */
+  function NestedRows(props) {
+    const f = props.field;
+    const rows = Array.isArray(props.value) ? props.value : [];
+    const byName = {};
+    (f.fields || []).forEach(x => { byName[x.name] = x; });
+    const one = f.item_label || (f.label || f.name).replace(/s$/, '');
+
+    function set(next) { props.onChange(next.length ? next : undefined); }
+    function change(i, name, v) {
+      const row = Object.assign({}, rows[i]);
+      if (v === undefined) delete row[name]; else row[name] = v;
+      set(rows.map((r, j) => j === i ? row : r));
+    }
+    function move(i, by) {
+      const next = rows.slice();
+      const [row] = next.splice(i, 1);
+      next.splice(i + by, 0, row);
+      set(next);
+    }
+    function summary(row) {
+      return (f.fields || []).filter(x => x.type === 'choice' && !hiddenBy(x, row, byName))
+        .map(x => row[x.name] !== undefined ? row[x.name] : x.default).filter(v => v !== undefined).join(' · ');
+    }
+
+    return h('div', { className: 'cd-group cd-wide' },
+      h('div', { className: 't' }, f.label || f.name, f.required ? h('span', { style: { color: '#dc2626' } }, ' *') : null),
+      f.help ? h('div', { className: 'hint', style: { marginBottom: 6 } }, f.help) : null,
+      rows.length === 0 ? h('div', { className: 'hint', style: { marginBottom: 8 } }, 'None yet.') : null,
+      rows.map((row, i) => h('div', { className: 'cd-row', key: i },
+        h('div', { className: 'cd-row-head', style: { cursor: 'default' } },
+          h('span', { className: 'grow' }, one + ' ' + (i + 1),
+            h('span', { className: 'hint', style: { fontWeight: 400, marginLeft: 8 } }, summary(row))),
+          CAN_EDIT ? h('button', { className: 'cd-x', type: 'button', title: 'Move up', disabled: i === 0, onClick: () => move(i, -1) }, '↑') : null,
+          CAN_EDIT ? h('button', { className: 'cd-x', type: 'button', title: 'Move down', disabled: i === rows.length - 1, onClick: () => move(i, 1) }, '↓') : null,
+          CAN_EDIT ? h('button', { className: 'cd-x', type: 'button', title: 'Remove', onClick: () => set(rows.filter((_, j) => j !== i)) }, '×') : null),
+        h('div', { className: 'cd-row-body' },
+          h('div', { className: 'cd-grid' }, (f.fields || []).filter(x => !hiddenBy(x, row, byName)).map(x => h(Field, {
+            key: x.name, field: x, value: row[x.name], ctx: props.ctx, onChange: v => change(i, x.name, v)
+          })))))),
+      CAN_EDIT ? h('button', { className: 'btn btn-sm', type: 'button', onClick: () => set(rows.concat([{}])) }, '+ Add ' + one.toLowerCase()) : null);
   }
 
   function Row(props) {
@@ -256,6 +301,9 @@
         }, '×') : null),
       props.open ? h('div', { className: 'cd-row-body' },
         h('div', { className: 'cd-grid' }, part.fields.filter(f => !hiddenBy(f, row, byName)).map(function (f) {
+          if (f.type === 'rows') {
+            return h(NestedRows, { key: f.name, field: f, value: row[f.name], ctx: props.ctx, onChange: v => change(f.name, v) });
+          }
           if (f.type === 'profile') {
             // A section of its own names the type; the profiles section takes it from the row.
             const fixed = part.kind !== 'profiles' && f.profile_type;
