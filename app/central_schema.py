@@ -297,6 +297,18 @@ def check(app, sect, data, design):
                 kind = field.get('type')
                 if _empty(value) or _hidden(field, row, by_name):
                     continue
+                if kind == 'profile' and field.get('profile_type') and part['kind'] != 'profiles':
+                    # Settings of a fixed profile type, such as a role's
+                    try:
+                        described = profile_type(app, field['profile_type'])
+                    except CentralError as e:
+                        problems.append('%s: %s' % (where, e))
+                        continue
+                    config = _check_config(described.get('fields') or [], value,
+                                           '%s › %s' % (where, field.get('label') or field['name']), problems)
+                    if config:
+                        new[field['name']] = config
+                    continue
                 if kind == 'profile':
                     continue                                    # after profile_type is known
                 if kind == 'ref':
@@ -357,13 +369,21 @@ def check(app, sect, data, design):
 # Secrets
 # ---------------------------------------------------------------------------
 
+def _secret_keys(app, ptype):
+    entry = next((p for p in catalogue(app) if p['type'] == ptype), None) if ptype else None
+    return set((entry or {}).get('secret_keys') or [])
+
+
 def _secret_names(part, row, app):
+    """(secret fields of the row, {settings field: secret keys within it})"""
     names = {f['name'] for f in part['fields'] if f.get('type') == 'secret'}
-    nested = set()
+    nested = {}
     if part['kind'] == 'profiles' and row.get('profile_type'):
-        entry = next((p for p in catalogue(app) if p['type'] == row['profile_type']), None)
-        nested = set((entry or {}).get('secret_keys') or [])
-    return names, nested
+        nested['config'] = _secret_keys(app, row['profile_type'])
+    for f in part['fields']:
+        if f.get('type') == 'profile' and f.get('profile_type') and part['kind'] != 'profiles':
+            nested[f['name']] = _secret_keys(app, f['profile_type'])
+    return names, {k: v for k, v in nested.items() if v}
 
 
 def _mask_nested(value, names):
@@ -383,8 +403,9 @@ def mask(app, sect, data):
         for row in data.get(part['var']) or []:
             names, nested = _secret_names(part, row, app)
             new = {k: (MASK if k in names and v else v) for k, v in row.items()}
-            if nested and isinstance(new.get('config'), dict):
-                new['config'] = _mask_nested(new['config'], nested)
+            for field, keys in nested.items():
+                if isinstance(new.get(field), dict):
+                    new[field] = _mask_nested(new[field], keys)
             rows.append(new)
         out[part['var']] = rows
     return out

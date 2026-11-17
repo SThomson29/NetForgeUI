@@ -43,7 +43,9 @@ SCHEMA = {
              {'name': 'device_functions', 'label': 'For', 'type': 'choices', 'choices': ['CAMPUS_AP', 'MICROBRANCH_AP'],
               'default': ['CAMPUS_AP'], 'required': True},
              # A list inside fields is spliced in, as the shared assignment fields are.
-             [{'name': 'sites', 'label': 'Sites', 'type': 'ref', 'to': 'sites', 'multiple': True}]],
+             [{'name': 'sites', 'label': 'Sites', 'type': 'ref', 'to': 'sites', 'multiple': True}],
+             # Settings of a type the field names, as roles have
+             {'name': 'settings', 'label': 'More settings', 'type': 'profile', 'profile_type': 'snmp'}],
          'also': [{'var': 'roles', 'label': 'Roles', 'key': 'name', 'fields': [
              {'name': 'name', 'label': 'Role name', 'type': 'text', 'required': True}]}]},
         {'id': 'profiles', 'stage': 'configuration', 'label': 'Any other configuration', 'playbook': 'profiles.yml',
@@ -130,7 +132,7 @@ class TestSchema:
         assert [s['id'] for s in schema['sections']] == ['sites', 'wireless', 'profiles', 'devices']
         wireless = schema['sections'][1]
         assert [p['var'] for p in wireless['lists']] == ['wlans', 'roles']
-        assert [f['name'] for f in wireless['lists'][0]['fields']][-1] == 'sites'
+        assert [f['name'] for f in wireless['lists'][0]['fields']][-2:] == ['sites', 'settings']
         assert wireless['needs'] == ['sites'] and wireless['stage'] == 'configuration'
 
     def test_not_cloned(self, app):
@@ -803,3 +805,33 @@ class TestReadingTheTenant:
 
     def test_design_page_offers_it_only_with_deploy_access(self, auth_client, proj):
         assert 'const CAN_RUN = true;' in auth_client.get(proj + '/design').get_data(as_text=True)
+
+
+class TestFixedTypeSettings:
+    """A section's own `profile` field, with the type named on the field."""
+
+    def check(self, app, wlan):
+        return central_schema.check(app, sect(app, 'wireless'), {'wlans': [wlan]}, DESIGN)
+
+    def test_checked_against_the_named_type(self, central):
+        clean, problems = self.check(central, dict(WLAN, settings={'port': '161', 'location': '', 'trap': {}}))
+        assert problems == []
+        assert clean['wlans'][0]['settings'] == {'port': 161}
+
+    def test_problems_name_the_field(self, central):
+        _clean, problems = self.check(central, dict(WLAN, settings={'nope': 1, 'port': 0}))
+        assert any('More settings' in p and 'nope' in p for p in problems)
+        assert any('More settings' in p and 'Port' in p for p in problems)
+
+    def test_left_out_is_fine(self, central):
+        clean, problems = self.check(central, WLAN)
+        assert problems == [] and 'settings' not in clean['wlans'][0]
+
+    def test_secrets_inside_are_masked_and_kept(self, central):
+        s = sect(central, 'wireless')
+        saved = {'wlans': [dict(WLAN, settings={'users': [{'name': 'u', 'auth-password': 'p4ss'}]})]}
+        masked = central_schema.mask(central, s, saved)
+        assert masked['wlans'][0]['settings']['users'][0]['auth-password'] == MASK
+        assert masked['wlans'][0]['passphrase'] == MASK
+        assert 'p4ss' not in json.dumps(masked)
+        assert central_schema.unmask(s, masked, saved) == dict(saved, roles=[])
