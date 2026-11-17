@@ -48,12 +48,26 @@
       <div class="fld">
         <label class="lbl" for="t-url">Region API address</label>
         <input class="form-input mono" id="t-url" list="t-regions" placeholder="https://de1.api.central.arubanetworks.com" autocomplete="off">
+        {# Central's regions, from "API Gateway Base URLs" in the New Central developer docs.
+           Central shows a tenant's own under Menu > API Gateway > REST API. #}
         <datalist id="t-regions">
-          <option value="https://de1.api.central.arubanetworks.com">
-          <option value="https://de2.api.central.arubanetworks.com">
-          <option value="https://de3.api.central.arubanetworks.com">
+          <option value="https://de1.api.central.arubanetworks.com" label="EU-1">
+          <option value="https://de2.api.central.arubanetworks.com" label="EU-Central2">
+          <option value="https://de3.api.central.arubanetworks.com" label="EU-Central3">
+          <option value="https://gb1.api.central.arubanetworks.com" label="UK">
+          <option value="https://us1.api.central.arubanetworks.com" label="US-1">
+          <option value="https://us2.api.central.arubanetworks.com" label="US-2">
+          <option value="https://us4.api.central.arubanetworks.com" label="US-West-4">
+          <option value="https://us5.api.central.arubanetworks.com" label="US-West-5">
+          <option value="https://us6.api.central.arubanetworks.com" label="US-East-1">
+          <option value="https://ca1.api.central.arubanetworks.com" label="Canada-1">
+          <option value="https://in1.api.central.arubanetworks.com" label="APAC-1">
+          <option value="https://jp1.api.central.arubanetworks.com" label="APAC-East-1">
+          <option value="https://au1.api.central.arubanetworks.com" label="APAC-South-1">
+          <option value="https://ae1.api.central.arubanetworks.com" label="UAE">
+          <option value="https://cn1.api.central.arubanetworks.com.cn" label="China">
         </datalist>
-        <div class="hint">Shown in Central under <em>Global → API gateway</em>.</div>
+        <div class="hint">Pick your region, or copy it from Central under <em>Menu → API Gateway → REST API</em>.</div>
       </div>
       <div class="fld">
         <label class="lbl" for="t-id">Client ID</label>
