@@ -42,6 +42,7 @@ ACTIONS = {
     'repo_pull':     'Repo pull',
     'central_plan':  'Central plan',
     'central_apply': 'Central apply',
+    'central_read':  'Central read',
 }
 
 # One-off changes recorded as they happen, with a one-line summary in
@@ -64,7 +65,7 @@ EVENTS = {
 ACTIONS.update(EVENTS)
 
 DEPLOY_ACTIONS = ('deploy_dryrun', 'deploy_push')
-CENTRAL_ACTIONS = ('central_plan', 'central_apply')
+CENTRAL_ACTIONS = ('central_plan', 'central_apply', 'central_read')
 
 # 0 keeps details forever.
 AUDIT_DETAIL_DAYS = int(os.environ.get('AUDIT_DETAIL_DAYS', '90'))
@@ -324,6 +325,8 @@ def _outcome(e):
     if e['action'] in CENTRAL_ACTIONS and results:
         if status != 'done' or any(r.get('failed') for r in results):
             return ('Failed', 'red')
+        if e['action'] == 'central_read':
+            return ('Read %d section%s' % (len(results), '' if len(results) == 1 else 's'), 'neutral')
         changed = sum(1 for r in results if r.get('changed'))
         if e['action'] == 'central_plan':
             return ('%d of %d section%s would change' % (changed, len(results), '' if len(results) == 1 else 's'),

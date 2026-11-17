@@ -72,7 +72,7 @@
         <span class="k">NetForgeUI user</span><span>{{ e.username }}</span>
         {% if e.project %}<span class="k">Project</span><span>{{ e.project }}</span>{% endif %}
         {% if e.action not in ('generate', 'repo_pull') %}
-        <span class="k">{{ 'API client' if e.action in ('central_plan', 'central_apply') else 'Switch login' }}</span><span>{{ e.switch_user or '—' }}</span>
+        <span class="k">{{ 'API client' if e.action in ('central_plan', 'central_apply', 'central_read') else 'Switch login' }}</span><span>{{ e.switch_user or '—' }}</span>
         {% endif %}
         <span class="k">Exit code</span><span>{{ e.returncode if e.returncode is not none else '—' }}</span>
         {% for k, v in e.params.items() if v is not none %}
@@ -81,7 +81,7 @@
       </div>
 
       {% set deploy = e.action in ('deploy_dryrun', 'deploy_push') %}
-      {% set central = e.action in ('central_plan', 'central_apply') %}
+      {% set central = e.action in ('central_plan', 'central_apply', 'central_read') %}
       {% if central %}
       {# A Central run: one result per design section, each a list of what was done. #}
       {% for r in e.results %}
@@ -91,7 +91,7 @@
         <tbody>
         {% for x in r.entries or [] %}
           <tr><td>{{ x.step }}</td><td>{{ x.item or '' }}</td>
-              <td>{{ 'failed' if x.failed else ('waiting' if x.waiting else ('skipped' if x.skipped else ('changed' if x.changed else 'no change'))) }}</td>
+              <td>{{ 'read' if e.action == 'central_read' else ('failed' if x.failed else ('waiting' if x.waiting else ('skipped' if x.skipped else ('changed' if x.changed else 'no change')))) }}</td>
               <td>{{ x.message or '' }}</td></tr>
         {% else %}
           <tr><td colspan="4" class="text-tertiary">Nothing to do.</td></tr>

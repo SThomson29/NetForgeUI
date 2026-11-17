@@ -2,7 +2,7 @@
  * Central design editor (React, no build step).
  *
  * Loaded by templates/central_design.html after React and an inline block
- * that defines CENTRAL_BASE, CAN_EDIT and START_SECTION.
+ * that defines CENTRAL_BASE, CAN_EDIT, CAN_RUN and START_SECTION.
  *
  * Nothing here knows what a design contains. The sections, their fields
  * and every profile type come from the Central collection through
@@ -265,6 +265,87 @@
         }))) : null);
   }
 
+  /* ── Reading a section from the tenant ───────────────────── */
+
+  function same(a, b) {
+    const norm = v => Array.isArray(v) ? JSON.stringify(v.map(String).sort()) : JSON.stringify(v === undefined ? null : v);
+    return norm(a) === norm(b);
+  }
+
+  /* Sort what the tenant has against the design: rows the design lacks,
+     rows it holds differently, and rows that already match. Only fields
+     the tenant gave a value for are compared, so a field set only in the
+     design never counts as a difference. */
+  function compare(section, found, data) {
+    const out = [];
+    let matching = 0;
+    section.lists.forEach(function (part) {
+      const mine = {};
+      (data[part.var] || []).forEach(r => { if (r[part.key] !== undefined) mine[String(r[part.key])] = r; });
+      (found[part.var] || []).forEach(function (row) {
+        if (row[part.key] === undefined || row[part.key] === '') return;
+        const existing = mine[String(row[part.key])];
+        if (!existing) { out.push({ part, row, state: 'new', on: true, differs: [] }); return; }
+        const differs = part.fields.filter(f => row[f.name] !== undefined && !same(row[f.name], existing[f.name]));
+        if (differs.length) out.push({ part, row, state: 'different', on: false, differs });
+        else matching += 1;
+      });
+    });
+    return { rows: out, matching };
+  }
+
+  function show(v) {
+    if (v === undefined || v === null || v === '') return 'nothing';
+    return Array.isArray(v) ? v.join(', ') : String(v);
+  }
+
+  function ImportPanel(props) {
+    const imp = props.imp;
+    const close = h('button', { className: 'btn btn-sm', type: 'button', onClick: props.onClose }, 'Close');
+    if (imp.status === 'running') {
+      return h('div', { className: 'card' }, h('div', { className: 'card-header' }, 'From the tenant'),
+        h('div', { className: 'hint' }, 'Reading ' + props.section.label.toLowerCase() + ' from the tenant… Nothing in the tenant is changed.'));
+    }
+    if (imp.status === 'error') {
+      return h('div', { className: 'card' }, h('div', { className: 'card-header' }, 'From the tenant'),
+        h('p', { style: { fontSize: 13, color: '#991b1b', margin: '0 0 10px' } }, imp.message),
+        imp.locked ? h('p', { style: { fontSize: 13, margin: '0 0 10px' } },
+          h('a', { href: CENTRAL_BASE + '/apply' }, 'Unlock the tenant on the Apply page'), ', then come back and try again.') : null,
+        imp.output ? h('pre', { className: 'cd-yaml', style: { marginBottom: 10 } }, imp.output) : null,
+        close);
+    }
+    const rows = imp.rows;
+    const chosen = rows.filter(r => r.on).length;
+    const fresh = rows.filter(r => r.state === 'new').length;
+    const summary = [
+      fresh + ' not in the design',
+      (rows.length - fresh) + ' different from the design',
+      imp.matching + ' already the same'
+    ].join(' · ');
+    return h('div', { className: 'card' },
+      h('div', { className: 'card-header' }, 'From the tenant'),
+      h('div', { className: 'hint', style: { marginBottom: 10 } }, summary),
+      rows.length === 0 ? h('p', { style: { fontSize: 13, margin: '0 0 10px' } },
+        imp.matching ? 'The design already has everything the tenant has here.' : 'The tenant has nothing here yet.') : null,
+      rows.length ? h('div', { className: 'cd-import' }, rows.map((r, i) => h('label', { key: i, className: 'cd-import-row' },
+        h('input', { type: 'checkbox', checked: r.on, onChange: () => props.onTick(i) }),
+        h('span', { className: 'grow' },
+          h('strong', null, String(r.row[r.part.key])),
+          props.section.lists.length > 1 ? h('span', { className: 'hint' }, '  ' + r.part.label) : null,
+          r.state === 'different' ? h('div', { className: 'hint' }, r.differs.map(f =>
+            (f.label || f.name) + ': ' + show(props.current(r)[f.name]) + ' → ' + show(r.row[f.name])).join('; ')) : null),
+        h('span', { className: 'badge ' + (r.state === 'new' ? 'badge-green' : 'badge-yellow') },
+          r.state === 'new' ? 'new' : 'replaces the design\'s')))) : null,
+      rows.length ? h('div', { className: 'hint', style: { margin: '8px 0' } },
+        'Ticked rows are put into the form below. Nothing is saved until you save the section.') : null,
+      h('div', { className: 'cd-bar', style: { marginTop: 4 } },
+        rows.length ? h('button', { className: 'btn btn-primary', type: 'button', disabled: !chosen, onClick: props.onTake },
+          'Bring ' + chosen + ' into the design') : null,
+        rows.length ? h('button', { className: 'btn btn-sm', type: 'button', onClick: () => props.onAll(chosen !== rows.length) },
+          chosen === rows.length ? 'Untick all' : 'Tick all') : null,
+        close));
+  }
+
   /* ── A section ───────────────────────────────────────────── */
 
   function Section(props) {
@@ -277,12 +358,16 @@
     const [busy, setBusy] = useState(false);
     const [showYaml, setShowYaml] = useState(false);
     const dirty = useRef(false);
+    const [imp, setImp] = useState(null);           // a read of this section from the tenant
+    const reading = useRef(0);
 
     useEffect(function () {
       setState(null); setProblems([]); setError(''); setOpen({}); dirty.current = false; window.__centralDirty = false;
+      setImp(null); reading.current += 1;
       getJSON(CENTRAL_BASE + '/api/design/' + section.id)
         .then(function (body) { setState(body); setSaved(JSON.parse(JSON.stringify(body.data))); })
         .catch(e => setError(e.message));
+      return function () { reading.current += 1; };
     }, [section.id]);
 
     if (error && !state) return h('div', { className: 'card' }, h('p', { style: { color: '#dc2626', fontSize: 13, margin: 0 } }, error));
@@ -318,6 +403,67 @@
       }
     }
 
+    /* Ask the collection what the tenant has for this section, then offer
+       it beside the design. A newer read, or leaving the section, drops
+       an older one's answer. */
+    async function readTenant() {
+      const mine = reading.current += 1;
+      const stale = () => reading.current !== mine;
+      setImp({ status: 'running' });
+      try {
+        const res = await fetch(CENTRAL_BASE + '/run', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'read', sections: [section.id] })
+        });
+        const started = await res.json().catch(() => ({}));
+        if (stale()) return;
+        if (!res.ok || !started.ok) {
+          setImp({ status: 'error', message: started.error || 'The tenant could not be read.', locked: !!started.locked });
+          return;
+        }
+        for (;;) {
+          await new Promise(done => setTimeout(done, 1500));
+          if (stale()) return;
+          const job = await getJSON(CENTRAL_BASE + '/run/' + started.job_id);
+          if (stale()) return;
+          if (job.status !== 'done' && job.status !== 'failed') continue;
+          const report = (job.results || []).find(r => r.section === section.id);
+          if (job.status === 'failed' || !report) {
+            setImp({
+              status: 'error', message: 'The tenant could not be read.',
+              output: (job.output || '').split('\n').slice(-25).join('\n')
+            });
+            return;
+          }
+          setImp(Object.assign({ status: 'ready' }, compare(section, report.found || {}, state.data)));
+          return;
+        }
+      } catch (e) {
+        if (!stale()) setImp({ status: 'error', message: e.message });
+      }
+    }
+
+    function designRow(r) {
+      return (state.data[r.part.var] || []).find(x => String(x[r.part.key]) === String(r.row[r.part.key])) || {};
+    }
+
+    function takeFromTenant() {
+      const data = Object.assign({}, state.data);
+      let taken = 0;
+      imp.rows.filter(r => r.on).forEach(function (r) {
+        const rows = (data[r.part.var] || []).slice();
+        const at = rows.findIndex(x => String(x[r.part.key]) === String(r.row[r.part.key]));
+        // A row the design already has keeps whatever the tenant said nothing about.
+        if (at >= 0) rows[at] = Object.assign({}, rows[at], r.row); else rows.push(r.row);
+        data[r.part.var] = rows;
+        taken += 1;
+      });
+      dirty.current = true; window.__centralDirty = true;
+      setState(Object.assign({}, state, { data }));
+      setImp(null);
+      toast('Brought ' + taken + ' into the form. Save the section to keep them.');
+    }
+
     const ctx = { refs: Object.assign({}, state.refs), profileTypes: props.profileTypes };
     // Rows being edited can be picked by references in the same section.
     section.lists.forEach(function (part) {
@@ -332,6 +478,12 @@
 
       error ? h('div', { className: 'cd-problems' }, error,
         problems.length ? h('ul', null, problems.map((p, i) => h('li', { key: i }, p))) : null) : null,
+
+      imp ? h(ImportPanel, {
+        imp, section, current: designRow, onClose: () => { reading.current += 1; setImp(null); }, onTake: takeFromTenant,
+        onTick: i => setImp(Object.assign({}, imp, { rows: imp.rows.map((r, j) => j === i ? Object.assign({}, r, { on: !r.on }) : r) })),
+        onAll: on => setImp(Object.assign({}, imp, { rows: imp.rows.map(r => Object.assign({}, r, { on })) }))
+      }) : null,
 
       section.lists.map(function (part) {
         const rows = state.data[part.var] || [];
@@ -354,6 +506,10 @@
 
       h('div', { className: 'cd-bar' },
         CAN_EDIT ? h('button', { className: 'btn btn-primary', disabled: busy, onClick: save }, busy ? 'Saving…' : 'Save ' + section.label.toLowerCase()) : null,
+        section.read && CAN_EDIT && CAN_RUN ? h('button', {
+          className: 'btn', type: 'button', disabled: !!imp && imp.status === 'running', onClick: readTenant,
+          title: 'See what the tenant already has for this section and choose what to bring into the design'
+        }, 'Import from tenant') : null,
         h('button', { className: 'btn', type: 'button', onClick: () => setShowYaml(!showYaml) }, showYaml ? 'Hide YAML' : 'Show as YAML'),
         !CAN_EDIT ? h('span', { className: 'hint' }, 'You have view access; the design can\'t be changed.') : null),
 

@@ -28,6 +28,11 @@
 .cd-bar{display:flex;align-items:center;gap:10px;margin:14px 0 0}
 .cd-x{border:0;background:none;color:var(--text-tertiary);cursor:pointer;font-size:14px;padding:0 4px}
 .cd-x:hover{color:var(--danger)}
+.cd-import{border:1px solid #e5e4dc;border-radius:8px;max-height:340px;overflow:auto}
+.cd-import-row{display:flex;align-items:flex-start;gap:10px;padding:8px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid #f0efe8}
+.cd-import-row:last-child{border-bottom:0}
+.cd-import-row .grow{flex:1;min-width:0}
+.cd-import-row input{margin-top:3px}
 @media (max-width: 900px){.cd-wrap{grid-template-columns:1fr}.cd-nav{position:static}}
 </style>
 {% endblock %}
@@ -45,6 +50,7 @@
 <script nonce="{{ csp_nonce() }}">
 const CENTRAL_BASE = PROJECT_BASE + '/central';
 const CAN_EDIT = {{ can_edit | tojson }};
+const CAN_RUN = {{ can_run | tojson }};
 const START_SECTION = {{ (request.args.get('section') or '') | tojson }};
 </script>
 <script src="{{ static_url('vendor/react-18.2.0.production.min.js') }}"></script>

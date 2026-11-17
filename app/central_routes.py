@@ -5,8 +5,12 @@ Central project routes — extends the projects blueprint.
     Design      forms drawn from the collection's schema, one section at a time
     Apply       unlock the tenant, plan (check mode with diffs), then apply
 
+The Design page can also read a section from the tenant: the collection
+lists what the tenant has as design rows, and the person picks which to
+bring into the form. Nothing is saved until they save the section.
+
 Design saves need edit access. Anything that uses the tenant's API client
-— unlocking, planning, applying — needs deploy access, the same level that
+— unlocking, reading, planning, applying — needs deploy access, the same level that
 guards a config project's switches.
 
 A run is one ansible-playbook of the collection's tenant build, with the
@@ -34,6 +38,7 @@ _central_jobs = {}
 _central_jobs_lock = threading.Lock()
 
 RUN_TIMEOUT_SECS = 30 * 60
+READ_PLAYBOOK = 'read.yml'
 
 
 def _key(project_name):
@@ -87,7 +92,8 @@ def central_design_page(project_name):
         problem = str(e)
     from . import sharing
     return render_template('central_design.html', project_name=project_name, problem=problem,
-                           can_edit=sharing.at_least(g.project_level, sharing.EDIT))
+                           can_edit=sharing.at_least(g.project_level, sharing.EDIT),
+                           can_run=sharing.at_least(g.project_level, sharing.DEPLOY))
 
 
 @login_required
@@ -231,16 +237,42 @@ def _slim(report):
                                  for e in report.get('entries') or [] if isinstance(e, dict)])
 
 
+def _found(report, sections):
+    """What a read found for one section, kept to the rows and fields the
+    schema describes: {section, found: {var: [rows]}}. None if the report
+    isn't one for a section that was asked for."""
+    if not isinstance(report, dict) or report.get('section') not in sections:
+        return None
+    sect = sections[report['section']]
+    given = report.get('found') if isinstance(report.get('found'), dict) else {}
+    found = {}
+    for part in sect['lists']:
+        names = [f['name'] for f in part['fields']]
+        rows = given.get(part['var']) if isinstance(given.get(part['var']), list) else []
+        found[part['var']] = [{k: row[k] for k in names if k in row} for row in rows if isinstance(row, dict)]
+    return {'section': sect['id'], 'found': found}
+
+
+def _read_summary(report):
+    """A read's result for the audit log: how much was found, not what."""
+    return {'section': report['section'], 'changed': False, 'failed': False,
+            'entries': [{'step': 'Read from the tenant', 'item': var, 'message': '%d found' % len(rows)}
+                        for var, rows in report['found'].items()]}
+
+
 @login_required
 def central_run(project_name):
-    """Plan or apply. POST {mode: 'plan'|'apply', sections: [ids]}; no
-    sections means the whole design. A plan is the same run in check mode
-    with diffs, and changes nothing in the tenant."""
+    """Plan, apply or read. POST {mode: 'plan'|'apply'|'read', sections:
+    [ids]}; for a plan or an apply, no sections means the whole design. A
+    plan is the same run in check mode with diffs, and changes nothing in
+    the tenant. A read changes nothing either: it lists what the tenant
+    has for the sections named, as rows for the Design page to offer."""
     app = current_app._get_current_object()
     body = json_body('mode')
     mode = body['mode']
-    if mode not in ('plan', 'apply'):
-        bad_request('mode must be plan or apply.')
+    if mode not in ('plan', 'apply', 'read'):
+        bad_request('mode must be plan, apply or read.')
+    reading = mode == 'read'
     schema = _schema_or_400(app)
     owner, user = g.project_owner, current_user.username
     wanted = body.get('sections') or []
@@ -248,6 +280,8 @@ def central_run(project_name):
     if not isinstance(wanted, list) or any(s not in known for s in wanted):
         bad_request('Unknown section.')
     chosen = [s for s in schema['sections'] if not wanted or s['id'] in wanted]
+    if reading and (not wanted or not all(s['read'] for s in chosen)):
+        bad_request('Choose sections that can be read from a tenant.')
 
     creds = central_session.get(user, owner, project_name)
     if creds is None:
@@ -256,28 +290,34 @@ def central_run(project_name):
     if running:
         return jsonify(ok=False, error='%s already has a run in progress on this project.' % running), 409
 
-    design = central_design.read_design(app, owner, project_name, schema)
-    problems = []
-    for sect in chosen:
-        try:
-            data = {part['var']: design.get(part['var']) or [] for part in sect['lists']}
-            problems += central_schema.check(app, sect, data, design)[1]
-        except CentralError as e:
-            bad_request(str(e))
-    if problems:
-        return jsonify(ok=False, error='The design has problems. Fix them on the Design page first.',
-                       problems=problems[:50]), 400
-    # Only the chosen sections' rows are sent, so nothing else is touched.
-    sending = {part['var']: design.get(part['var']) or [] for sect in chosen for part in sect['lists']}
-    if not any(sending.values()):
-        return jsonify(ok=False, error='There is nothing in the design to %s yet.' % mode), 400
+    if reading:
+        sending = None
+    else:
+        design = central_design.read_design(app, owner, project_name, schema)
+        problems = []
+        for sect in chosen:
+            try:
+                data = {part['var']: design.get(part['var']) or [] for part in sect['lists']}
+                problems += central_schema.check(app, sect, data, design)[1]
+            except CentralError as e:
+                bad_request(str(e))
+        if problems:
+            return jsonify(ok=False, error='The design has problems. Fix them on the Design page first.',
+                           problems=problems[:50]), 400
+        # Only the chosen sections' rows are sent, so nothing else is touched.
+        sending = {part['var']: design.get(part['var']) or [] for sect in chosen for part in sect['lists']}
+        if not any(sending.values()):
+            return jsonify(ok=False, error='There is nothing in the design to %s yet.' % mode), 400
 
     build = central_schema.build_dir(app)
-    playbook = chosen[0]['playbook'] if len(chosen) == 1 else 'build.yml'
+    if reading:
+        playbook = READ_PLAYBOOK
+    else:
+        playbook = chosen[0]['playbook'] if len(chosen) == 1 else 'build.yml'
     version = repo_version.read(app.config.get('CENTRAL_REPO') or '')
     audit_id = audit.record_start(
         app, username=user, owner=owner, project=project_name,
-        action='central_plan' if mode == 'plan' else 'central_apply',
+        action='central_' + mode,
         switch_user=central_session.status(user, owner, project_name).get('client_id'),
         targets=[{'hostname': s['label'], 'mgmt_ip': ''} for s in chosen],
         params={'tenant': creds['base_url'], 'collection': version['label'] if version else None})
@@ -305,7 +345,7 @@ def central_run(project_name):
                     _central_jobs, _central_jobs_lock, job_id,
                     playbook_path=os.path.join(build, playbook), repo_dir=build,
                     ansible_bin=ansible_bin, inventory=inventory,
-                    extra_vars={'design': sending},
+                    extra_vars={'sections': [s['id'] for s in chosen]} if reading else {'design': sending},
                     extra_args=['--check', '--diff'] if mode == 'plan' else [],
                     timeout_secs=RUN_TIMEOUT_SECS,
                     extra_env={'API_CLIENT_ID': creds['client_id'],
@@ -327,10 +367,14 @@ def central_run(project_name):
                 # is a second line of defence for anything unexpected.
                 job['output'] = (job.get('output') or '').replace(creds['client_secret'], '********')
                 order = {s['id']: i for i, s in enumerate(schema['sections'])}
-                job['results'] = sorted((r for r in job.get('results') or [] if isinstance(r, dict)),
+                results = job.get('results') or []
+                if reading:
+                    by_id = {s['id']: s for s in chosen}
+                    results = [r for r in (_found(r, by_id) for r in results) if r]
+                job['results'] = sorted((r for r in results if isinstance(r, dict)),
                                         key=lambda r: order.get(r.get('section'), 999))
                 mark_finished(job)
-                final = dict(job, results=[_slim(r) for r in job['results']])
+                final = dict(job, results=[_read_summary(r) if reading else _slim(r) for r in job['results']])
             try:
                 audit.record_finish(app, audit_id, final)
             except Exception:                       # noqa: BLE001

@@ -26,7 +26,7 @@ SCHEMA = {
     'label': 'New tenant build',
     'sections': [
         {'id': 'sites', 'stage': 'foundation', 'label': 'Sites', 'playbook': 'sites.yml', 'kind': 'rows',
-         'var': 'sites', 'key': 'name', 'fields': [
+         'read': True, 'var': 'sites', 'key': 'name', 'fields': [
              {'name': 'name', 'label': 'Site name', 'type': 'text', 'required': True},
              {'name': 'city', 'label': 'City', 'type': 'text'},
              {'name': 'timezone_offset', 'label': 'Offset', 'type': 'number', 'min': -43200, 'max': 50400}]},
@@ -53,7 +53,7 @@ SCHEMA = {
              {'name': 'config', 'label': 'Settings', 'type': 'profile', 'required': True},
              {'name': 'servers', 'label': 'Servers', 'type': 'list'}]},
         {'id': 'devices', 'stage': 'devices', 'label': 'Devices', 'playbook': 'devices.yml', 'optional': True,
-         'kind': 'rows', 'var': 'devices', 'key': 'serial', 'fields': [
+         'read': True, 'kind': 'rows', 'var': 'devices', 'key': 'serial', 'fields': [
              {'name': 'serial', 'label': 'Serial number', 'type': 'text', 'required': True},
              {'name': 'site', 'label': 'Site', 'type': 'ref', 'to': 'sites'}]},
     ],
@@ -86,7 +86,7 @@ def write_collection(root, schema=SCHEMA):
                        ('profiles/snmp.yml', SNMP), ('profiles/lacp.yml', LACP)):
         with open(os.path.join(build, name), 'w') as f:
             yaml.safe_dump(data, f, sort_keys=False)
-    for playbook in ('build.yml', 'sites.yml', 'wireless.yml', 'profiles.yml', 'devices.yml'):
+    for playbook in ('build.yml', 'read.yml', 'sites.yml', 'wireless.yml', 'profiles.yml', 'devices.yml'):
         with open(os.path.join(build, playbook), 'w') as f:
             f.write('---\n')
     return build
@@ -582,6 +582,10 @@ def runs(monkeypatch, verified):
 
     def fake(store, lock, job_id, **kw):
         calls.append(kw)
+        if kw['playbook_path'].endswith('read.yml'):
+            with lock:
+                store[job_id].update(status='done', returncode=0, output='PLAY RECAP ok', results=FOUND)
+            return
         sections = ['sites'] if kw['playbook_path'].endswith('sites.yml') else ['wireless', 'sites']
         with lock:
             store[job_id].update(
@@ -595,6 +599,18 @@ def runs(monkeypatch, verified):
     with routes._central_jobs_lock:
         routes._central_jobs.clear()
     return calls
+
+
+# What the collection's read.yml would write: a report per section asked
+# for, plus things a page must never be handed as they are.
+FOUND = [
+    {'section': 'devices', 'found': {'devices': [{'serial': 'CN1', 'site': 'london'}, {'serial': 'CN2'}]}},
+    {'section': 'sites', 'found': {
+        'sites': [{'name': 'london', 'city': 'London', 'scopeId': 'not-a-field'}, 'not-a-row', {'name': 'york'}],
+        'something_else': [{'name': 'x'}]}},
+    {'section': 'wireless', 'found': {'wlans': [{'name': 'not asked for'}]}},
+    'not-a-report',
+]
 
 
 def wait_for(client, proj, job_id):
@@ -718,3 +734,72 @@ class TestRuns:
         finally:
             with routes._central_jobs_lock:
                 routes._central_jobs.clear()
+
+
+class TestReadingTheTenant:
+    CREDS = TestRuns.CREDS
+
+    @pytest.fixture
+    def unlocked(self, central, auth_client, proj, runs):
+        auth_client.post(proj + '/unlock', json=self.CREDS)
+        return runs
+
+    def test_the_schema_says_which_sections_can_be_read(self, auth_client, proj):
+        sections = auth_client.get(proj + '/api/schema').get_json()['schema']['sections']
+        assert {s['id']: s['read'] for s in sections} == {
+            'sites': True, 'wireless': False, 'profiles': False, 'devices': True}
+
+    def test_read_runs_the_read_playbook_and_sends_no_design(self, central, auth_client, proj, unlocked):
+        # A design that would not pass a plan doesn't get in the way of reading.
+        job_id = auth_client.post(proj + '/run', json={'mode': 'read', 'sections': ['sites']}).get_json()['job_id']
+        job = wait_for(auth_client, proj, job_id)
+        call = unlocked[0]
+        assert call['playbook_path'].endswith(os.path.join('tenant_build', 'read.yml'))
+        assert call['extra_args'] == []
+        assert call['extra_vars'] == {'sections': ['sites']}
+        assert call['extra_env']['API_CLIENT_SECRET'] == 'the-client-secret'
+        assert job['mode'] == 'read'
+        # Only the section asked for, only rows, only the fields its form has.
+        assert job['results'] == [{'section': 'sites', 'found': {
+            'sites': [{'name': 'london', 'city': 'London'}, {'name': 'york'}]}}]
+
+    def test_several_sections_come_back_in_the_designs_order(self, auth_client, proj, unlocked):
+        job_id = auth_client.post(
+            proj + '/run', json={'mode': 'read', 'sections': ['devices', 'sites']}).get_json()['job_id']
+        job = wait_for(auth_client, proj, job_id)
+        assert unlocked[0]['extra_vars'] == {'sections': ['sites', 'devices']}
+        assert [r['section'] for r in job['results']] == ['sites', 'devices']
+
+    def test_reading_saves_nothing(self, central, auth_client, proj, unlocked):
+        job_id = auth_client.post(proj + '/run', json={'mode': 'read', 'sections': ['sites']}).get_json()['job_id']
+        wait_for(auth_client, proj, job_id)
+        assert auth_client.get(proj + '/api/design/sites').get_json()['data'] == {'sites': []}
+        assert not os.path.isdir(os.path.join(project_dir(central, 'admin', 'tenant'), 'design'))
+
+    @pytest.mark.parametrize('sections', [None, [], ['wireless'], ['sites', 'wireless'], ['nope']])
+    def test_only_sections_that_can_be_read(self, auth_client, proj, unlocked, sections):
+        body = {'mode': 'read'} if sections is None else {'mode': 'read', 'sections': sections}
+        assert auth_client.post(proj + '/run', json=body).status_code == 400
+        assert unlocked == []
+
+    def test_locked_tenant_refuses(self, auth_client, proj, runs):
+        res = auth_client.post(proj + '/run', json={'mode': 'read', 'sections': ['sites']})
+        assert res.status_code == 409 and res.get_json()['locked'] and runs == []
+
+    def test_history_records_how_much_was_found_not_what(self, central, auth_client, proj, unlocked):
+        job_id = auth_client.post(proj + '/run', json={'mode': 'read', 'sections': ['sites']}).get_json()['job_id']
+        wait_for(auth_client, proj, job_id)
+        for _ in range(100):
+            entry = audit.entries(central, owner='admin', project='tenant')[0]
+            if entry['status'] != 'running':
+                break
+            time.sleep(0.02)
+        assert entry['action'] == 'central_read' and entry['status'] == 'done'
+        assert entry['outcome'][0] == 'Read 1 section'
+        assert [(e['item'], e['message']) for r in entry['results'] for e in r['entries']] == [('sites', '2 found')]
+        assert 'london' not in json.dumps(entry['results'])
+        page = auth_client.get('/projects/admin/tenant/history').get_data(as_text=True)
+        assert 'Central read' in page and 'Read 1 section' in page
+
+    def test_design_page_offers_it_only_with_deploy_access(self, auth_client, proj):
+        assert 'const CAN_RUN = true;' in auth_client.get(proj + '/design').get_data(as_text=True)
