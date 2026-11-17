@@ -273,9 +273,23 @@
 
   /* ── Reading a section from the tenant ───────────────────── */
 
+  /* The same value, whatever order a list of names or an object's keys
+     come in. */
+  function canonical(v) {
+    if (Array.isArray(v)) {
+      const items = v.map(canonical);
+      return v.every(x => x === null || typeof x !== 'object') ? items.map(String).sort() : items;
+    }
+    if (v && typeof v === 'object') {
+      const out = {};
+      Object.keys(v).sort().forEach(k => { out[k] = canonical(v[k]); });
+      return out;
+    }
+    return v === undefined ? null : v;
+  }
+
   function same(a, b) {
-    const norm = v => Array.isArray(v) ? JSON.stringify(v.map(String).sort()) : JSON.stringify(v === undefined ? null : v);
-    return norm(a) === norm(b);
+    return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
   }
 
   /* Sort what the tenant has against the design: rows the design lacks,
@@ -297,12 +311,14 @@
         else matching += 1;
       });
     });
-    return { rows: out, matching };
+    return { rows: out, matching, skipped: found.__skipped || [] };
   }
 
   function show(v) {
     if (v === undefined || v === null || v === '') return 'nothing';
-    return Array.isArray(v) ? v.join(', ') : String(v);
+    if (Array.isArray(v)) return v.map(x => x && typeof x === 'object' ? JSON.stringify(x) : String(x)).join(', ');
+    if (typeof v === 'object') return Object.keys(v).length + ' setting' + (Object.keys(v).length === 1 ? '' : 's');
+    return String(v);
   }
 
   function ImportPanel(props) {
@@ -327,7 +343,8 @@
       fresh + ' not in the design',
       (rows.length - fresh) + ' different from the design',
       imp.matching + ' already the same'
-    ].join(' · ');
+    ].concat(imp.skipped.length ? [imp.skipped.length + ' the form can\'t hold'] : []).join(' · ');
+    const secrets = props.section.lists.some(p => p.fields.some(f => f.type === 'secret'));
     return h('div', { className: 'card' },
       h('div', { className: 'card-header' }, 'From the tenant'),
       h('div', { className: 'hint', style: { marginBottom: 10 } }, summary),
@@ -343,7 +360,14 @@
         h('span', { className: 'badge ' + (r.state === 'new' ? 'badge-green' : 'badge-yellow') },
           r.state === 'new' ? 'new' : 'replaces the design\'s')))) : null,
       rows.length ? h('div', { className: 'hint', style: { margin: '8px 0' } },
-        'Ticked rows are put into the form below. Nothing is saved until you save the section.') : null,
+        'Ticked rows are put into the form below. Nothing is saved until you save the section.' +
+        (secrets ? ' Central never gives back passphrases or shared secrets, so they arrive empty: left empty, ' +
+          'the tenant keeps the ones it has.' : '')) : null,
+      imp.skipped.length ? h('div', { style: { margin: '10px 0' } },
+        h('div', { className: 'hint', style: { marginBottom: 4 } },
+          'Not brought in, because this form can\'t hold them. Any other configuration can hold any profile.'),
+        h('ul', { style: { margin: 0, paddingLeft: 18, fontSize: 13 } },
+          imp.skipped.map((x, i) => h('li', { key: i }, h('strong', null, x.name), ' ' + x.reason)))) : null,
       h('div', { className: 'cd-bar', style: { marginTop: 4 } },
         rows.length ? h('button', { className: 'btn btn-primary', type: 'button', disabled: !chosen, onClick: props.onTake },
           'Bring ' + chosen + ' into the design') : null,
@@ -441,7 +465,8 @@
             });
             return;
           }
-          setImp(Object.assign({ status: 'ready' }, compare(section, report.found || {}, state.data)));
+          setImp(Object.assign({ status: 'ready' },
+            compare(section, Object.assign({ __skipped: report.skipped || [] }, report.found || {}), state.data)));
           return;
         }
       } catch (e) {
