@@ -382,6 +382,14 @@ class TestSession:
             central_session.unlock('ann', 'ann', 'p', url, 'id', 'secret')
         assert central_session.get('ann', 'ann', 'p') is None
 
+    def test_every_region_the_page_offers_is_accepted(self, central, auth_client, proj):
+        import re
+        page = auth_client.get(proj + '/apply').get_data(as_text=True)
+        offered = re.findall(r'<option value="(https://[^"]+)" label="([^"]+)">', page)
+        assert ('https://gb1.api.central.arubanetworks.com', 'UK') in offered and len(offered) == 15
+        for url, _label in offered:
+            assert central_session.clean_base_url(url) == url
+
     def test_refused_client_is_not_kept(self, verified):
         with pytest.raises(central_session.UnlockError, match='refused'):
             central_session.unlock('ann', 'ann', 'p', URL, 'bad', 'secret')

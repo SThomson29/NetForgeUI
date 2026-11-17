@@ -198,7 +198,7 @@ up by their bare names.
 | `CENTRAL_REPO_URL` | No | — | Turns on Central projects — see [Central projects](#central-projects-preview). Clone URL of the `samthomson.new_central` Ansible collection |
 | `CENTRAL_REPO_REF` | No | — | Collection release tag or branch to stay on, checked out at every start. Unset, it follows the default branch |
 | `CENTRAL_UNLOCK_MINUTES` | No | `60` | How long a Central tenant's API client is kept in memory without being used |
-| `CENTRAL_API_SUFFIXES` | No | `.api.central.arubanetworks.com,.api.central.hpe.com` | Host name endings accepted as a Central region API address |
+| `CENTRAL_API_SUFFIXES` | No | `.api.central.arubanetworks.com,.api.central.arubanetworks.com.cn,.api.central.hpe.com` | Host name endings accepted as a Central region API address |
 | `FIRMWARE_DIR` | No | `<app>/firmware` | Where `.swi` images are kept |
 | `FIRMWARE_MAX_UPLOAD_MB` | No | `2048` | Largest image an admin can upload |
 | `PORT` | No | `5000` | Port the Flask app listens on inside the container |
@@ -362,7 +362,7 @@ Saving the design needs edit access. Unlocking, importing from the tenant, plann
 
 Applying needs an API client for the tenant: a client ID and secret created in HPE GreenLake for the Central service, and the API address of the tenant's region. It is entered on the Apply page, checked with HPE sign-in, and then kept **in memory only** for that person and project. It is never written to disk, the database or the audit log, and is forgotten after an hour without use (`CENTRAL_UNLOCK_MINUTES`), on sign-out, on **Lock**, and whenever the container restarts.
 
-The region address must be one of Central's own (`*.api.central.arubanetworks.com` or `*.api.central.hpe.com`; `CENTRAL_API_SUFFIXES` changes the list), because the server connects to it.
+The region address must be one of Central's own (`*.api.central.arubanetworks.com`, `*.api.central.arubanetworks.com.cn` or `*.api.central.hpe.com`; `CENTRAL_API_SUFFIXES` changes the list), because the server connects to it. The address box offers every region in Central's developer docs; a tenant's own is shown in Central under **Menu** → **API Gateway** → **REST API**.
 
 ### Secrets in a design
 

@@ -25,7 +25,8 @@ IDLE_SECS = int(os.environ.get('CENTRAL_UNLOCK_MINUTES', '60')) * 60
 # Central's own: anything else would let a request be aimed at another host.
 _BASE_URL = re.compile(r'^https://[a-z0-9][a-z0-9\-]*(\.[a-z0-9\-]+)*$')
 ALLOWED_SUFFIXES = tuple(s.strip().lower() for s in os.environ.get(
-    'CENTRAL_API_SUFFIXES', '.api.central.arubanetworks.com,.api.central.hpe.com').split(',') if s.strip())
+    'CENTRAL_API_SUFFIXES',
+    '.api.central.arubanetworks.com,.api.central.arubanetworks.com.cn,.api.central.hpe.com').split(',') if s.strip())
 
 _store = {}
 _lock = threading.Lock()
