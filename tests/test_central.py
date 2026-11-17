@@ -31,7 +31,7 @@ SCHEMA = {
              {'name': 'city', 'label': 'City', 'type': 'text'},
              {'name': 'timezone_offset', 'label': 'Offset', 'type': 'number', 'min': -43200, 'max': 50400}]},
         {'id': 'wireless', 'stage': 'configuration', 'label': 'Wireless networks', 'playbook': 'wireless.yml',
-         'optional': True, 'needs': ['sites'], 'kind': 'rows', 'var': 'wlans', 'key': 'name',
+         'optional': True, 'read': True, 'needs': ['sites'], 'kind': 'rows', 'var': 'wlans', 'key': 'name',
          'profile_type': 'wlan-ssids', 'fields': [
              {'name': 'name', 'label': 'Profile name', 'type': 'text', 'required': True},
              {'name': 'security', 'label': 'Security', 'type': 'choice', 'choices': ['WPA2_PERSONAL', 'OPEN'],
@@ -618,7 +618,11 @@ FOUND = [
     {'section': 'sites', 'found': {
         'sites': [{'name': 'london', 'city': 'London', 'scopeId': 'not-a-field'}, 'not-a-row', {'name': 'york'}],
         'something_else': [{'name': 'x'}]}},
-    {'section': 'wireless', 'found': {'wlans': [{'name': 'not asked for'}]}},
+    {'section': 'wireless', 'found': {'wlans': [
+        {'name': 'corp', 'vlan': 100, 'settings': {'port': 161, 'nope': 1, 'trap': {'version': 'v3', 'gone': 1},
+                                                   'users': [{'name': 'u', 'x': 1}, {'x': 2}]}},
+        {'name': 'bare', 'settings': {'nope': 1}}]},
+     'skipped': [{'name': 'staff', 'profile_type': 'wlan-ssids', 'reason': 'uses WPA3 security', 'extra': 'dropped'}]},
     'not-a-report',
 ]
 
@@ -757,7 +761,7 @@ class TestReadingTheTenant:
     def test_the_schema_says_which_sections_can_be_read(self, auth_client, proj):
         sections = auth_client.get(proj + '/api/schema').get_json()['schema']['sections']
         assert {s['id']: s['read'] for s in sections} == {
-            'sites': True, 'wireless': False, 'profiles': False, 'devices': True}
+            'sites': True, 'wireless': True, 'profiles': False, 'devices': True}
 
     def test_read_runs_the_read_playbook_and_sends_no_design(self, central, auth_client, proj, unlocked):
         # A design that would not pass a plan doesn't get in the way of reading.
@@ -770,7 +774,7 @@ class TestReadingTheTenant:
         assert call['extra_env']['API_CLIENT_SECRET'] == 'the-client-secret'
         assert job['mode'] == 'read'
         # Only the section asked for, only rows, only the fields its form has.
-        assert job['results'] == [{'section': 'sites', 'found': {
+        assert job['results'] == [{'section': 'sites', 'skipped': [], 'found': {
             'sites': [{'name': 'london', 'city': 'London'}, {'name': 'york'}]}}]
 
     def test_several_sections_come_back_in_the_designs_order(self, auth_client, proj, unlocked):
@@ -780,13 +784,43 @@ class TestReadingTheTenant:
         assert unlocked[0]['extra_vars'] == {'sections': ['sites', 'devices']}
         assert [r['section'] for r in job['results']] == ['sites', 'devices']
 
+    def test_settings_are_kept_to_what_the_form_can_hold(self, auth_client, proj, unlocked):
+        job_id = auth_client.post(proj + '/run', json={'mode': 'read', 'sections': ['wireless']}).get_json()['job_id']
+        job = wait_for(auth_client, proj, job_id)
+        assert job['results'] == [{'section': 'wireless', 'found': {'wlans': [
+            {'name': 'corp', 'vlan': 100, 'settings': {'port': 161, 'trap': {'version': 'v3'},
+                                                       'users': [{'name': 'u'}]}},
+            {'name': 'bare'}], 'roles': []},
+            'skipped': [{'name': 'staff', 'reason': 'uses WPA3 security'}]}]
+
+    def test_what_was_read_can_be_saved(self, central, auth_client, proj, unlocked):
+        auth_client.post(proj + '/api/design/sites/save', json={'data': DESIGN})
+        job_id = auth_client.post(proj + '/run', json={'mode': 'read', 'sections': ['wireless']}).get_json()['job_id']
+        corp = wait_for(auth_client, proj, job_id)['results'][0]['found']['wlans'][0]
+        clean, problems = central_schema.check(central, sect(central, 'wireless'),
+                                               {'wlans': [dict(WLAN, **corp)]}, DESIGN)
+        assert problems == [] and clean['wlans'][0]['settings']['trap'] == {'version': 'v3'}
+
+    def test_history_counts_what_could_not_be_brought_in(self, central, auth_client, proj, unlocked):
+        job_id = auth_client.post(proj + '/run', json={'mode': 'read', 'sections': ['wireless']}).get_json()['job_id']
+        wait_for(auth_client, proj, job_id)
+        for _ in range(100):
+            entry = audit.entries(central, owner='admin', project='tenant')[0]
+            if entry['status'] != 'running':
+                break
+            time.sleep(0.02)
+        assert [(e['step'], e['message']) for r in entry['results'] for e in r['entries']] == [
+            ('Read from the tenant', '2 found'), ('Read from the tenant', '0 found'),
+            ('Not importable', "1 the form can't hold")]
+        assert 'staff' not in json.dumps(entry['results'])
+
     def test_reading_saves_nothing(self, central, auth_client, proj, unlocked):
         job_id = auth_client.post(proj + '/run', json={'mode': 'read', 'sections': ['sites']}).get_json()['job_id']
         wait_for(auth_client, proj, job_id)
         assert auth_client.get(proj + '/api/design/sites').get_json()['data'] == {'sites': []}
         assert not os.path.isdir(os.path.join(project_dir(central, 'admin', 'tenant'), 'design'))
 
-    @pytest.mark.parametrize('sections', [None, [], ['wireless'], ['sites', 'wireless'], ['nope']])
+    @pytest.mark.parametrize('sections', [None, [], ['profiles'], ['sites', 'profiles'], ['nope']])
     def test_only_sections_that_can_be_read(self, auth_client, proj, unlocked, sections):
         body = {'mode': 'read'} if sections is None else {'mode': 'read', 'sections': sections}
         assert auth_client.post(proj + '/run', json=body).status_code == 400

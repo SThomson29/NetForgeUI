@@ -242,6 +242,27 @@ def _check_config(fields, value, where, problems):
     return out
 
 
+def prune(fields, value):
+    """value keeping only the settings fields describes, nested ones
+    included: what Central returns can hold more than a design may."""
+    if not isinstance(value, dict):
+        return {}
+    by_name = {f['name']: f for f in fields}
+    out = {}
+    for name, item in value.items():
+        field = by_name.get(name)
+        if field is None or _empty(item):
+            continue
+        if field.get('type') == 'group':
+            item = prune(field.get('fields') or [], item)
+        elif field.get('type') == 'rows':
+            item = [r for r in (prune(field.get('fields') or [], r) for r in item if isinstance(r, dict))
+                    if r] if isinstance(item, list) else None
+        if not _empty(item):
+            out[name] = item
+    return out
+
+
 def _hidden(field, row, by_name):
     """A field shown only when another has a given value, and it hasn't."""
     for other, wanted in (field.get('show_if') or {}).items():

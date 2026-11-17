@@ -237,10 +237,11 @@ def _slim(report):
                                  for e in report.get('entries') or [] if isinstance(e, dict)])
 
 
-def _found(report, sections):
+def _found(app, report, sections):
     """What a read found for one section, kept to the rows and fields the
-    schema describes: {section, found: {var: [rows]}}. None if the report
-    isn't one for a section that was asked for."""
+    schema describes: {section, found: {var: [rows]}, skipped: [{name,
+    reason}]}. None if the report isn't one for a section that was asked
+    for."""
     if not isinstance(report, dict) or report.get('section') not in sections:
         return None
     sect = sections[report['section']]
@@ -248,16 +249,39 @@ def _found(report, sections):
     found = {}
     for part in sect['lists']:
         names = [f['name'] for f in part['fields']]
+        fixed = {f['name']: f['profile_type'] for f in part['fields']
+                 if f.get('type') == 'profile' and f.get('profile_type') and part['kind'] != 'profiles'}
         rows = given.get(part['var']) if isinstance(given.get(part['var']), list) else []
-        found[part['var']] = [{k: row[k] for k in names if k in row} for row in rows if isinstance(row, dict)]
-    return {'section': sect['id'], 'found': found}
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row = {k: row[k] for k in names if k in row}
+            for name, ptype in fixed.items():
+                if name in row:
+                    try:
+                        settings = central_schema.prune(central_schema.profile_type(app, ptype).get('fields') or [],
+                                                        row[name])
+                    except CentralError:
+                        settings = {}
+                    if settings:
+                        row[name] = settings
+                    else:
+                        row.pop(name)
+            out.append(row)
+        found[part['var']] = out
+    skipped = [{'name': str(i.get('name'))[:128], 'reason': str(i.get('reason'))[:300]}
+               for i in report.get('skipped') or [] if isinstance(i, dict)][:200]
+    return {'section': sect['id'], 'found': found, 'skipped': skipped}
 
 
 def _read_summary(report):
     """A read's result for the audit log: how much was found, not what."""
     return {'section': report['section'], 'changed': False, 'failed': False,
             'entries': [{'step': 'Read from the tenant', 'item': var, 'message': '%d found' % len(rows)}
-                        for var, rows in report['found'].items()]}
+                        for var, rows in report['found'].items()]
+            + ([{'step': 'Not importable', 'item': report['section'],
+                 'message': '%d the form can\'t hold' % len(report['skipped'])}] if report.get('skipped') else [])}
 
 
 @login_required
@@ -370,7 +394,7 @@ def central_run(project_name):
                 results = job.get('results') or []
                 if reading:
                     by_id = {s['id']: s for s in chosen}
-                    results = [r for r in (_found(r, by_id) for r in results) if r]
+                    results = [r for r in (_found(app, r, by_id) for r in results) if r]
                 job['results'] = sorted((r for r in results if isinstance(r, dict)),
                                         key=lambda r: order.get(r.get('section'), 999))
                 mark_finished(job)
