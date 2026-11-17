@@ -267,13 +267,93 @@ def _hidden(field, row, by_name):
     """A field shown only when another has a given value, and it hasn't."""
     for other, wanted in (field.get('show_if') or {}).items():
         current = row.get(other, (by_name.get(other) or {}).get('default'))
-        if current != wanted:
+        if current not in (wanted if isinstance(wanted, list) else [wanted]):
             return True
     return False
 
 
 def _row_keys(design, var, key):
     return {str(row.get(key)) for row in design.get(var) or [] if isinstance(row, dict) and not _empty(row.get(key))}
+
+
+def _check_row(app, fields, row, where, merged, problems, part_kind='rows'):
+    """One row's fields, and any rows inside it, checked. Returns the clean
+    row; what is wrong is added to problems."""
+    by_name = {f['name']: f for f in fields}
+    new = {}
+    for key in row:
+        if key not in by_name:
+            problems.append('%s has no field called %s.' % (where, str(key)[:64]))
+    for field in fields:
+        value = row.get(field['name'])
+        kind = field.get('type')
+        if _empty(value) or _hidden(field, row, by_name):
+            continue
+        if kind == 'profile' and field.get('profile_type') and part_kind != 'profiles':
+            # Settings of a fixed profile type, such as a role's
+            try:
+                described = profile_type(app, field['profile_type'])
+            except CentralError as e:
+                problems.append('%s: %s' % (where, e))
+                continue
+            config = _check_config(described.get('fields') or [], value,
+                                   '%s › %s' % (where, field.get('label') or field['name']), problems)
+            if config:
+                new[field['name']] = config
+            continue
+        if kind == 'profile':
+            continue                                    # after profile_type is known
+        if kind == 'rows':
+            # Rows inside the row, such as a policy's rules, in order
+            if not isinstance(value, list):
+                problems.append('%s: %s must be a list.' % (where, field.get('label') or field['name']))
+                continue
+            items = []
+            for i, item in enumerate(value):
+                here = '%s › %s %d' % (where, field.get('label') or field['name'], i + 1)
+                if not isinstance(item, dict):
+                    problems.append('%s is not a row.' % here)
+                    continue
+                items.append(_check_row(app, field.get('fields') or [], item, here, merged, problems))
+            if items:
+                new[field['name']] = items
+            continue
+        if kind == 'ref':
+            wanted = value if isinstance(value, list) else [value]
+            target = next((p for s in load(app)['sections'] for p in s['lists']
+                           if p['var'] == field.get('to')), None)
+            exists = _row_keys(merged, field.get('to'), target['key']) if target else set()
+            missing = [str(v) for v in wanted if str(v) not in exists]
+            if missing:
+                problems.append('%s: %s refers to %s, which %s not in the design.' % (
+                    where, field.get('label') or field['name'], ', '.join(missing),
+                    'is' if len(missing) == 1 else 'are'))
+            new[field['name']] = [str(v) for v in wanted] if field.get('multiple') else str(wanted[0])
+        elif kind in ('list', 'choices'):
+            if not isinstance(value, list):
+                problems.append('%s: %s must be a list.' % (where, field.get('label') or field['name']))
+                continue
+            one = dict(field, type='choice' if kind == 'choices' else 'text')
+            items = [_scalar(one, v, where, problems) for v in value if not _empty(v)]
+            items = [v for v in items if v is not None]
+            if items:
+                new[field['name']] = items
+        elif field.get('from') == 'catalogue':
+            if str(value) not in {p['type'] for p in catalogue(app)}:
+                problems.append('%s: %s is not a profile type.' % (where, str(value)[:64]))
+            else:
+                new[field['name']] = str(value)
+        else:
+            item = _scalar(field, value, where, problems)
+            if item is not None:
+                new[field['name']] = item
+
+    for field in fields:
+        if (field.get('required') and field['name'] not in new and 'default' not in field
+                and not _hidden(field, row, by_name) and field.get('type') != 'profile'):
+            problems.append('%s needs %s.' % (where, field.get('label') or field['name']))
+
+    return new
 
 
 def check(app, sect, data, design):
@@ -301,7 +381,6 @@ def check(app, sect, data, design):
         if not isinstance(rows, list):
             problems.append('%s must be a list.' % part['label'])
             continue
-        by_name = {f['name']: f for f in part['fields']}
         out, seen = [], set()
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
@@ -309,59 +388,7 @@ def check(app, sect, data, design):
                 continue
             name = row.get(part['key']) if part['key'] else row.get('name') or row.get('profile_type')
             where = '%s %s' % (part['label'], name if not _empty(name) else index + 1)
-            new = {}
-            for key in row:
-                if key not in by_name:
-                    problems.append('%s has no field called %s.' % (where, str(key)[:64]))
-            for field in part['fields']:
-                value = row.get(field['name'])
-                kind = field.get('type')
-                if _empty(value) or _hidden(field, row, by_name):
-                    continue
-                if kind == 'profile' and field.get('profile_type') and part['kind'] != 'profiles':
-                    # Settings of a fixed profile type, such as a role's
-                    try:
-                        described = profile_type(app, field['profile_type'])
-                    except CentralError as e:
-                        problems.append('%s: %s' % (where, e))
-                        continue
-                    config = _check_config(described.get('fields') or [], value,
-                                           '%s › %s' % (where, field.get('label') or field['name']), problems)
-                    if config:
-                        new[field['name']] = config
-                    continue
-                if kind == 'profile':
-                    continue                                    # after profile_type is known
-                if kind == 'ref':
-                    wanted = value if isinstance(value, list) else [value]
-                    target = next((p for s in load(app)['sections'] for p in s['lists']
-                                   if p['var'] == field.get('to')), None)
-                    exists = _row_keys(merged, field.get('to'), target['key']) if target else set()
-                    missing = [str(v) for v in wanted if str(v) not in exists]
-                    if missing:
-                        problems.append('%s: %s refers to %s, which %s not in the design.' % (
-                            where, field.get('label') or field['name'], ', '.join(missing),
-                            'is' if len(missing) == 1 else 'are'))
-                    new[field['name']] = [str(v) for v in wanted] if field.get('multiple') else str(wanted[0])
-                elif kind in ('list', 'choices'):
-                    if not isinstance(value, list):
-                        problems.append('%s: %s must be a list.' % (where, field.get('label') or field['name']))
-                        continue
-                    one = dict(field, type='choice' if kind == 'choices' else 'text')
-                    items = [_scalar(one, v, where, problems) for v in value if not _empty(v)]
-                    items = [v for v in items if v is not None]
-                    if items:
-                        new[field['name']] = items
-                elif field.get('from') == 'catalogue':
-                    if str(value) not in {p['type'] for p in catalogue(app)}:
-                        problems.append('%s: %s is not a profile type.' % (where, str(value)[:64]))
-                    else:
-                        new[field['name']] = str(value)
-                else:
-                    item = _scalar(field, value, where, problems)
-                    if item is not None:
-                        new[field['name']] = item
-
+            new = _check_row(app, part['fields'], row, where, merged, problems, part['kind'])
             if part['kind'] == 'profiles' and new.get('profile_type'):
                 described = profile_type(app, new['profile_type'])
                 where = '%s %s' % (described.get('label') or new['profile_type'], new.get('name') or '')
@@ -370,11 +397,6 @@ def check(app, sect, data, design):
                     new['config'] = config
                 if described.get('named') and _empty(new.get('name')):
                     problems.append('%s needs a profile name.' % where.strip())
-
-            for field in part['fields']:
-                if (field.get('required') and field['name'] not in new and 'default' not in field
-                        and not _hidden(field, row, by_name) and field.get('type') != 'profile'):
-                    problems.append('%s needs %s.' % (where, field.get('label') or field['name']))
 
             identity = (new.get('profile_type'), new.get('name')) if part['kind'] == 'profiles' \
                 else str(new.get(part['key']))

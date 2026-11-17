@@ -47,7 +47,16 @@ SCHEMA = {
              # Settings of a type the field names, as roles have
              {'name': 'settings', 'label': 'More settings', 'type': 'profile', 'profile_type': 'snmp'}],
          'also': [{'var': 'roles', 'label': 'Roles', 'key': 'name', 'fields': [
-             {'name': 'name', 'label': 'Role name', 'type': 'text', 'required': True}]}]},
+             {'name': 'name', 'label': 'Role name', 'type': 'text', 'required': True},
+             # Rows inside a row, as a policy's rules are
+             {'name': 'rules', 'label': 'Rules', 'type': 'rows', 'item_label': 'Rule', 'fields': [
+                 {'name': 'source', 'label': 'Source', 'type': 'choice', 'choices': ['ANY', 'ROLE'], 'default': 'ANY',
+                  'required': True},
+                 {'name': 'source_role', 'label': 'Source role', 'type': 'ref', 'to': 'sites', 'required': True,
+                  'show_if': {'source': 'ROLE'}},
+                 {'name': 'service', 'label': 'Service', 'type': 'choice', 'choices': ['ANY', 'TCP', 'UDP']},
+                 {'name': 'port', 'label': 'Port', 'type': 'number', 'max': 65535,
+                  'show_if': {'service': ['TCP', 'UDP']}}]}]}]},
         {'id': 'profiles', 'stage': 'configuration', 'label': 'Any other configuration', 'playbook': 'profiles.yml',
          'optional': True, 'kind': 'profiles', 'var': 'profiles', 'catalogue': 'profiles/index.yml', 'fields': [
              {'name': 'profile_type', 'label': 'Type', 'type': 'choice', 'from': 'catalogue', 'required': True},
@@ -877,3 +886,33 @@ class TestFixedTypeSettings:
         assert masked['wlans'][0]['passphrase'] == MASK
         assert 'p4ss' not in json.dumps(masked)
         assert central_schema.unmask(s, masked, saved) == dict(saved, roles=[])
+
+
+class TestRowsInsideARow:
+    def check(self, app, rules):
+        return central_schema.check(app, sect(app, 'wireless'),
+                                    {'wlans': [], 'roles': [{'name': 'r', 'rules': rules}]}, DESIGN)
+
+    def test_checked_in_order_with_unset_values_dropped(self, central):
+        clean, problems = self.check(central, [
+            {'source': 'ROLE', 'source_role': 'london', 'service': 'TCP', 'port': '443'},
+            {'source': 'ANY', 'source_role': 'leeds', 'service': '', 'port': '80'}])
+        assert problems == []
+        # A field hidden by show_if is dropped, whichever of its values shows it
+        assert clean['roles'][0]['rules'] == [
+            {'source': 'ROLE', 'source_role': 'london', 'service': 'TCP', 'port': 443},
+            {'source': 'ANY'}]
+
+    def test_problems_say_which_rule(self, central):
+        _clean, problems = self.check(central, [
+            {'source': 'ANY'}, {'source': 'ROLE'}, {'source': 'ROLE', 'source_role': 'paris'},
+            {'service': 'UDP', 'port': 70000, 'nope': 1}, 'not a rule'])
+        text = '\n'.join(problems)
+        assert 'Roles r › Rules 2 needs Source role.' in problems
+        assert 'Rules 3: Source role refers to paris' in text
+        assert 'Rules 4 has no field called nope' in text and 'Rules 4' in text and '65535' in text
+        assert 'Roles r › Rules 5 is not a row.' in problems
+
+    def test_must_be_a_list(self, central):
+        _clean, problems = self.check(central, {'source': 'ANY'})
+        assert problems == ['Roles r: Rules must be a list.']
